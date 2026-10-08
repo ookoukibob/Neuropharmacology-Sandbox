@@ -218,5 +218,5 @@ domain Drug / DrugLibrary (src/domain/**)
 Serialization types and domain types are deliberately separate: the file
 format can evolve without leaking `optional`/`default` mechanics into the
 domain, and the domain can gain derived fields without changing the format.
-The mapping layer (phase 4, `src/data/mappers`) is verified by round-trip
+The mapping layer (phase 3, `src/data/mappers`) is verified by round-trip
 tests ([testing.md](testing.md) §5).

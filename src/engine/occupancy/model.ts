@@ -24,7 +24,7 @@
 import Decimal from 'decimal.js'
 import type { UnitDef } from '../../domain/pharmacology/units'
 import { toCalculationInput } from '../input'
-import { formatNumber, formatQuantity, roundForReport } from '../numeric/decimal'
+import { formatDecimal, formatQuantity, noteRoundingLoss, roundForReport } from '../numeric/decimal'
 import { SINGLE_SITE_OCCUPANCY } from '../registry'
 import type {
   CalculationError,
@@ -76,6 +76,7 @@ export function calculateReceptorOccupancy(input: ReceptorOccupancyInput): Calcu
   if (kdDef.symbol !== dDef.symbol) {
     kdDecimal = convertDecimal(kdDecimal, kdDef, dDef)
     const converted = roundForReport(kdDecimal)
+    noteRoundingLoss(warnings, converted, `The converted Kd (${dDef.symbol})`)
     trace.add(
       'Unit conversion',
       `Kd → ${dDef.symbol}`,
@@ -86,14 +87,12 @@ export function calculateReceptorOccupancy(input: ReceptorOccupancyInput): Calcu
 
   const denominator = dDecimal.plus(kdDecimal)
   const denominatorRounded = roundForReport(denominator)
-  if (denominatorRounded.loss === 'overflow') {
-    warnings.push({
-      code: 'NUMERICAL_OVERFLOW',
-      severity: 'warning',
-      message:
-        '[D] + Kd exceeded the numeric range of the result; the trace shows ∞ for that step while the occupancy fraction itself remains representable.',
-    })
-  }
+  noteRoundingLoss(
+    warnings,
+    denominatorRounded,
+    '[D] + Kd',
+    'The occupancy fraction itself is a quotient ≤ 1 and remains representable.',
+  )
   trace.add(
     'Denominator',
     '[D] + Kd',
@@ -101,15 +100,11 @@ export function calculateReceptorOccupancy(input: ReceptorOccupancyInput): Calcu
     { value: denominatorRounded.value, unit: dDef.symbol },
   )
 
+  // [D] = 0 → Occ = 0 is a mathematical zero (roundForReport: loss 'none',
+  // no warning); [D] > 0 → any zero here is below the numeric range.
   const fraction = dDecimal.div(denominator)
   const fractionRounded = roundForReport(fraction)
-  if (fractionRounded.loss === 'underflow') {
-    warnings.push({
-      code: 'NUMERICAL_UNDERFLOW',
-      severity: 'info',
-      message: 'The occupancy fraction is below the numeric range of the result and is reported as 0.',
-    })
-  }
+  noteRoundingLoss(warnings, fractionRounded, 'The occupancy fraction')
   trace.add(
     'Occupancy (fraction)',
     'Occ = [D] / ([D] + Kd)',
@@ -119,10 +114,11 @@ export function calculateReceptorOccupancy(input: ReceptorOccupancyInput): Calcu
 
   const percent = fraction.times(100)
   const percentRounded = roundForReport(percent)
+  noteRoundingLoss(warnings, percentRounded, 'Occupancy (percent)')
   trace.add(
     'Occupancy (percent)',
     'Occ% = Occ × 100',
-    `${formatNumber(fractionRounded.value)} × 100`,
+    `${formatDecimal(fraction)} × 100`,
     { value: percentRounded.value, unit: '%' },
   )
 

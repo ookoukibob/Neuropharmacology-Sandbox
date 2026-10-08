@@ -8,6 +8,7 @@
  * the numeric range (underflow to 0, overflow to ±Infinity).
  */
 import Decimal from 'decimal.js'
+import type { CalculationWarning } from '../types'
 
 /**
  * Reporting precision: significant decimal digits applied to outputs and
@@ -47,6 +48,57 @@ export function roundForReport(value: Decimal): RoundedNumber {
     return value.isZero() ? { value: 0, loss: 'none' } : { value: 0, loss: 'underflow' }
   }
   return { value: n, loss: 'none' }
+}
+
+/**
+ * roundForReport for quantities that are mathematically non-zero by
+ * construction regardless of arithmetic (e^(−k·t), r = EC50/[D] with both
+ * > 0, r^n with r > 0).
+ *
+ * Decimal.js `exp`/`pow` can collapse such a value to an *exact* Decimal
+ * zero (or ∞) once the result falls outside its own exponent range — before
+ * `roundForReport` ever sees it, which would classify the collapse as a
+ * faithful zero. This wrapper reclassifies an exact zero as `underflow`, so
+ * a mathematically non-zero value can never be reported as a silently exact
+ * 0, while genuine mathematical zeros still go through `roundForReport`
+ * unchanged.
+ */
+export function roundNonZero(value: Decimal): RoundedNumber {
+  if (value.isZero()) return { value: 0, loss: 'underflow' }
+  return roundForReport(value)
+}
+
+/**
+ * One consistent numerical-loss policy for every model: each reported value
+ * (scalar output or trace step result) is checked for rounding loss, and each
+ * loss becomes a structured warning naming the quantity. Mathematical zeros
+ * (loss `'none'`) never warn — that is what keeps "exactly 0" distinguishable
+ * from "non-zero but unrepresentable".
+ *
+ * `overflowHint` appends model-specific context to an overflow warning (for
+ * example that the calculation continues through an exact limiting form).
+ */
+export function noteRoundingLoss(
+  warnings: CalculationWarning[],
+  rounded: RoundedNumber,
+  what: string,
+  overflowHint?: string,
+): void {
+  if (rounded.loss === 'underflow') {
+    warnings.push({
+      code: 'NUMERICAL_UNDERFLOW',
+      severity: 'info',
+      message: `${what} is mathematically non-zero but smaller than the numeric range; it is reported as 0.`,
+    })
+  } else if (rounded.loss === 'overflow') {
+    warnings.push({
+      code: 'NUMERICAL_OVERFLOW',
+      severity: 'warning',
+      message: `${what} exceeds the numeric range of the result; it is reported as ±Infinity.${
+        overflowHint === undefined ? '' : ` ${overflowHint}`
+      }`,
+    })
+  }
 }
 
 /**

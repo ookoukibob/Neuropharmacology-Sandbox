@@ -3,7 +3,12 @@
  * Each x runs through `calculateHillResponse`, so curve points equal the
  * scalar calculation. Log-x is the default for concentration axes.
  */
-import { buildXValues, validateCurveOptions, type CurveOptions } from '../curve/sampling'
+import {
+  buildXValues,
+  checkLogYAxis,
+  validateCurveOptions,
+  type CurveOptions,
+} from '../curve/sampling'
 import type { CalculationWarning, CurveData, CurveGenerationResult, CurvePoint } from '../types'
 import { calculateHillResponse, type HillResponseInput } from './model'
 
@@ -46,6 +51,8 @@ export function generateHillCurve(
       message: `${underflowed} of ${points.length} sampled points underflowed to 0.`,
     })
   }
+  const logYWarning = checkLogYAxis(points, range.options.yScale)
+  if (logYWarning !== undefined) warnings.push(logYWarning)
 
   const curve: CurveData = {
     model: MODEL_ID,

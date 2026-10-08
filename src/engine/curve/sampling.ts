@@ -7,7 +7,7 @@
  * y-value still comes from the model's Decimal path, so a curve point at x
  * equals the scalar calculation at the same x.
  */
-import type { CalculationError } from '../types'
+import type { CalculationError, CalculationWarning, CurvePoint } from '../types'
 
 export const MIN_CURVE_POINTS = 2
 export const DEFAULT_CURVE_POINTS = 200
@@ -94,11 +94,27 @@ export function validateCurveOptions(
   }
 
   const xScale = options?.xScale ?? defaultXScale
+  if (xScale !== 'linear' && xScale !== 'log') {
+    errors.push({
+      code: 'OUT_OF_RANGE',
+      parameter: 'xScale',
+      message: `xScale must be "linear" or "log" (got ${JSON.stringify(xScale)}).`,
+    })
+  }
   if (xScale === 'log' && Number.isFinite(min) && min <= 0) {
     errors.push({
       code: 'OUT_OF_RANGE',
       parameter: 'range.min',
       message: 'A log x-axis requires range.min > 0.',
+    })
+  }
+
+  const yScale = options?.yScale ?? 'linear'
+  if (yScale !== 'linear' && yScale !== 'log') {
+    errors.push({
+      code: 'OUT_OF_RANGE',
+      parameter: 'yScale',
+      message: `yScale must be "linear" or "log" (got ${JSON.stringify(yScale)}).`,
     })
   }
 
@@ -118,7 +134,35 @@ export function validateCurveOptions(
   if (errors.length > 0) return { ok: false, errors }
   return {
     ok: true,
-    options: { min, max, count, xScale, yScale: options?.yScale ?? 'linear' },
+    options: { min, max, count, xScale, yScale },
+  }
+}
+
+/**
+ * Post-sampling log y-axis check.
+ *
+ * Valid model input legitimately produces y ≤ 0: baseline zeros (E = E0 at
+ * [D] = 0 with E0 = 0), underflowed points reported as 0, negative effects
+ * (signed E0/Emax conventions), C0 = 0. A logarithmic axis cannot represent
+ * any of those, but the science must not be edited to satisfy a chart:
+ * points are never removed, clamped or recomputed here. Instead the engine
+ * reports one structured warning so the chart layer can reject the log axis
+ * or fall back to linear with an explicit message. Linear y-axes never warn.
+ */
+export function checkLogYAxis(
+  points: readonly CurvePoint[],
+  yScale: 'linear' | 'log',
+): CalculationWarning | undefined {
+  if (yScale !== 'log') return undefined
+  let count = 0
+  for (const point of points) {
+    if (!Number.isFinite(point.y) || point.y <= 0) count++
+  }
+  if (count === 0) return undefined
+  return {
+    code: 'LOG_Y_AXIS_NOT_REPRESENTABLE',
+    severity: 'warning',
+    message: `A logarithmic y-axis cannot represent ${count} of ${points.length} sampled points (y ≤ 0 or non-finite). The curve data is reported unchanged; use a linear y-axis for this curve.`,
   }
 }
 

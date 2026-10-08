@@ -60,7 +60,7 @@ units relevant to pharmacology (`docs/domain-model.md` §2), engine-level
 `UNKNOWN_UNIT` / `INCOMPATIBLE_UNITS` errors, and a hard rule: mass ⇄ molar
 concentration is **never** converted (requires a molecular weight, which the
 app must not invent). Unit catalog implementation is scheduled ahead of the
-engine (roadmap phases 2–3).
+engine (roadmap phase 2).
 
 ---
 
@@ -123,7 +123,7 @@ See `docs/validation.md` §5.
 **Gap.** Same root cause as §4: the required tests cannot be written until a
 unit registry exists.
 **Correction (adopted).** Unit catalog scheduled before engine implementation
-(roadmap phases 2–3); test matrix updated to include unknown-unit and
+(roadmap phase 2); test matrix updated to include unknown-unit and
 cross-dimension cases (`docs/testing.md` §1).
 
 ---
@@ -227,7 +227,7 @@ test-first. Phase 1 delivers schema tests for what *does* exist.
 | 1 | calculated/derived boundary undefined | adopted |
 | 2 | no schema field marking demo data | adopted |
 | 3 | no encoding for missing parameters | adopted |
-| 4 | no unit system | adopted (impl phase 3) |
+| 4 | no unit system | adopted (impl phase 2) |
 | 5 | occupancy unit mismatch undefined | adopted |
 | 6 | CSV provenance ambiguity | adopted |
 | 7 | version field ownership undefined | adopted |

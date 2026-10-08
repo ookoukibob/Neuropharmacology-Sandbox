@@ -17,7 +17,7 @@
 import Decimal from 'decimal.js'
 import type { UnitDef } from '../../domain/pharmacology/units'
 import { toCalculationInput } from '../input'
-import { LN_TWO, formatDecimal, formatQuantity, roundForReport } from '../numeric/decimal'
+import { LN_TWO, formatDecimal, formatQuantity, noteRoundingLoss, roundForReport, roundNonZero, type RoundedNumber } from '../numeric/decimal'
 import { FIRST_ORDER_PK } from '../registry'
 import type {
   CalculationError,
@@ -113,6 +113,7 @@ export function calculateFirstOrderPK(input: FirstOrderPKInput): CalculationRepo
     : convertDecimal(new Decimal(tValue), tDef, baseTimeDef)
   if (!usesBaseTimeUnit) {
     const converted = roundForReport(tInBaseUnit)
+    noteRoundingLoss(warnings, converted, 'The converted time t')
     trace.add(
       'Unit conversion',
       `t → ${baseTimeDef.symbol}`,
@@ -121,57 +122,69 @@ export function calculateFirstOrderPK(input: FirstOrderPKInput): CalculationRepo
     )
   }
 
+  // k and t½: the provided parameter is a plain double (faithful rounding);
+  // the derived one can leave the numeric range (e.g. t½ near the smallest
+  // double makes k overflow). Rounded once, warned once, reused for trace and
+  // outputs so the report never disagrees with itself.
   let kDecimal: Decimal
   let halfLifeDecimal: Decimal
+  let kRounded: RoundedNumber
+  let halfLifeRounded: RoundedNumber
   if (halfLifeParam !== undefined) {
     halfLifeDecimal = new Decimal(halfLifeValue)
+    halfLifeRounded = roundForReport(halfLifeDecimal)
     kDecimal = LN_TWO.div(halfLifeDecimal)
+    kRounded = roundForReport(kDecimal)
+    noteRoundingLoss(warnings, kRounded, 'k = ln(2) / t½')
     trace.add(
       'Elimination constant',
       'k = ln(2) / t½',
       `ln(2) / ${formatQuantity(halfLifeValue, baseTimeDef.symbol)}`,
-      { value: roundForReport(kDecimal).value, unit: rateSymbol },
+      { value: kRounded.value, unit: rateSymbol },
     )
   } else {
     kDecimal = new Decimal(kValue)
+    kRounded = roundForReport(kDecimal)
     halfLifeDecimal = LN_TWO.div(kDecimal)
+    halfLifeRounded = roundForReport(halfLifeDecimal)
+    noteRoundingLoss(warnings, halfLifeRounded, 't½ = ln(2) / k')
     trace.add(
       'Half-life',
       't½ = ln(2) / k',
       `ln(2) / ${formatQuantity(kValue, rateSymbol)}`,
-      { value: roundForReport(halfLifeDecimal).value, unit: baseTimeDef.symbol },
+      { value: halfLifeRounded.value, unit: baseTimeDef.symbol },
     )
   }
 
   const exponent = kDecimal.times(tInBaseUnit).negated()
+  const exponentRounded = roundForReport(exponent)
+  noteRoundingLoss(warnings, exponentRounded, 'The normalized time −k·t')
   trace.add(
     'Normalized time',
     '−k · t',
     `${formatQuantity(kDecimal, rateSymbol)} × ${formatQuantity(tInBaseUnit, baseTimeDef.symbol)}`,
-    { value: roundForReport(exponent).value, unit: '1' },
+    { value: exponentRounded.value, unit: '1' },
   )
 
   // Decimal.exp never throws: extreme arguments produce exact (tiny) values
-  // whose loss shows up in roundForReport instead.
+  // or an exact zero outside Decimal's own exponent range. e^(−k·t) > 0 for
+  // finite inputs, so roundNonZero classifies any exact zero as underflow —
+  // a collapsed exponent can never pose as a mathematical zero.
   const survival = exponent.exp()
+  const survivalRounded = roundNonZero(survival)
+  noteRoundingLoss(warnings, survivalRounded, 'The surviving fraction e^(−k·t)')
   trace.add(
     'Surviving fraction',
     'e^(−k·t)',
     `exp(${formatDecimal(exponent)})`,
-    { value: roundForReport(survival).value, unit: '1' },
+    { value: survivalRounded.value, unit: '1' },
   )
 
+  // C0 = 0 → C(t) = 0 exactly (a true zero, no warning); C0 > 0 → any zero
+  // here came from a collapsed survival factor, so it is an underflow.
   const concentration = new Decimal(c0Value).times(survival)
-  const concentrationRounded = roundForReport(concentration)
-  // e^(−k·t) > 0 for finite inputs, so a non-zero C0 rounding to 0 here means
-  // the true value fell below the numeric range — reported, never silent.
-  if (concentrationRounded.loss === 'underflow') {
-    warnings.push({
-      code: 'NUMERICAL_UNDERFLOW',
-      severity: 'info',
-      message: 'C(t) is smaller than the numeric range of the result and is reported as 0.',
-    })
-  }
+  const concentrationRounded = c0Value > 0 ? roundNonZero(concentration) : roundForReport(concentration)
+  noteRoundingLoss(warnings, concentrationRounded, 'C(t) = C0 · e^(−k·t)')
   trace.add(
     'Concentration',
     'C(t) = C0 · e^(−k·t)',
@@ -181,8 +194,8 @@ export function calculateFirstOrderPK(input: FirstOrderPKInput): CalculationRepo
 
   const outputs: readonly CalculationValue[] = [
     { symbol: 'C(t)', label: 'Concentration at time t', value: concentrationRounded.value, unit: c0Def.symbol },
-    { symbol: 'k', label: 'Elimination rate constant', value: roundForReport(kDecimal).value, unit: rateSymbol },
-    { symbol: 't½', label: 'Half-life', value: roundForReport(halfLifeDecimal).value, unit: baseTimeDef.symbol },
+    { symbol: 'k', label: 'Elimination rate constant', value: kRounded.value, unit: rateSymbol },
+    { symbol: 't½', label: 'Half-life', value: halfLifeRounded.value, unit: baseTimeDef.symbol },
   ]
 
   const inputs: readonly CalculationInput[] = [

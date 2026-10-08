@@ -152,6 +152,6 @@ which fields survive (`docs/validation.md` §7).
 | NPSL schema tests (15 cases) | done |
 | AppLayout component tests | done |
 | Playwright config + shell smoke test | done |
-| Engine model tests (matrix §1) | done — 3 models, curves, units, numeric, registry (179 tests total) |
-| Mapper + round-trip tests | phase 4 |
-| Library/calculator/import e2e | phases 4–5 |
+| Engine model tests (matrix §1) | done — 3 models, curves, units, numeric, registry (204 tests total) |
+| Mapper + round-trip tests | phase 3 |
+| Library/calculator/import e2e | phases 3–4 |

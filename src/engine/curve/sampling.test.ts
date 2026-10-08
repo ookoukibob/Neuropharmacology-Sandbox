@@ -4,8 +4,10 @@ import {
   MAX_CURVE_POINTS,
   MIN_CURVE_POINTS,
   buildXValues,
+  checkLogYAxis,
   validateCurveOptions,
 } from './sampling'
+import type { CurvePoint } from '../types'
 
 function check(options: Parameters<typeof validateCurveOptions>[0], xScale: 'linear' | 'log' = 'linear') {
   const result = validateCurveOptions(options, xScale)
@@ -93,6 +95,25 @@ describe('validateCurveOptions', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errors).toHaveLength(3)
   })
+
+  it('rejects unknown scale values from untyped callers', () => {
+    // null/undefined mean "not provided" (?? default) — anything else must be linear | log.
+    for (const scale of ['banana', '', 3, {}]) {
+      const xResult = validateCurveOptions(
+        { range: { min: 0, max: 10 }, xScale: scale as never },
+        'linear',
+      )
+      expect(xResult.ok).toBe(false)
+      if (!xResult.ok) expect(xResult.errors[0]?.parameter).toBe('xScale')
+
+      const yResult = validateCurveOptions(
+        { range: { min: 0, max: 10 }, yScale: scale as never },
+        'linear',
+      )
+      expect(yResult.ok).toBe(false)
+      if (!yResult.ok) expect(yResult.errors[0]?.parameter).toBe('yScale')
+    }
+  })
 })
 
 describe('buildXValues', () => {
@@ -123,5 +144,50 @@ describe('buildXValues', () => {
     for (let i = 1; i < values.length; i++) {
       expect(values[i]).toBeGreaterThan(values[i - 1] as number)
     }
+  })
+})
+
+describe('checkLogYAxis — log y-axis validation', () => {
+  const points = (...y: number[]): CurvePoint[] => y.map((value, i) => ({ x: i, y: value }))
+
+  it('accepts a log y-axis when every y is strictly positive and finite', () => {
+    expect(checkLogYAxis(points(0.5, 1, 12.4), 'log')).toBeUndefined()
+  })
+
+  it('never warns for a linear y-axis, whatever the y values are', () => {
+    expect(checkLogYAxis(points(0, -5, Number.MIN_VALUE, Number.POSITIVE_INFINITY), 'linear')).toBeUndefined()
+    expect(checkLogYAxis([], 'linear')).toBeUndefined()
+  })
+
+  it('warns — without touching the data — when zero-valued y meet a log y-axis', () => {
+    const data = points(0, 1, 0)
+    const warning = checkLogYAxis(data, 'log')
+    expect(warning?.code).toBe('LOG_Y_AXIS_NOT_REPRESENTABLE')
+    expect(warning?.severity).toBe('warning')
+    expect(warning?.message).toContain('2 of 3')
+    // The engine never removes or clamps points to satisfy an axis.
+    expect(data).toEqual([{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 0 }])
+  })
+
+  it('warns for negative y (a model convention may permit negative effects)', () => {
+    const warning = checkLogYAxis(points(-100, -0.5, 50), 'log')
+    expect(warning?.code).toBe('LOG_Y_AXIS_NOT_REPRESENTABLE')
+    expect(warning?.message).toContain('2 of 3')
+    expect(warning?.message).toContain('linear y-axis')
+  })
+
+  it('warns for non-finite y (overflowed points cannot be plotted either)', () => {
+    const warning = checkLogYAxis(points(1, Number.POSITIVE_INFINITY), 'log')
+    expect(warning?.code).toBe('LOG_Y_AXIS_NOT_REPRESENTABLE')
+    expect(warning?.message).toContain('1 of 2')
+  })
+
+  it('treats an underflowed 0 exactly like a mathematical 0 — reported, never repaired', () => {
+    // Both arrive as y = 0; the axis contract depends only on the value.
+    expect(checkLogYAxis(points(0), 'log')?.code).toBe('LOG_Y_AXIS_NOT_REPRESENTABLE')
+  })
+
+  it('does not warn for an empty curve (no points, no axis conflict)', () => {
+    expect(checkLogYAxis([], 'log')).toBeUndefined()
   })
 })

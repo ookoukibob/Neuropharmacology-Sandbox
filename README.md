@@ -22,19 +22,22 @@ and unverified data. It never invents pharmacological parameters.
 
 ## Current status
 
-**Phase 1 — technical foundation (complete).** This repository currently
-contains the architectural foundation, not the full application:
+**Phase 1 — technical foundation (complete).**
+**Phase 2 — scientific calculation engine (complete, after a hardening pass).**
+**Phase 3 — drug library + local persistence (current).**
 
-| Area | Status |
-| --- | --- |
-| Project scaffold (Vite, React, TypeScript strict, Tailwind v4, shadcn/ui) | done |
-| Domain model types (drug, pharmacology, provenance, library) | done (types) |
-| Calculation engine contract (`CalculationReport`, trace, curve types) | done (types) |
-| NPSL `.npsl` schema + version compatibility (Zod) | done, with tests |
-| App shell: routes, layout, placeholder views | done |
-| Unit/component/e2e test harness | done (harness + first tests) |
-| Calculation models (PK, occupancy, Hill) | phase 2 |
-| Drug library UI, charts, import/export UI, Dexie persistence | phases 2–3 |
+| Phase | Deliverable | Status |
+| --- | --- | --- |
+| 1 | Architecture, domain types, NPSL schema + tests, app shell, test harness | done |
+| 2 | Calculation engine: first-order PK, single-site occupancy, Hill response, chart-agnostic curves, unit catalog, Decimal.js numerics, calculation traces, provenance propagation — plus the hardening pass (log y-axis validation, consistent numerical-loss reporting, invariant coverage, GitHub Actions CI) | done |
+| 3 | Drug library: Dexie/IndexedDB persistence behind a repository abstraction, startup hydration, transactional NPSL import, minimal library UI | current |
+| 4 | Calculator UI + calculation trace rendering | pending |
+| 5 | Charts (CurveData → Plotly adapters, linear/log controls) | pending |
+| 6 | Import/export UI (.npsl, JSON, CSV with field mapping) | pending |
+| 7 | Accessibility polish, keyboard workflows, e2e coverage | pending |
+
+All quality gates run locally and in CI (`.github/workflows/ci.yml`):
+typecheck, lint, tests, build, and the Playwright smoke test.
 
 See [docs/architecture.md](docs/architecture.md) for the roadmap and
 [docs/spec-review.md](docs/spec-review.md) for specification issues found

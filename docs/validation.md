@@ -56,7 +56,7 @@ Errors block the operation; warnings are surfaced in the preview but do not.
 - forward compatibility: unknown keys are preserved, never silently dropped.
 
 The same Zod-first approach is used for calculator inputs and user-defined
-drug forms (phases 4–5): every user-editable structure has a schema next to
+drug forms (phases 3–4): every user-editable structure has a schema next to
 its
 type, and forms validate with the same schema the engine consumes — one
 source of truth for "valid".
@@ -137,7 +137,7 @@ Calculator input schemas define, per model:
 - mutually exclusive parameter pairs (PK: exactly one of `t½`/`k`;
   both present → `CONFLICTING_PARAMETERS`).
 
-Validation runs **twice**: at the form (fast, field-level feedback — phase 5)
+Validation runs **twice**: at the form (fast, field-level feedback — phase 4)
 and inside the engine (authoritative — the engine never trusts its caller;
 implemented phase 2). The engine's checks produce the `CalculationError`
 taxonomy documented in [calculation-engine.md](calculation-engine.md) §3.

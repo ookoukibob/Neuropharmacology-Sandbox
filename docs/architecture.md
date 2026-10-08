@@ -124,9 +124,9 @@ src/
 │   └── pages/               # route-level views (thin; delegate to features)
 ├── components/
 │   ├── ui/                  # shadcn/ui primitives (generated, treat as vendor code)
-│   ├── charts/              # CurveData -> Plotly adapters (phase 3)
-│   └── forms/               # shared scientific input controls (phase 5)
-├── features/                # one folder per feature (phase 4+)
+│   ├── charts/              # CurveData -> Plotly adapters (phase 5)
+│   └── forms/               # shared scientific input controls (phase 4)
+├── features/                # one folder per feature (phase 3+)
 │   ├── drug-library/        #   list, detail, editing, store
 │   ├── pharmacokinetics/    #   PK calculator UI
 │   ├── receptor-occupancy/  #   occupancy calculator UI
@@ -152,7 +152,7 @@ src/
 ├── data/
 │   ├── schemas/             # Zod schemas (NPSL now; calculator input, CSV later)
 │   ├── built-in/            # bundled demo libraries (marked example/demo)
-│   └── repositories/        # Dexie implementation of the repository interface (phase 4)
+│   └── repositories/        # repository interface + Dexie implementation (phase 3)
 ├── tests/
 │   ├── setup.ts             # Vitest setup (jest-dom matchers)
 │   └── fixtures/            # synthetic, explicitly-marked test fixtures
@@ -251,13 +251,16 @@ navigation are already wired and tested.
 | Phase | Deliverable | Depends on | Status |
 | --- | --- | --- | --- |
 | 1 | Architecture, domain types, NPSL schema + tests, app shell, test harness | — | done |
-| 2 | Calculation engine models (PK, occupancy, Hill) + full unit tests | 1 | done |
-| 3 | Unit catalog implementation + engine unit checks | 2 | done (implemented together with phase 2) |
-| 4 | Dexie repository + drug library UI (list, detail, CRUD) | 1 | next |
-| 5 | Calculator UI + calculation trace rendering | 2, 3, 4 | pending |
-| 6 | Charts (CurveData → Plotly adapters, linear/log controls) | 5 | pending |
-| 7 | Import/export (.npsl, JSON, CSV with field mapping) + round-trip tests | 1, 4 | pending |
-| 8 | Accessibility polish, keyboard workflows, e2e coverage | all | pending |
+| 2 | Calculation engine models (PK, occupancy, Hill) + unit catalog + full unit tests + hardening (log y-axis validation, consistent numerical-loss policy, invariant coverage, CI) | 1 | done |
+| 3 | Drug library: Dexie repository, IndexedDB schema + migrations, startup hydration, transactional NPSL import, minimal library UI | 1, 2 | current |
+| 4 | Calculator UI + calculation trace rendering | 2, 3 | pending |
+| 5 | Charts (CurveData → Plotly adapters, linear/log controls) | 4 | pending |
+| 6 | Import/export UI (.npsl, JSON, CSV with field mapping) + round-trip tests | 3 | pending |
+| 7 | Accessibility polish, keyboard workflows, e2e coverage | all | pending |
+
+The core NPSL import path (parse → schema → semantic validation → atomic
+commit) ships with phase 3 at the repository level; phase 6 adds the full
+import/export UI (field mapping, CSV).
 
 Out of scope for the MVP (explicitly): backend, accounts, LLM features,
 dose → effect models, occupancy → subjective effect models, any parameter not

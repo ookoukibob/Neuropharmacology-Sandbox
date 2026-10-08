@@ -81,6 +81,13 @@ export type WarningCode =
   | 'NUMERICAL_UNDERFLOW'
   /** An intermediate step exceeded the numeric range of the result type. */
   | 'NUMERICAL_OVERFLOW'
+  /**
+   * A log y-axis was requested but some sampled points are ≤ 0 or non-finite
+   * (baseline zeros, underflowed points, negative effects). The curve data is
+   * reported unchanged; the chart layer must fall back to a linear y-axis —
+   * the engine never alters a result to satisfy an axis.
+   */
+  | 'LOG_Y_AXIS_NOT_REPRESENTABLE'
 
 /**
  * Model-level caveats that do not invalidate the result, e.g.

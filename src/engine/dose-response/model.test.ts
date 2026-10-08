@@ -252,6 +252,84 @@ describe('calculateHillResponse — numerical edge cases', () => {
   })
 })
 
+describe('calculateHillResponse — extreme ratios and powers (numerical-loss regression)', () => {
+  it('flags an extreme ratio r = EC50/[D] that overflows the double range', () => {
+    // r = 1e-300 / 1e-300... EC50 = 1e300, [D] = 1e-300 → r = 1e600 (∞ as double).
+    const report = hill({ ec50: p(1e300, 'nM'), concentration: p(1e-300, 'nM') })
+    expect(warningCodes(report)).toContain('NUMERICAL_OVERFLOW')
+    const result = resultOf(report)
+    const ratio = result.trace.find((s) => s.label === 'Concentration ratio')
+    expect(ratio?.result.value).toBe(Number.POSITIVE_INFINITY)
+    // …while the fractional response itself stays exact through the limit f = 0:
+    expect(result.outputs.find((o) => o.symbol === 'f')?.value).toBe(0)
+  })
+
+  it('flags an extreme ratio that underflows to 0 — the trace step never lies silently', () => {
+    // r = 1e-300 / 1e300 = 1e-600: mathematically non-zero, unrepresentable.
+    const report = hill({ ec50: p(1e-300, 'nM'), concentration: p(1e300, 'nM') })
+    expect(warningCodes(report)).toContain('NUMERICAL_UNDERFLOW')
+    const result = resultOf(report)
+    const ratio = result.trace.find((s) => s.label === 'Concentration ratio')
+    expect(ratio?.result.value).toBe(0)
+    // f = 1/(1 + tiny) → the exact limiting value 1, E = E0 + Emax = 100.
+    expect(result.outputs.find((o) => o.symbol === 'f')?.value).toBe(1)
+    expect(result.outputs[0]?.value).toBe(100)
+  })
+
+  it('classifies a pow() collapse to exact Decimal 0 as loss, not a faithful zero', () => {
+    // r = 1/1.0000001 < 1 with n = 1e308: r^n leaves Decimal's exponent range
+    // entirely (exact 0 inside the arithmetic) — mathematically r^n > 0.
+    const report = hill({ ec50: p(1, 'nM'), concentration: p(1.0000001, 'nM'), hillCoefficient: p(1e308, '1') })
+    const result = resultOf(report)
+    const power = result.trace.find((s) => s.label === 'Ratio to the power n')
+    expect(power?.result.value).toBe(0)
+    // The r^n step carries the loss warning (mathematical zero would be silent)…
+    const underflows = report.ok
+      ? report.result.warnings.filter((w) => w.code === 'NUMERICAL_UNDERFLOW')
+      : []
+    expect(underflows.some((w) => w.message.includes('r^n'))).toBe(true)
+    // …and f is reported through its exact limit 1 (r < 1 → f → 1).
+    expect(result.outputs.find((o) => o.symbol === 'f')?.value).toBe(1)
+    expect(result.outputs[0]?.value).toBe(100)
+  })
+
+  it('reports a collapsed pow() overflow through explicit limits (f = 0, E = E0)', () => {
+    // r = 2, n = 1e308: 2^1e308 overflows Decimal itself → exact ∞.
+    const report = hill({ ec50: p(10, 'nM'), concentration: p(5, 'nM'), hillCoefficient: p(1e308, '1') })
+    expect(warningCodes(report)).toContain('NUMERICAL_OVERFLOW')
+    expect(warningCodes(report)).toContain('NUMERICAL_UNDERFLOW')
+    const result = resultOf(report)
+    expect(result.outputs.find((o) => o.symbol === 'f')?.value).toBe(0) // limit, both losses warned
+    expect(result.outputs[0]?.value).toBe(0) // E0 = 0, Emax·f → 0
+    const power = result.trace.find((s) => s.label === 'Ratio to the power n')
+    expect(power?.result.value).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('warns when E0 + Emax itself exceeds the double range (never a silent ∞)', () => {
+    // 1.7e308 + 1.7e308 · 2/3 ≈ 2.83e308 > Number.MAX_VALUE.
+    const report = hill({ e0: p(1.7e308, '%'), emax: p(1.7e308, '%'), hillCoefficient: p(1, '1') })
+    expect(warningCodes(report)).toContain('NUMERICAL_OVERFLOW')
+    expect(resultOf(report).outputs[0]?.value).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('keeps mathematical zeros warning-free under the same policy', () => {
+    // [D] = 0 → f = 0 and (E0 = 0) E = 0 are exact zeros: no numerical loss.
+    const report = hill({ e0: p(0, '%'), concentration: p(0, 'nM') })
+    expect(warningCodes(report)).not.toContain('NUMERICAL_UNDERFLOW')
+    expect(warningCodes(report)).not.toContain('NUMERICAL_OVERFLOW')
+    expect(resultOf(report).outputs[0]?.value).toBe(0)
+  })
+
+  it('keeps trace and outputs consistent: f is rounded once, shown once', () => {
+    const result = resultOf(hill({ ec50: p(1e-300, 'nM'), concentration: p(1e300, 'nM') }))
+    const fOutput = result.outputs.find((o) => o.symbol === 'f')?.value
+    const fStep = result.trace.find(
+      (s) => s.label === 'Fractional response' && s.expression.startsWith('f = 1'),
+    )
+    expect(fStep?.result.value).toBe(fOutput)
+  })
+})
+
 describe('calculateHillResponse — report structure and trace', () => {
   const report = hill({})
 

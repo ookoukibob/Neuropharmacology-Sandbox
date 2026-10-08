@@ -6,7 +6,12 @@
  * Underflowing points become 0 and are counted into `curve.warnings` instead
  * of being silently flattened.
  */
-import { buildXValues, validateCurveOptions, type CurveOptions } from '../curve/sampling'
+import {
+  buildXValues,
+  checkLogYAxis,
+  validateCurveOptions,
+  type CurveOptions,
+} from '../curve/sampling'
 import type { CalculationWarning, CurveData, CurveGenerationResult, CurvePoint } from '../types'
 import { calculateFirstOrderPK, type FirstOrderPKInput } from './model'
 
@@ -46,6 +51,8 @@ export function generatePKCurve(
       message: `${underflowed} of ${points.length} sampled points underflowed to 0.`,
     })
   }
+  const logYWarning = checkLogYAxis(points, range.options.yScale)
+  if (logYWarning !== undefined) warnings.push(logYWarning)
 
   const curve: CurveData = {
     model: MODEL_ID,

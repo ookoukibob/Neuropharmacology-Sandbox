@@ -116,6 +116,11 @@ Warnings (non-fatal):
 - `NUMERICAL_OVERFLOW` — a computed intermediate exceeds the reportable
   double range (e.g. `(EC50/[D])^n` with huge `n`). The model falls back to
   the mathematical limit where one exists and warns.
+- `LOG_Y_AXIS_NOT_REPRESENTABLE` — a log y-axis was requested but some
+  sampled points are ≤ 0 or non-finite (baseline zeros, underflowed points,
+  negative effects). The curve comes back with its data unchanged and the
+  conflict reported once; the chart layer falls back to a linear y-axis or
+  refuses the view. The engine never edits a result to satisfy an axis.
 
 ---
 
@@ -144,7 +149,7 @@ export const MODELS: Record<ModelId, ModelDescriptor> = { ... }
 
 Why: an `EngineModel<I>` wrapper needs each model's input schema to type its
 `calculate`, which does not exist yet (schemas arrive with the calculator UI,
-phase 4–5), and wiring calculate functions into the registry while models
+phase 4), and wiring calculate functions into the registry while models
 import descriptor constants from it would create a module cycle. Models are
 exported as plain functions today (`calculateFirstOrderPK`,
 `calculateReceptorOccupancy`, `calculateHillResponse`); the `EngineModel`
@@ -221,6 +226,13 @@ Rules:
 - Points that underflow/overflow are not dropped: they are reported
   (`y = 0` with a `NUMERICAL_UNDERFLOW` curve warning, message includes the
   affected point count).
+- **Log y-axis conflicts are reported, never repaired.** Valid input
+  legitimately produces `y = 0`, negative or underflowed points; when
+  `yScale: 'log'` meets them the engine emits one
+  `LOG_Y_AXIS_NOT_REPRESENTABLE` warning (message includes the affected
+  point count) and keeps every point exactly as calculated — no filtering,
+  no epsilon clamping, no recomputation. A linear y-axis never warns, and
+  unknown scale strings are rejected as `OUT_OF_RANGE` (`xScale`/`yScale`).
 - **Plotly never computes pharmacology.** No formula appears in a chart
   component; swapping Plotly for another library touches only the adapter.
 - `seriesType` exists from day one so future observed/literature points can
@@ -240,6 +252,23 @@ Rules:
   double range) surfaces as `NUMERICAL_UNDERFLOW`; overflow of intermediates
   surfaces as `NUMERICAL_OVERFLOW`. Sub-range doubles (denormals down to
   `5e-324`) are reported normally.
+- **One loss policy for every model**: each value that leaves the engine —
+  scalar outputs *and* trace step results — is rounded through
+  `roundForReport()` (or `roundNonZero()` where the true value cannot be
+  zero), and every loss produces a structured warning naming the quantity
+  (`noteRoundingLoss()` in `src/engine/numeric/decimal.ts`). A mathematical
+  zero produces no warning; a non-zero value the double range cannot hold
+  always does. That is what keeps "exactly 0" distinguishable from
+  "non-zero but unrepresentable".
+- `roundNonZero()` exists because Decimal.js `exp`/`pow` can collapse a
+  strictly positive quantity (e.g. `e^(−k·t)`, `r^n` with `r > 0`) to an
+  *exact* Decimal zero/∞ outside its own exponent range — a collapse
+  `roundForReport()` alone would misclassify as a faithful zero.
+- Documented limiting forms (always paired with a warning): overflowing
+  `r^n` → `f` through its exact limit `0`; underflowing `r^n` for `r < 1`
+  → `f` through its exact limit `1`; collapsed `e^(−k·t)` → `C(t) = 0` for
+  `C0 > 0`. Trace and outputs round each quantity exactly once, so they can
+  never disagree.
 - The UI formats for display; the engine fixes the digits so two runs of the
   same input are byte-identical.
 - Curve sampling may evaluate through the same code path with doubles where
@@ -262,7 +291,7 @@ The engine contains no model that maps:
 such a model would require an explicit validated formulation plus all of its
 parameters. Without them, `MODEL_NOT_APPLICABLE` is the answer — the code is
 part of the taxonomy now and is documented as *reserved* until a UI-level
-"unsupported calculation" path emits it (phase 4–5). The Hill model
+"unsupported calculation" path emits it (phase 4). The Hill model
 outputs `E` — a dimensionless mathematical response scaled by user-supplied
 `E0`/`Emax` — and is labeled a model result, never "efficacy".
 

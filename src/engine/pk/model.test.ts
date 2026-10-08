@@ -128,6 +128,27 @@ describe('calculateFirstOrderPK — boundary and extreme values', () => {
     )
     expect(small.outputs[0]?.value).toBe(5e-301)
   })
+
+  it('classifies a collapsed exp() and an overflowing k as loss — never silent', () => {
+    // t½ = MIN_VALUE h → k ≈ 1.4e323 leaves the double range, and exp(−k·t)
+    // leaves Decimal's own range (exact 0) although e^(−k·t) > 0 always.
+    const report = calculateFirstOrderPK({
+      c0: p(100, 'nM'),
+      time: p(12, 'h'),
+      halfLife: p(Number.MIN_VALUE, 'h'),
+    })
+    const result = resultOf(report)
+    expect(result.outputs[0]?.value).toBe(0)
+    expect(result.outputs[1]?.value).toBe(Number.POSITIVE_INFINITY)
+    const warnings = report.ok ? report.result.warnings : []
+    expect(warnings.some((w) => w.code === 'NUMERICAL_OVERFLOW')).toBe(true)
+    expect(
+      warnings.some((w) => w.code === 'NUMERICAL_UNDERFLOW' && w.message.includes('surviving fraction')),
+    ).toBe(true)
+    // The trace step agrees with the reported loss instead of showing a quiet 0.
+    const survival = result.trace.find((s) => s.label === 'Surviving fraction')
+    expect(survival?.result.value).toBe(0)
+  })
 })
 
 describe('calculateFirstOrderPK — invalid inputs', () => {
@@ -328,6 +349,20 @@ describe('calculateFirstOrderPK — invariants', () => {
       )
       expect(result.outputs[0]?.value).toBeCloseTo(100 * Math.pow(2, -n), 9)
     }
+  })
+
+  it('t½ ↔ k equivalence: both input paths compute the same concentration', () => {
+    const viaHalfLife = resultOf(
+      calculateFirstOrderPK({ c0: p(100, 'nM'), time: p(7.5, 'h'), halfLife: p(6, 'h') }),
+    )
+    const k = Math.LN2 / 6
+    const viaRate = resultOf(
+      calculateFirstOrderPK({ c0: p(100, 'nM'), time: p(7.5, 'h'), k: p(k, '1/h') }),
+    )
+    expect(viaRate.outputs[0]?.value).toBeCloseTo(viaHalfLife.outputs[0]?.value as number, 9)
+    // Each path echoes the parameter the other one derived, to full precision.
+    expect(viaRate.outputs.find((o) => o.symbol === 't½')?.value).toBeCloseTo(6, 10)
+    expect(viaHalfLife.outputs.find((o) => o.symbol === 'k')?.value).toBeCloseTo(k, 10)
   })
 })
 
