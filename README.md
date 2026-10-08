@@ -87,4 +87,13 @@ another.
 
 ## License
 
-TBD.
+Source-available under the **PolyForm Noncommercial License 1.0.0** — see
+[LICENSE](LICENSE).
+
+> Required Notice: Copyright 2026 OokoukiBob (https://github.com/ookoukibob/Neuropharmacology-Sandbox)
+
+This is **not** OSI-approved open-source software. Noncommercial use
+(including personal research, study, teaching and hobby projects, and use by
+charitable/educational/public/government organizations) is permitted;
+commercial use, distribution for commercial purposes, and commercial
+sublicensing are not. SPDX identifier: `PolyForm-Noncommercial-1.0.0`.

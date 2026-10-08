@@ -1,7 +1,9 @@
 {
   "name": "neuropharmacology-sandbox",
-  "private": true,
   "version": "0.0.0",
+  "description": "Transparent, reproducible pharmacology calculation environment (source-available, non-commercial).",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
