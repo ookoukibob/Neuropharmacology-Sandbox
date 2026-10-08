@@ -1,0 +1,80 @@
+{
+  "formatVersion": "1.0.0",
+  "schemaVersion": "1.0.0",
+  "libraryMetadata": {
+    "id": "npsl-schema-fixture",
+    "name": "NPSL Schema Test Fixture",
+    "author": "Neuropharmacology Sandbox test suite",
+    "description": "SYNTHETIC TEST DATA. Every value in this file is fabricated for schema validation tests and carries no pharmacological meaning.",
+    "createdAt": "2026-01-01T00:00:00Z",
+    "updatedAt": "2026-01-01T00:00:00Z",
+    "dataStatus": "example"
+  },
+  "drugs": [
+    {
+      "id": "test-compound-001",
+      "origin": "built-in-demo",
+      "identifiers": {
+        "name": "Test Compound 001 (synthetic fixture)",
+        "synonyms": ["SYNTH-001"],
+        "description": "Not a drug. Synthetic entity used to validate the NPSL schema."
+      },
+      "tags": ["fixture", "synthetic"],
+      "targets": [
+        {
+          "id": "target-1",
+          "name": "TEST-RECEPTOR",
+          "gene": "TEST1",
+          "action": "antagonist",
+          "species": "human",
+          "kd": {
+            "value": 1,
+            "unit": "nM",
+            "provenance": {
+              "type": "literature",
+              "source": "Synthetic fixture",
+              "notes": "Fabricated for tests; not a real measurement."
+            }
+          },
+          "ki": {
+            "value": 2,
+            "unit": "nM",
+            "provenance": { "type": "user", "notes": "Synthetic fixture value." }
+          },
+          "ec50": {
+            "value": 3,
+            "unit": "nM",
+            "provenance": { "type": "unknown" }
+          },
+          "ic50": {
+            "value": 4,
+            "unit": "nM",
+            "provenance": {
+              "type": "derived",
+              "method": "synthetic fixture derivation",
+              "from": ["kd"]
+            }
+          }
+        }
+      ],
+      "pharmacokinetics": {
+        "halfLife": {
+          "value": 6,
+          "unit": "h",
+          "provenance": {
+            "type": "calculated",
+            "model": "pk.first-order-one-compartment"
+          }
+        },
+        "bioavailability": {
+          "value": 100,
+          "unit": "%",
+          "provenance": { "type": "user" }
+        },
+        "notes": "Synthetic fixture values only."
+      },
+      "createdAt": "2026-01-01T00:00:00Z",
+      "updatedAt": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
