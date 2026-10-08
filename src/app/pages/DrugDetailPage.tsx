@@ -1,5 +1,6 @@
 import { useParams } from 'react-router-dom'
 import { PageHeader } from '@/app/layout/PageHeader'
+import { DrugDetailView } from '@/features/drug-library/DrugDetailView'
 
 export function DrugDetailPage() {
   const { drugId } = useParams<{ drugId: string }>()
@@ -9,7 +10,7 @@ export function DrugDetailPage() {
       title="Drug Detail"
       description="Overview, pharmacokinetics, targets and provenance for a single drug record."
     >
-      <p className="text-sm text-muted-foreground">Record id: {drugId ?? 'unknown'}</p>
+      <DrugDetailView drugId={drugId ?? ''} />
     </PageHeader>
   )
 }

@@ -74,18 +74,21 @@ source of truth for "valid".
 
 ---
 
-## 4. Semantic layer (phase 3–4)
+## 4. Semantic layer (import: phase 3; calculator inputs: phase 4)
 
-Structurally valid data can still be scientifically wrong. Planned checks,
-each a pure function with unit tests:
+Structurally valid data can still be scientifically wrong. The import
+checks are implemented as pure functions in
+`src/data/import/importPipeline.ts` with unit tests; calculator-input
+checks arrive with phase 4.
 
-| Check | Rule | Outcome |
+| Check | Rule | Outcome (at import) |
 | --- | --- | --- |
-| Unit known | every `unit` exists in the unit catalog | error `UNIT_UNKNOWN` |
-| Unit dimension | `halfLife` is time, `kd`/`ki`/`ec50`/`ic50` are molar-concentration, `bioavailability` is dimensionless | error |
-| Cross-parameter consistency | one target may not carry both `kd` and `ki` **for the same measurement** with conflicting literature sources | warning |
-| Duplicate ids | unique `Drug.id`, unique `targets[].id` per drug | error on duplicates, `DUPLICATE_ID` |
-| Ranges | fraction-like values in range, non-negative where required | error |
+| Unit known | every `unit` exists in the unit catalog | warning `UNKNOWN_UNIT` — imported exactly as declared; a calculation that *uses* it fails with the engine's `UNIT_UNKNOWN` |
+| Unit dimension | `halfLife` is time, `kd`/`ki`/`ec50`/`ic50` are molar- or mass-concentration, `bioavailability` is dimensionless | warning `UNEXPECTED_DIMENSION` — never rewritten |
+| Cross-parameter consistency | one target may not carry both `kd` and `ki` **for the same measurement** with conflicting literature sources | warning (phase 6 mapping UI) |
+| Duplicate ids | unique `Drug.id`, unique `targets[].id` per drug | error `DUPLICATE_ID` — blocking |
+| Duplicate names | same `identifiers.name` twice in one file | warning `DUPLICATE_NAME` — names are labels, not identities |
+| Ranges | fraction-like values in range, non-negative where required | error (form) / engine-side (calculator) |
 | Provenance completeness | `literature` with no citation/doi/url beyond `source` | warning (encourage full citation) |
 | Demo marking | `origin: 'built-in-demo'` drugs must be in a library with `dataStatus: 'example'` | warning |
 | Kd/Ki separation | importers may never map a column named ambiguously (`"Kd/Ki"`) without explicit user mapping choice | blocks until resolved in mapping UI |
@@ -97,11 +100,13 @@ each a pure function with unit tests:
 ```
 File selected
   → parse (JSON / CSV with explicit encoding)
-  → schema validation (Zod)
   → version compatibility
+  → schema validation (Zod)
   → semantic validation
   → PREVIEW: file info, counts, per-record status, full error/warning list,
              field mapping UI for CSV, conflict resolution (merge/replace)
+             (preview data functions ship in phase 3 — `previewNpslImport`;
+             the wizard UI with CSV field mapping is phase 6)
   → user confirms
   → single Dexie transaction: metadata + drugs written atomically
   → success summary
@@ -120,7 +125,7 @@ Guarantees:
 Validation of existing data at startup: on boot, the repository layer
 validates/migrates persisted records. Migration never discards data
 silently: unparseable records are quarantined and reported, not deleted
-(`docs/decisions.md` §5).
+(`docs/decisions.md` ADR-5, ADR-15).
 
 ---
 

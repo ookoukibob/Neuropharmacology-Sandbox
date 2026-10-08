@@ -131,7 +131,8 @@ which fields survive (`docs/validation.md` §7).
 
 ## 6. Coverage & gates
 
-- Target for `src/domain`, `src/engine`, `src/data`: high branch coverage —
+- Target for `src/domain`, `src/engine`, `src/data`, `src/features`: high
+  branch coverage —
   every error code **any model can emit** must have at least one test
   producing it. Codes reserved without a producer
   (`NUMERICAL_ERROR`, `MODEL_NOT_APPLICABLE`) are documented as reserved in
@@ -152,6 +153,11 @@ which fields survive (`docs/validation.md` §7).
 | NPSL schema tests (15 cases) | done |
 | AppLayout component tests | done |
 | Playwright config + shell smoke test | done |
-| Engine model tests (matrix §1) | done — 3 models, curves, units, numeric, registry (204 tests total) |
-| Mapper + round-trip tests | phase 3 |
-| Library/calculator/import e2e | phases 3–4 |
+| Engine model tests (matrix §1) | done — 3 models, curves, units, numeric, registry |
+| Persistence DTO mapper tests | done — round trip, validation, unknown-field preservation |
+| Schema migration tests | done — v1→v2 upgrade: bookkeeping only, scientific + unknown fields survive |
+| Repository tests | done — CRUD, metadata stamping, quarantine, atomic replace/import rollback, NPSL round trip, reload |
+| Import pipeline tests | done — parse/schema/semantic/preview classification |
+| Store + library UI tests | done — hydration guard, quarantine report, form safeguards |
+| Test suite total | 287 tests |
+| Library/calculator/import e2e | calculator + import wizard e2e (phases 4, 6); library covered by component + repository tests |

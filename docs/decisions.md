@@ -176,6 +176,86 @@ missing — acceptable for a small, strict-TS codebase.
 
 ---
 
+## ADR-14 · Persistence DTO + versioned Dexie schema in one module
+
+**Context.** Phase 3 stores drug records in IndexedDB. The domain `Drug` is
+the scientific view; storage needs bookkeeping (a record-shape version) and
+must survive future schema changes without destroying data it does not
+understand.
+**Decision.** One database module (`src/data/db/database.ts`) declares every
+schema version: v1 (initial stores) and v2 (adds `origin`/`updatedAt`
+indexes) with an *idempotent upgrade hook that only backfills bookkeeping*
+(`persistenceVersion`, missing `createdAt`/`updatedAt`) — it never creates,
+rewrites or deletes scientific or unknown fields. The persistence DTO is the
+domain shape plus `persistenceVersion`, with explicit `toRecord`/`fromRecord`
+mappers (`src/data/mappers/records.ts`) validated by the shared NPSL
+`drugSchema`. Unknown (future/minor-version) fields are preserved by a
+documented per-level key contract: contract keys are governed by the domain
+value (clearing a field deletes it), out-of-contract keys are copied forward
+from the previous record, and target rows are matched by stable id — never
+by position. NPSL is the only interchange format; the export document is
+built by `toNpslDocument`.
+**Consequences.** Storage can evolve (new indexes, new bookkeeping) while
+scientific data and unknown fields survive byte-for-byte — proven by the
+migration test. The mapping stays near-identity on purpose (small repo,
+small DB, clear mapping), but every crossing is explicit, so a DTO change
+can never leak into the domain by accident.
+
+---
+
+## ADR-15 · Hydration reports quarantine instead of repairing
+
+**Context.** Records can become unreadable (corruption, a schema change we
+do not understand, a partial write from an older build). Silently skipping
+them would "fix" a corrupt database by losing data invisibly.
+**Decision.** `getAllDrugs` returns `{ drugs, quarantine }`: records failing
+`drugSchema` are reported with their id, error paths and raw content, and
+are **never deleted, never repaired, never skipped without a report**. The
+library view surfaces the quarantine as a banner; exports contain only
+readable records while quarantined rows stay in storage.
+**Consequences.** An empty library always means "there is no data", never
+"data was dropped". Repair tooling can be added later (records are
+preserved), and repository/store tests can assert the report directly.
+
+---
+
+## ADR-16 · Log-Y axis conflicts are one structured warning, not changed data
+
+**Context.** A logarithmic y-axis cannot represent `y ≤ 0`. Filtering or
+clamping points to make the chart "work" would silently alter scientific
+results; throwing at chart time would bury the reason.
+**Decision.** The sampler validates `xScale`/`yScale` against an enum
+(unknown scales are `OUT_OF_RANGE`) and, after sampling, emits exactly one
+`LOG_Y_AXIS_NOT_REPRESENTABLE` warning when a log y-axis conflicts with the
+points. Curve data is never altered — no filtering, clamping or
+recomputation. The chart layer (phase 5) must reject or fall back based on
+the warning; the warning registry documents severity `warning`.
+**Consequences.** Results stay byte-identical whatever the axis choice, and
+the decision "this cannot be drawn on log-Y" reaches the UI as data. Tests
+cover positive/zero/negative/underflowed-zero/linear cases plus data
+equality against the linear run.
+
+---
+
+## ADR-17 · Zustand for session state, IndexedDB as the source of truth
+
+**Context.** The library UI needs reactive state, but a client cache that
+diverges from storage would break the local-first contract (reload must not
+change what is true).
+**Decision.** The store is a *factory* (`createLibraryStore(repo)`) bound to
+a repository; the app wires the singleton in `src/app/libraryStore.ts`
+(composition root — the only React-side module that reaches into
+`src/data/db`). Zustand holds session state only: hydrated list, quarantine,
+selection, filter string, load status and the last error. Every mutation
+goes through the repository and re-reads storage; nothing is computed,
+defaulted or persisted by the store. Hydration is idempotent (in-flight
+guarded) and triggered once from `AppLayout`.
+**Consequences.** Tests inject a repository double (or `fake-indexeddb`)
+without touching the UI; a reload re-derives identical state from IndexedDB;
+there is exactly one source of truth and one write path.
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

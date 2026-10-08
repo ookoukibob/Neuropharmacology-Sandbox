@@ -120,6 +120,7 @@ src/
 ├── app/                     # application shell
 │   ├── App.tsx              # RouterProvider
 │   ├── routes.tsx           # central route table
+│   ├── libraryStore.ts      # composition root: Dexie repository + Zustand store
 │   ├── layout/              # AppLayout, PageHeader
 │   └── pages/               # route-level views (thin; delegate to features)
 ├── components/
@@ -127,7 +128,7 @@ src/
 │   ├── charts/              # CurveData -> Plotly adapters (phase 5)
 │   └── forms/               # shared scientific input controls (phase 4)
 ├── features/                # one folder per feature (phase 3+)
-│   ├── drug-library/        #   list, detail, editing, store
+│   ├── drug-library/        #   list/detail/form views + session store (phase 3)
 │   ├── pharmacokinetics/    #   PK calculator UI
 │   ├── receptor-occupancy/  #   occupancy calculator UI
 │   ├── dose-response/       #   Hill calculator UI
@@ -151,11 +152,14 @@ src/
 │   └── dose-response/       #   Hill equation + curve generator
 ├── data/
 │   ├── schemas/             # Zod schemas (NPSL now; calculator input, CSV later)
+│   ├── db/                  # single versioned Dexie module + upgrade hooks (phase 3)
+│   ├── mappers/             # persistence DTO <-> domain, NPSL export document
+│   ├── import/              # NPSL parse -> schema -> semantic -> preview pipeline
 │   ├── built-in/            # bundled demo libraries (marked example/demo)
 │   └── repositories/        # repository interface + Dexie implementation (phase 3)
 ├── tests/
 │   ├── setup.ts             # Vitest setup (jest-dom matchers)
-│   └── fixtures/            # synthetic, explicitly-marked test fixtures
+│   └── fixtures.ts          # synthetic, explicitly-marked test fixtures
 └── ...
 e2e/                         # Playwright specs
 docs/                        # this documentation
@@ -208,8 +212,8 @@ calculator inputs (validated)
 ```
 file (.npsl / JSON / CSV)
    → read & JSON/CSV parse
-   → Zod schema validation           (src/data/schemas)
    → version compatibility check
+   → Zod schema validation           (src/data/schemas)
    → semantic validation             (units, duplicates, provenance rules)
    → preview (counts, warnings, per-record status)
    → user confirms
@@ -252,8 +256,8 @@ navigation are already wired and tested.
 | --- | --- | --- | --- |
 | 1 | Architecture, domain types, NPSL schema + tests, app shell, test harness | — | done |
 | 2 | Calculation engine models (PK, occupancy, Hill) + unit catalog + full unit tests + hardening (log y-axis validation, consistent numerical-loss policy, invariant coverage, CI) | 1 | done |
-| 3 | Drug library: Dexie repository, IndexedDB schema + migrations, startup hydration, transactional NPSL import, minimal library UI | 1, 2 | current |
-| 4 | Calculator UI + calculation trace rendering | 2, 3 | pending |
+| 3 | Drug library: Dexie repository, IndexedDB schema + migrations, startup hydration, transactional NPSL import, minimal library UI | 1, 2 | done |
+| 4 | Calculator UI + calculation trace rendering | 2, 3 | current |
 | 5 | Charts (CurveData → Plotly adapters, linear/log controls) | 4 | pending |
 | 6 | Import/export UI (.npsl, JSON, CSV with field mapping) + round-trip tests | 3 | pending |
 | 7 | Accessibility polish, keyboard workflows, e2e coverage | all | pending |
@@ -265,6 +269,66 @@ import/export UI (field mapping, CSV).
 Out of scope for the MVP (explicitly): backend, accounts, LLM features,
 dose → effect models, occupancy → subjective effect models, any parameter not
 supplied by data.
+
+### Definition of done — Phase 2 hardening (delivered)
+
+- [x] README status reflects the true phase state (1–2 done, next phase
+      current) and the remaining roadmap.
+- [x] Log-Y axis: non-positive or non-finite points are reported as one
+      structured warning (`LOG_Y_AXIS_NOT_REPRESENTABLE`); curve data is
+      never removed, clamped or mutated; tests cover positive, zero,
+      negative, underflowed-zero and unchanged linear runs.
+- [x] Numerical loss: mathematical zeros stay warning-free while
+      underflowed/rounded values are labelled, consistently across scalar
+      outputs **and** trace intermediates; regression tests for extreme
+      Hill ratios/powers and collapsed exponentials.
+- [x] Scientific invariants verified (PK: C(0)=C0, C(t½)=C0/2, monotonic,
+      t½↔k; occupancy: bounds, monotonic, [D]=Kd→0.5; Hill: [D]=0→E0,
+      [D]=EC50→f=0.5, monotonic both signs, no default n, no parameter-kind
+      substitution) — without adding models.
+- [x] Minimal GitHub Actions CI: `npm ci` → typecheck → lint → test →
+      build, plus the Playwright smoke test; no deploy/release/caching
+      complexity.
+- [x] Docs updated (engine warning/loss policy, roadmap, cross-references);
+      all gates green; `src/engine` stays free of React/Plotly/Zustand/Dexie.
+
+### Definition of done — Phase 3 drug library + local persistence (delivered)
+
+- [x] Layering: UI → feature → repository interface → Dexie → IndexedDB;
+      React, engine and domain modules never import Dexie (only the
+      database module and the composition root reference it).
+- [x] One versioned database module: v1 → v2 upgrade backfills bookkeeping
+      only; scientific data and unknown fields survive byte-for-byte
+      (migration demo test), new indexes usable afterwards.
+- [x] Repository interface (getAllDrugs, getDrug, createDrug, updateDrug,
+      deleteDrug, getLibraryMetadata, replaceLibrary, importLibrary,
+      exportLibrary) speaking domain objects only; persistence-DTO vs
+      domain decision documented (ADR-14).
+- [x] Hydration with quarantine: invalid records are reported with id and
+      errors, never silently dropped or deleted (ADR-15).
+- [x] Atomic multi-record operations: replace/import validate inside the
+      transaction; failures roll back to the previous library untouched;
+      import pipeline is parse → NPSL schema → semantic → preview →
+      transaction, all-or-nothing.
+- [x] Library metadata `{name, author, description, createdAt, updatedAt,
+      dataStatus}` with a documented first-run default; stable UUID ids for
+      drugs and targets (never names or positions).
+- [x] Storage origin (`origin`) kept separate from scientific provenance;
+      provenance triples never flattened; NPSL is the only interchange
+      format (export → import round trip is identity).
+- [x] Zustand holds session state only; IndexedDB stays the source of
+      truth and reload persistence is proven by tests (ADR-17).
+- [x] Minimal UI only: list, select, create, edit, delete, provenance
+      display, reload persistence — no calculator UI, charts, search,
+      dashboards or AI.
+- [x] Scientific editing safeguards: explicit units from the catalog (no
+      silent default), finite non-negative number validation, provenance
+      stamped `user` at submit and never upgraded by the UI.
+- [x] No invented pharmacological data: fixtures are synthetic and labeled
+      as such; the first run is empty.
+- [x] Extensive tests (mapper, migration, import pipeline, repository,
+      store, views); ADR-14…17 written; docs/tree/status updated; all
+      gates green; `src/engine` purity re-verified.
 
 ---
 

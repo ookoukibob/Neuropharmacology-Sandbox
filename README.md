@@ -6,6 +6,10 @@ The application distinguishes clearly between externally sourced
 pharmacological data, user-provided data, calculated values, derived values
 and unverified data. It never invents pharmacological parameters.
 
+> **Guiding principle:** The application stores scientific data locally,
+> calculates only from explicit inputs, preserves provenance, and makes no
+> unsupported pharmacological claims.
+
 ## What this is
 
 - A calculation and data-management tool for pharmacology modelling.
@@ -24,14 +28,14 @@ and unverified data. It never invents pharmacological parameters.
 
 **Phase 1 — technical foundation (complete).**
 **Phase 2 — scientific calculation engine (complete, after a hardening pass).**
-**Phase 3 — drug library + local persistence (current).**
+**Phase 3 — drug library + local persistence (complete).**
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
 | 1 | Architecture, domain types, NPSL schema + tests, app shell, test harness | done |
 | 2 | Calculation engine: first-order PK, single-site occupancy, Hill response, chart-agnostic curves, unit catalog, Decimal.js numerics, calculation traces, provenance propagation — plus the hardening pass (log y-axis validation, consistent numerical-loss reporting, invariant coverage, GitHub Actions CI) | done |
-| 3 | Drug library: Dexie/IndexedDB persistence behind a repository abstraction, startup hydration, transactional NPSL import, minimal library UI | current |
-| 4 | Calculator UI + calculation trace rendering | pending |
+| 3 | Drug library: Dexie/IndexedDB persistence behind a repository abstraction, versioned schema with in-place migration, startup hydration with quarantine reporting, transactional NPSL import (preview → all-or-nothing commit), minimal library UI (list/select/create/edit/delete with provenance display), export → import round trip | done |
+| 4 | Calculator UI + calculation trace rendering | current |
 | 5 | Charts (CurveData → Plotly adapters, linear/log controls) | pending |
 | 6 | Import/export UI (.npsl, JSON, CSV with field mapping) | pending |
 | 7 | Accessibility polish, keyboard workflows, e2e coverage | pending |
@@ -45,7 +49,7 @@ during design, with proposed corrections.
 
 ## Quick start
 
-Prerequisites: Node.js 20+ and npm.
+Prerequisites: Node.js 22+ and npm (matches CI).
 
 ```bash
 npm install            # install dependencies

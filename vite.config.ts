@@ -18,7 +18,7 @@ export default defineConfig({
     exclude: ['node_modules', 'e2e'],
     coverage: {
       provider: 'v8',
-      include: ['src/domain/**', 'src/engine/**', 'src/data/**'],
+      include: ['src/domain/**', 'src/engine/**', 'src/data/**', 'src/features/**'],
     },
   },
 })

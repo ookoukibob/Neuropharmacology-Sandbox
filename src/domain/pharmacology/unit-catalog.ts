@@ -86,6 +86,10 @@ export const unitCatalog: UnitCatalog = {
   dimensionOf(symbol: string): DimensionId | undefined {
     return byKey.get(key(symbol))?.dimension
   },
+  unitsOfDimension(dimension: DimensionId): readonly UnitDef[] {
+    // Iterate the unique definitions, not byKey (which also holds aliases).
+    return UNITS.filter((def) => def.dimension === dimension)
+  },
   convert(value: number, from: string, to: string): UnitConversionResult {
     const fromDef = byKey.get(key(from))
     if (fromDef === undefined) return { ok: false, error: { kind: 'unknown-unit', symbol: from } }

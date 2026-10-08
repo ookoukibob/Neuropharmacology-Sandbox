@@ -1,6 +1,13 @@
 import type { Drug } from '../drug/drug'
 
 /**
+ * Default id of the local, single-entry metadata table. Used when a library
+ * (or an NPSL file) does not declare one — the only place an id is ever
+ * generated for library metadata; drug and target ids are always explicit.
+ */
+export const DEFAULT_LIBRARY_ID = 'local-library'
+
+/**
  * Library-level metadata for a drug collection (the live IndexedDB library
  * and the portable .npsl file share this shape).
  *

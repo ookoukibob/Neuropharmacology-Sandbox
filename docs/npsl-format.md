@@ -207,10 +207,10 @@ structure. (A real example file lives at
 
 ```
 npslFileSchema (Zod, src/data/schemas/npsl.ts)
-      │  import: validate → version check → semantic checks → map
+      │  import: parse → version check → schema → semantic checks → map
       ▼
 domain Drug / DrugLibrary (src/domain/**)
-      │  export: map → npslFileSchema.safeParse → serialize
+      │  export: toNpslDocument → serialize (writes were schema-validated)
       ▼
 .npsl file
 ```
@@ -218,5 +218,5 @@ domain Drug / DrugLibrary (src/domain/**)
 Serialization types and domain types are deliberately separate: the file
 format can evolve without leaking `optional`/`default` mechanics into the
 domain, and the domain can gain derived fields without changing the format.
-The mapping layer (phase 3, `src/data/mappers`) is verified by round-trip
-tests ([testing.md](testing.md) §5).
+The mapping layer (`src/data/mappers`, phase 3) is verified by export →
+import round-trip tests ([testing.md](testing.md) §7).

@@ -1,0 +1,315 @@
+/**
+ * Dexie/IndexedDB implementation of the repository contract.
+ *
+ * This is the only module that knows both the interface and the storage
+ * schema. Guarantees:
+ * - every mutation validates through the shared NPSL schema before it is
+ *   written (garbage in → typed `RepositoryError('VALIDATION')`, never a
+ *   corrupt record);
+ * - multi-record operations (`replaceLibrary`, `importLibrary`, single
+ *   CRUD + metadata stamp) run inside one Dexie transaction — all-or-
+ *   nothing; duplicate ids and schema failures reject inside the
+ *   transaction and leave the previous library untouched;
+ * - hydration reports invalid records as quarantine instead of deleting or
+ *   skipping them silently;
+ * - library `updatedAt` is stamped by CRUD mutations only — an import
+ *   carries the file's own timestamps (round-trip identity);
+ * - storage origin (`origin`) and scientific provenance are distinct: this
+ *   layer preserves both verbatim and never rewrites provenance.
+ */
+import type { Drug, DrugId, ReceptorTarget } from '../../domain/drug/drug'
+import {
+  DEFAULT_LIBRARY_ID,
+  type DrugLibrary,
+  type LibraryMetadata,
+} from '../../domain/library/library'
+import type { SandboxDatabase } from '../db/database'
+import {
+  parseNpsl,
+  resolveLibraryMetadata,
+  validateNpslFile,
+} from '../import/importPipeline'
+import { newId } from '../id'
+import { fromRecord, toStoredRecord, type DrugRecord } from '../mappers/records'
+import { drugSchema, libraryMetadataSchema } from '../schemas/npsl'
+import {
+  RepositoryError,
+  type DrugChanges,
+  type DrugInput,
+  type DrugRepository,
+  type ImportMode,
+  type ImportReport,
+  type LibraryLoadResult,
+  type QuarantinedRecord,
+  type TargetInput,
+} from './repository'
+
+function recordKey(raw: unknown): string {
+  if (typeof raw === 'object' && raw !== null) {
+    const id = (raw as { id?: unknown }).id
+    if (typeof id === 'string' && id.length > 0) return id
+  }
+  return '(missing id)'
+}
+
+function schemaErrors(issues: readonly { path: PropertyKey[]; message: string }[]): string {
+  return issues
+    .map((issue) => `${issue.path.length > 0 ? issue.path.join('.') : '(root)'}: ${issue.message}`)
+    .join('; ')
+}
+
+function assignTargetIds(targets: readonly TargetInput[]): readonly ReceptorTarget[] {
+  return targets.map((target) =>
+    target.id !== undefined && target.id !== ''
+      ? // Narrowed above; TargetInput only widens the id to optional.
+        (target as ReceptorTarget)
+      : { ...target, id: newId() },
+  )
+}
+
+type MutableDrug = { -readonly [K in keyof Drug]: Drug[K] }
+
+function applyChanges(current: Drug, changes: DrugChanges, now: string): Drug {
+  const draft: MutableDrug = {
+    ...current,
+    createdAt: current.createdAt ?? now,
+    updatedAt: now,
+  }
+  if (changes.identifiers !== undefined) draft.identifiers = changes.identifiers
+  if (changes.tags !== undefined) draft.tags = changes.tags
+  if (changes.targets !== undefined) draft.targets = assignTargetIds(changes.targets)
+  if (changes.pharmacokinetics !== undefined) draft.pharmacokinetics = changes.pharmacokinetics
+  if ('notes' in changes) {
+    // Explicit undefined clears; absent keeps (see DrugChanges contract).
+    if (changes.notes === undefined) delete draft.notes
+    else draft.notes = changes.notes
+  }
+  return draft
+}
+
+function defaultMetadata(now: string): LibraryMetadata {
+  return {
+    id: DEFAULT_LIBRARY_ID,
+    name: 'Local library',
+    createdAt: now,
+    updatedAt: now,
+    // Empty first run: nothing is claimed about data we do not have.
+    dataStatus: 'unspecified',
+  }
+}
+
+export class DexieDrugRepository implements DrugRepository {
+  private readonly db: SandboxDatabase
+
+  constructor(db: SandboxDatabase) {
+    this.db = db
+  }
+
+  async getAllDrugs(): Promise<LibraryLoadResult> {
+    const raws: unknown[] = await this.db.drugs.toArray()
+    const drugs: Drug[] = []
+    const quarantine: QuarantinedRecord[] = []
+    for (const raw of raws) {
+      const result = fromRecord(raw)
+      if (result.ok) {
+        drugs.push(result.drug)
+      } else {
+        // Kept exactly as stored — repair is possible, deletion is not
+        // something hydration ever does on its own.
+        quarantine.push({ id: recordKey(raw), errors: result.errors, record: raw })
+      }
+    }
+    return { drugs, quarantine }
+  }
+
+  async getDrug(id: DrugId): Promise<Drug | undefined> {
+    const raw: DrugRecord | undefined = await this.db.drugs.get(id)
+    if (raw === undefined) return undefined
+    const result = fromRecord(raw)
+    if (!result.ok) {
+      throw new RepositoryError(
+        'VALIDATION',
+        `stored record "${id}" is invalid: ${result.errors.join('; ')}`,
+      )
+    }
+    return result.drug
+  }
+
+  async createDrug(input: DrugInput): Promise<Drug> {
+    const now = new Date().toISOString()
+    const drug: Drug = {
+      id: newId(),
+      origin: 'user',
+      identifiers: input.identifiers,
+      tags: input.tags ?? [],
+      targets: assignTargetIds(input.targets ?? []),
+      pharmacokinetics: input.pharmacokinetics ?? {},
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      createdAt: now,
+      updatedAt: now,
+    }
+    const record = toStoredRecord(undefined, drug)
+    assertWritable(record)
+    await this.db.transaction('rw', this.db.drugs, this.db.meta, async () => {
+      await this.db.drugs.put(record)
+      await this.touchLibrary(now)
+    })
+    return drug
+  }
+
+  async updateDrug(id: DrugId, changes: DrugChanges): Promise<Drug> {
+    return this.db.transaction('rw', this.db.drugs, this.db.meta, async () => {
+      const existing: DrugRecord | undefined = await this.db.drugs.get(id)
+      if (existing === undefined) {
+        throw new RepositoryError('NOT_FOUND', `no drug with id "${id}"`)
+      }
+      const current = fromRecord(existing)
+      if (!current.ok) {
+        throw new RepositoryError(
+          'VALIDATION',
+          `stored record "${id}" is invalid: ${current.errors.join('; ')}`,
+        )
+      }
+      const now = new Date().toISOString()
+      const next = applyChanges(current.drug, changes, now)
+      const record = toStoredRecord(existing, next)
+      assertWritable(record)
+      await this.db.drugs.put(record)
+      await this.touchLibrary(now)
+      return next
+    })
+  }
+
+  async deleteDrug(id: DrugId): Promise<void> {
+    await this.db.transaction('rw', this.db.drugs, this.db.meta, async () => {
+      const existing: DrugRecord | undefined = await this.db.drugs.get(id)
+      if (existing === undefined) {
+        throw new RepositoryError('NOT_FOUND', `no drug with id "${id}"`)
+      }
+      await this.db.drugs.delete(id)
+      await this.touchLibrary()
+    })
+  }
+
+  async getLibraryMetadata(): Promise<LibraryMetadata> {
+    const all = await this.db.meta.toArray()
+    const existing = all[0]
+    if (existing !== undefined) return existing
+    // First run: one documented default entry (never invented pharmacology).
+    const fresh = defaultMetadata(new Date().toISOString())
+    await this.db.meta.put(fresh)
+    return fresh
+  }
+
+  async replaceLibrary(next: DrugLibrary): Promise<void> {
+    await this.db.transaction('rw', this.db.drugs, this.db.meta, async () => {
+      // Full validation before the first write: duplicate ids and schema
+      // violations reject here, inside the transaction, so the current
+      // library survives a failed replacement untouched.
+      const metadata = libraryMetadataSchema.safeParse(next.metadata)
+      if (!metadata.success) {
+        throw new RepositoryError(
+          'VALIDATION',
+          `library metadata rejected: ${schemaErrors(metadata.error.issues)}`,
+        )
+      }
+      const seen = new Set<DrugId>()
+      const records: DrugRecord[] = []
+      for (const drug of next.drugs) {
+        if (seen.has(drug.id)) {
+          throw new RepositoryError(
+            'VALIDATION',
+            `duplicate drug id "${drug.id}" in replacement library`,
+          )
+        }
+        seen.add(drug.id)
+        const record = toStoredRecord(undefined, drug)
+        assertWritable(record)
+        records.push(record)
+      }
+      await this.db.drugs.clear()
+      for (const record of records) await this.db.drugs.put(record)
+      await this.db.meta.clear()
+      await this.db.meta.put(next.metadata)
+    })
+  }
+
+  async importLibrary(
+    text: string,
+    options: { readonly mode: ImportMode },
+  ): Promise<ImportReport> {
+    // Step 1 (outside the transaction): JSON + envelope version check —
+    // cheap, and a broken file never opens a write transaction.
+    const parsed = parseNpsl(text)
+    if (!parsed.ok) return { ok: false, errors: parsed.errors, warnings: [] }
+
+    // Steps 2–5 run inside the transaction: schema, semantic validation
+    // (including duplicate-id rejection), then the atomic commit. A
+    // validation failure returns without a single write.
+    return this.db.transaction('rw', this.db.drugs, this.db.meta, async () => {
+      const validation = validateNpslFile(parsed.file)
+      if (!validation.ok) {
+        return { ok: false, errors: validation.errors, warnings: validation.warnings }
+      }
+
+      let created = 0
+      let updated = 0
+      if (options.mode === 'replace') {
+        await this.db.drugs.clear()
+        for (const drug of validation.drugs) {
+          await this.db.drugs.put(toStoredRecord(undefined, drug))
+        }
+        const currentMeta = (await this.db.meta.toArray())[0]
+        await this.db.meta.clear()
+        await this.db.meta.put(
+          resolveLibraryMetadata(validation.metadata, currentMeta?.id ?? DEFAULT_LIBRARY_ID),
+        )
+        created = validation.drugs.length
+      } else {
+        for (const drug of validation.drugs) {
+          const existing: DrugRecord | undefined = await this.db.drugs.get(drug.id)
+          await this.db.drugs.put(toStoredRecord(existing, drug))
+          if (existing !== undefined) updated += 1
+          else created += 1
+        }
+        // Merge deliberately does not touch library metadata: the import
+        // carries the file's own timestamps, CRUD alone stamps updatedAt.
+      }
+
+      return {
+        ok: true,
+        mode: options.mode,
+        total: validation.drugs.length,
+        created,
+        updated,
+        warnings: validation.warnings,
+      }
+    })
+  }
+
+  async exportLibrary(): Promise<DrugLibrary> {
+    const metadata = await this.getLibraryMetadata()
+    const { drugs } = await this.getAllDrugs()
+    // Quarantined records are unreadable and therefore not exported; they
+    // remain in storage and visible in the quarantine report.
+    return { metadata, drugs }
+  }
+
+  /** CRUD stamp: library-level updatedAt, single metadata entry. */
+  private async touchLibrary(now: string = new Date().toISOString()): Promise<void> {
+    const all = await this.db.meta.toArray()
+    const current = all[0]
+    if (current !== undefined) await this.db.meta.put({ ...current, updatedAt: now })
+    else await this.db.meta.put(defaultMetadata(now))
+  }
+}
+
+function assertWritable(record: DrugRecord): void {
+  const parsed = drugSchema.safeParse(record)
+  if (!parsed.success) {
+    throw new RepositoryError(
+      'VALIDATION',
+      `drug record rejected: ${schemaErrors(parsed.error.issues)}`,
+    )
+  }
+}

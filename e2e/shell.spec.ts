@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test'
  * Smoke test: the application shell loads, navigation works, and the
  * scientific boundary notice is visible.
  */
-test('application shell renders and navigates between placeholder views', async ({
+test('application shell renders and navigates between views', async ({
   page,
 }) => {
   await page.goto('/')

@@ -1,6 +1,8 @@
 import { Calculator, Library, ArrowLeftRight, Settings } from 'lucide-react'
+import { useEffect } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { useLibraryStore } from '@/app/libraryStore'
 import { cn } from 'cn'
 
 interface NavItem {
@@ -21,6 +23,13 @@ const NAV_ITEMS: readonly NavItem[] = [
  * Placeholder only — feature views are implemented in later phases.
  */
 export function AppLayout() {
+  // Hydrate the drug library from IndexedDB exactly once per mount; the
+  // store guards against the StrictMode double-invoke.
+  const hydrate = useLibraryStore((s) => s.hydrate)
+  useEffect(() => {
+    void hydrate()
+  }, [hydrate])
+
   return (
     <TooltipProvider delayDuration={200}>
       <div className="flex min-h-screen flex-col bg-background text-foreground">

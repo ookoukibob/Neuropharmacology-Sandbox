@@ -76,4 +76,10 @@ export interface UnitCatalog {
   dimensionOf(symbol: string): DimensionId | undefined
   /** Lossy-safe conversion; fails loudly instead of guessing. */
   convert(value: number, from: string, to: string): UnitConversionResult
+  /**
+   * Canonical symbols of one dimension, in catalog order. Lets pickers
+   * (e.g. the drug-library form's unit select) derive their options from
+   * the catalog instead of hardcoding a list that could drift.
+   */
+  unitsOfDimension(dimension: DimensionId): readonly UnitDef[]
 }
