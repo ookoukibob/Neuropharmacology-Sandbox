@@ -6,7 +6,10 @@ touches the user's library is validated "on the way in" after the fact —
 validation happens **before** any write.
 
 Implemented in phase 1: layer 1–2 for NPSL (`src/data/schemas/npsl.ts` +
-tests). Layers 3–5 arrive with the calculator and import features.
+tests). Implemented in phase 2: engine input validation for all three models
+(layer 5 for calculator inputs — `src/engine/validate`, plus curve range
+validation in `src/engine/curve`). Layers 1, 3–4 for calculator inputs and
+library records arrive with the calculator and import features.
 
 ---
 
@@ -53,7 +56,8 @@ Errors block the operation; warnings are surfaced in the preview but do not.
 - forward compatibility: unknown keys are preserved, never silently dropped.
 
 The same Zod-first approach is used for calculator inputs and user-defined
-drug forms (phase 2): every user-editable structure has a schema next to its
+drug forms (phases 4–5): every user-editable structure has a schema next to
+its
 type, and forms validate with the same schema the engine consumes — one
 source of truth for "valid".
 
@@ -125,14 +129,28 @@ silently: unparseable records are quarantined and reported, not deleted
 Calculator input schemas define, per model:
 
 - required vs optional parameters (missing → `MISSING_PARAMETER`, never a
-  default),
-- numeric constraints (finite; ≥ 0; `EC50 > 0`; Hill coefficient `n > 0`),
-- expected unit dimension per input.
+  default — in particular the Hill coefficient `n` has no default),
+- numeric constraints (finite; ≥ 0; `EC50 > 0`, `Kd > 0`, `t½ > 0`,
+  `k > 0`; Hill coefficient `n > 0`; `E0`/`Emax` signed),
+- expected unit dimension per input (`n` requires the literal unit `1`,
+  `%` is rejected),
+- mutually exclusive parameter pairs (PK: exactly one of `t½`/`k`;
+  both present → `CONFLICTING_PARAMETERS`).
 
-Validation runs **twice**: at the form (fast, field-level feedback) and
-inside the engine (authoritative — the engine never trusts its caller). The
-engine's checks produce the `CalculationError` taxonomy documented in
-[calculation-engine.md](calculation-engine.md) §3.
+Validation runs **twice**: at the form (fast, field-level feedback — phase 5)
+and inside the engine (authoritative — the engine never trusts its caller;
+implemented phase 2). The engine's checks produce the `CalculationError`
+taxonomy documented in [calculation-engine.md](calculation-engine.md) §3.
+
+Engine-side codes in production today: `MISSING_PARAMETER`,
+`NOT_A_NUMBER`, `NEGATIVE_VALUE`, `ZERO_NOT_ALLOWED`, `OUT_OF_RANGE`
+(curve ranges), `UNKNOWN_UNIT`, `INCOMPATIBLE_UNITS`,
+`CONFLICTING_PARAMETERS`. Reserved: `NUMERICAL_ERROR` (defensive curve
+invariant), `MODEL_NOT_APPLICABLE` (unsupported-calculation answer, no
+producer until the UI layer).
+
+Molar ↔ mass concentration conversion is rejected rather than approximated:
+it needs a molecular weight the engine will never invent.
 
 ---
 

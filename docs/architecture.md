@@ -125,8 +125,8 @@ src/
 ├── components/
 │   ├── ui/                  # shadcn/ui primitives (generated, treat as vendor code)
 │   ├── charts/              # CurveData -> Plotly adapters (phase 3)
-│   └── forms/               # shared scientific input controls (phase 2)
-├── features/                # one folder per feature (phase 2+)
+│   └── forms/               # shared scientific input controls (phase 5)
+├── features/                # one folder per feature (phase 4+)
 │   ├── drug-library/        #   list, detail, editing, store
 │   ├── pharmacokinetics/    #   PK calculator UI
 │   ├── receptor-occupancy/  #   occupancy calculator UI
@@ -134,20 +134,25 @@ src/
 │   └── import-export/       #   import wizard, export dialog, store
 ├── domain/                  # pure domain types and guards
 │   ├── drug/                #   Drug, ReceptorTarget, Pharmacokinetics
-│   ├── pharmacology/        #   ScientificValue, units
+│   ├── pharmacology/        #   ScientificValue, units + unit catalog
 │   ├── provenance/          #   Provenance union + guards
 │   └── library/             #   DrugLibrary, LibraryMetadata
-├── engine/                  # pure calculation engine (phase 2 implements models)
+├── engine/                  # pure calculation engine (all 3 MVP models implemented, phase 2)
 │   ├── types.ts             #   CalculationReport, trace, CurveData contracts
-│   ├── pk/                  #   first-order one-compartment model
-│   ├── occupancy/           #   single-site binding model
-│   ├── dose-response/       #   Hill equation
-│   ├── units/               #   unit checks/conversions used by models
-│   └── trace/               #   helpers to build calculation traces
+│   ├── index.ts             #   public API barrel
+│   ├── registry.ts          #   ModelDescriptor registry (labels, formulas, assumptions)
+│   ├── numeric/             #   Decimal helpers: 12-digit report rounding, loss detection
+│   ├── validate/            #   shared input validation → typed CalculationError
+│   ├── units/               #   dimension checks + unit conversion used by models
+│   ├── trace/               #   helpers to build calculation traces
+│   ├── curve/               #   chart-agnostic range validation + x-sampling
+│   ├── pk/                  #   first-order one-compartment model + curve generator
+│   ├── occupancy/           #   single-site binding model + curve generator
+│   └── dose-response/       #   Hill equation + curve generator
 ├── data/
 │   ├── schemas/             # Zod schemas (NPSL now; calculator input, CSV later)
 │   ├── built-in/            # bundled demo libraries (marked example/demo)
-│   └── repositories/        # Dexie implementation of the repository interface (phase 2)
+│   └── repositories/        # Dexie implementation of the repository interface (phase 4)
 ├── tests/
 │   ├── setup.ts             # Vitest setup (jest-dom matchers)
 │   └── fixtures/            # synthetic, explicitly-marked test fixtures
@@ -243,16 +248,16 @@ navigation are already wired and tested.
 
 ## 6. Roadmap (aligned with the MVP priority order)
 
-| Phase | Deliverable | Depends on |
-| --- | --- | --- |
-| 1 | Architecture, domain types, NPSL schema + tests, app shell, test harness | — |
-| 2 | Calculation engine models (PK, occupancy, Hill) + full unit tests | 1 |
-| 3 | Unit catalog implementation + engine unit checks | 2 |
-| 4 | Dexie repository + drug library UI (list, detail, CRUD) | 1 |
-| 5 | Calculator UI + calculation trace rendering | 2, 3, 4 |
-| 6 | Charts (CurveData → Plotly adapters, linear/log controls) | 5 |
-| 7 | Import/export (.npsl, JSON, CSV with field mapping) + round-trip tests | 1, 4 |
-| 8 | Accessibility polish, keyboard workflows, e2e coverage | all |
+| Phase | Deliverable | Depends on | Status |
+| --- | --- | --- | --- |
+| 1 | Architecture, domain types, NPSL schema + tests, app shell, test harness | — | done |
+| 2 | Calculation engine models (PK, occupancy, Hill) + full unit tests | 1 | done |
+| 3 | Unit catalog implementation + engine unit checks | 2 | done (implemented together with phase 2) |
+| 4 | Dexie repository + drug library UI (list, detail, CRUD) | 1 | next |
+| 5 | Calculator UI + calculation trace rendering | 2, 3, 4 | pending |
+| 6 | Charts (CurveData → Plotly adapters, linear/log controls) | 5 | pending |
+| 7 | Import/export (.npsl, JSON, CSV with field mapping) + round-trip tests | 1, 4 | pending |
+| 8 | Accessibility polish, keyboard workflows, e2e coverage | all | pending |
 
 Out of scope for the MVP (explicitly): backend, accounts, LLM features,
 dose → effect models, occupancy → subjective effect models, any parameter not

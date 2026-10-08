@@ -59,7 +59,7 @@ Additional fields on every variant: optional `notes`; `recordedAt` /
   report distinguishes literature-backed parameters from typed-in ones.
 - **Charts**: `CurveSeries.provenance` + `seriesType: 'model' | 'observed'`
   distinguish calculated curves from measured points.
-- **UI**: a consistent provenance badge component (phase 2) renders the five
+- **UI**: a consistent provenance badge component (phase 4) renders the five
   states with text labels — never color alone (accessibility), never an
   emoji (design rule).
 

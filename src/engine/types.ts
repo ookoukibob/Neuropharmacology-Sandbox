@@ -32,6 +32,19 @@ export interface CalculationInput {
   readonly provenance?: Provenance
 }
 
+/**
+ * A caller-supplied model parameter: value + unit, with provenance when the
+ * value came from a library record. Unlike the domain `ScientificValue`,
+ * provenance is optional here — a number typed into a calculator carries no
+ * provenance claim at all. The engine echoes provenance verbatim in
+ * `CalculationInput`; it never creates or upgrades it.
+ */
+export interface EngineParameter {
+  readonly value: number
+  readonly unit: string
+  readonly provenance?: Provenance
+}
+
 /** Any value the calculation emits: scalar outputs and trace intermediates. */
 export interface CalculationValue {
   readonly symbol?: string
@@ -56,11 +69,25 @@ export interface TraceStep {
 export type WarningSeverity = 'info' | 'warning'
 
 /**
+ * Machine-readable warning categories. Warnings never invalidate a result;
+ * they qualify it (model limitations, numerical loss, clinical boundaries).
+ */
+export type WarningCode =
+  /** The model is a simplification of real pharmacology. */
+  | 'MODEL_LIMITATION'
+  /** The result must not be read as a clinical or subjective effect. */
+  | 'MODEL_RESULT_NOT_CLINICAL'
+  /** A result is smaller than the numeric range and is reported as 0. */
+  | 'NUMERICAL_UNDERFLOW'
+  /** An intermediate step exceeded the numeric range of the result type. */
+  | 'NUMERICAL_OVERFLOW'
+
+/**
  * Model-level caveats that do not invalidate the result, e.g.
  * "One-compartment model; not a representation of human pharmacokinetics."
  */
 export interface CalculationWarning {
-  readonly code: string
+  readonly code: WarningCode
   readonly severity: WarningSeverity
   readonly message: string
 }
@@ -78,6 +105,10 @@ export type CalculationErrorCode =
   | 'UNKNOWN_UNIT'
   | 'INCOMPATIBLE_UNITS'
   | 'MODEL_NOT_APPLICABLE'
+  /** Two parameters were supplied that the model cannot use together. */
+  | 'CONFLICTING_PARAMETERS'
+  /** A reported value exceeded the numeric range and cannot be represented. */
+  | 'NUMERICAL_ERROR'
 
 export interface CalculationError {
   readonly code: CalculationErrorCode
@@ -136,6 +167,8 @@ export interface CurvePoint {
  * calculated and observed data must never look identical.
  */
 export interface CurveSeries {
+  /** Stable identifier, e.g. "pk.concentration". */
+  readonly id: string
   readonly name: string
   readonly seriesType: 'model' | 'observed'
   readonly points: readonly CurvePoint[]
@@ -159,4 +192,18 @@ export interface CurveData {
   readonly xScale: 'linear' | 'log'
   readonly yScale: 'linear' | 'log'
   readonly series: readonly CurveSeries[]
+  /** Numerical observations about the sampled points (e.g. underflow to 0). */
+  readonly warnings?: readonly CalculationWarning[]
 }
+
+/**
+ * Result of a curve request. Failures reuse the calculation error taxonomy
+ * so the UI reports them exactly like scalar calculation failures.
+ */
+export type CurveGenerationResult =
+  | { readonly ok: true; readonly curve: CurveData }
+  | {
+      readonly ok: false
+      readonly model: ModelId
+      readonly errors: readonly CalculationError[]
+    }

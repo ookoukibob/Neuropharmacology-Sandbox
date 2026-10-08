@@ -132,7 +132,11 @@ which fields survive (`docs/validation.md` §7).
 ## 6. Coverage & gates
 
 - Target for `src/domain`, `src/engine`, `src/data`: high branch coverage —
-  every error code in the taxonomy must have at least one test producing it.
+  every error code **any model can emit** must have at least one test
+  producing it. Codes reserved without a producer
+  (`NUMERICAL_ERROR`, `MODEL_NOT_APPLICABLE`) are documented as reserved in
+  [calculation-engine.md](calculation-engine.md) §3 and gain a producing
+  test the moment a producer exists.
 - `npm run typecheck` (strict), `npm run lint`, `npm test` and `npm run build`
   must all pass before merging a change.
 - Coverage numbers are a smoke alarm, not a goal: an untested *case* (missing
@@ -148,6 +152,6 @@ which fields survive (`docs/validation.md` §7).
 | NPSL schema tests (15 cases) | done |
 | AppLayout component tests | done |
 | Playwright config + shell smoke test | done |
-| Engine model tests (matrix §1) | phase 2 |
+| Engine model tests (matrix §1) | done — 3 models, curves, units, numeric, registry (179 tests total) |
 | Mapper + round-trip tests | phase 4 |
 | Library/calculator/import e2e | phases 4–5 |
