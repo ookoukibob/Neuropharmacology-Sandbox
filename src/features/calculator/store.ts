@@ -37,6 +37,7 @@ import {
   getDraftField,
   setDraftField as setDraftFieldHelper,
   loadDraftField,
+  setPKMode as setPKModeHelper,
 } from './modelAdapters'
 import { validateDraft } from './schemas'
 import { MODELS } from '@/engine'
@@ -91,11 +92,13 @@ export interface CalculatorState {
   // Curve
   curve: CurveData | null
   curveErrors: CalculationError[]
+  curveSettingsStale: boolean
   settings: Record<ModelId, CurveSettings>
 
   // Actions
   setModel: (model: ModelId) => void
   setDraftField: (key: string, patch: Partial<ParameterDraft>) => void
+  setPKMode: (mode: 'halfLife' | 'k') => void
   loadFromLibrary: (key: string, candidate: LibraryCandidate) => void
   setDrugId: (id: string | null) => void
   setRange: (patch: Partial<RangeDraft>) => void
@@ -136,6 +139,7 @@ export function createCalculatorStore(): UseBoundStore<StoreApi<CalculatorState>
     stale: false,
     curve: null,
     curveErrors: [],
+    curveSettingsStale: false,
     settings: INITIAL_SETTINGS,
 
     // Actions
@@ -159,6 +163,7 @@ export function createCalculatorStore(): UseBoundStore<StoreApi<CalculatorState>
         stale: false,
         curve: null,
         curveErrors: [],
+        curveSettingsStale: false,
       })
     },
 
@@ -184,21 +189,51 @@ export function createCalculatorStore(): UseBoundStore<StoreApi<CalculatorState>
         draftErrors: {}, // clear Zod errors on edit
         draftIssues: [],
         stale,
+        curveSettingsStale: report !== null,
       })
     },
 
     loadFromLibrary: (key, candidate) => {
-      const { draft } = get()
+      const { draft, report } = get()
 
       const nextDraft = loadDraftField(draft, key, candidate)
 
       const model = draft.model
       const updatedDrafts = { ...get().draftsByModel, [model]: nextDraft }
 
+      // Mark stale if there's an existing report and the input actually changed
+      const stale = report !== null && anyFieldChanged(draft, nextDraft)
+
       set({
         draft: nextDraft,
         draftsByModel: updatedDrafts,
-        stale: false, // loading from library is an intentional input change, not "stale"
+        stale,
+        curveSettingsStale: report !== null,
+        // Clear field errors since the user intentionally loaded a valid value from library
+        draftErrors: {},
+        draftIssues: [],
+      })
+    },
+
+    setPKMode: (mode) => {
+      const { draft, report } = get()
+      if (draft.model !== 'pk.first-order-one-compartment') return
+
+      const nextDraft = setPKModeHelper(draft, mode)
+      const model = draft.model
+      const updatedDrafts = { ...get().draftsByModel, [model]: nextDraft }
+
+      // Changing PK mode fundamentally changes the calculation, so always mark stale if report exists
+      const stale = report !== null
+
+      set({
+        draft: nextDraft,
+        draftsByModel: updatedDrafts,
+        stale,
+        curveSettingsStale: report !== null,
+        // Clear field errors since mode switch is intentional
+        draftErrors: {},
+        draftIssues: [],
       })
     },
 
@@ -207,27 +242,32 @@ export function createCalculatorStore(): UseBoundStore<StoreApi<CalculatorState>
     },
 
     setRange: (patch) => {
-      const { draft, settings } = get()
+      const { draft, settings, report } = get()
       const current = settings[draft.model]
       set({
         settings: setSettings(get(), draft.model, { ...current, range: { ...current.range, ...patch } }),
+        curveSettingsStale: report !== null,
       })
     },
 
     setXScale: (scale) => {
-      const { draft, settings } = get()
+      const { draft, settings, report } = get()
       const current = settings[draft.model]
       const next = { ...current, xScale: scale }
-      set({ settings: setSettings(get(), draft.model, next) })
+      // Mark curve settings stale before potentially auto-applying
+      const shouldMarkStale = report !== null
+      set({ settings: setSettings(get(), draft.model, next), curveSettingsStale: shouldMarkStale })
       // Auto-apply curve on scale change if we have a valid report
       if (get().report?.ok) get().applyCurveSettings()
     },
 
     setYScale: (scale) => {
-      const { draft, settings } = get()
+      const { draft, settings, report } = get()
       const current = settings[draft.model]
       const next = { ...current, yScale: scale }
-      set({ settings: setSettings(get(), draft.model, next) })
+      // Mark curve settings stale before potentially auto-applying
+      const shouldMarkStale = report !== null
+      set({ settings: setSettings(get(), draft.model, next), curveSettingsStale: shouldMarkStale })
       if (get().report?.ok) get().applyCurveSettings()
     },
 
@@ -237,6 +277,15 @@ export function createCalculatorStore(): UseBoundStore<StoreApi<CalculatorState>
 
       const s = settings[draft.model]
       const range = s.range
+
+      // Check if range is configured (both min and max provided)
+      const hasRange = range.min.trim() !== '' && range.max.trim() !== ''
+      if (!hasRange) {
+        // Range not configured — clear curve without treating as error
+        set({ curve: null, curveErrors: [], curveSettingsStale: false })
+        return
+      }
+
       const toFinite = (str: string): number => {
         const trimmed = str.trim()
         return trimmed === '' ? Number.NaN : Number(trimmed)
@@ -251,7 +300,7 @@ export function createCalculatorStore(): UseBoundStore<StoreApi<CalculatorState>
 
       const validation = validateCurveOptions(options, s.xScale)
       if (!validation.ok) {
-        set({ curve: null, curveErrors: [...validation.errors] })
+        set({ curve: null, curveErrors: [...validation.errors], curveSettingsStale: false })
         return
       }
 
@@ -264,9 +313,9 @@ export function createCalculatorStore(): UseBoundStore<StoreApi<CalculatorState>
 
       const result = generateCurveForDraft(draft, curveOptions)
       if (result.ok) {
-        set({ curve: result.curve, curveErrors: [] })
+        set({ curve: result.curve, curveErrors: [], curveSettingsStale: false })
       } else {
-        set({ curve: null, curveErrors: [...result.errors] })
+        set({ curve: null, curveErrors: [...result.errors], curveSettingsStale: false })
       }
     },
 
@@ -300,9 +349,11 @@ export function createCalculatorStore(): UseBoundStore<StoreApi<CalculatorState>
           fieldErrors: {},
           globalErrors: [],
           stale: false,
+          // Curve is not auto-generated; user must configure range and click "Update curve"
+          curve: null,
+          curveErrors: [],
+          curveSettingsStale: true,
         })
-        // Auto-generate curve with current settings
-        get().applyCurveSettings()
       } else {
         // Map engine errors to fields
         const fieldErrors: Record<string, string> = {}

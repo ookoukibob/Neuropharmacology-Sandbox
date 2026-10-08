@@ -31,6 +31,7 @@ interface VisualizationPanelProps {
   readonly curveErrors: readonly import('@/engine/types').CalculationError[]
   readonly settings: CurveSettings
   readonly hasValidReport: boolean
+  readonly curveSettingsStale: boolean
   readonly onRangeChange: (patch: Partial<CurveSettings['range']>) => void
   readonly onXScaleChange: (scale: 'linear' | 'log') => void
   readonly onYScaleChange: (scale: 'linear' | 'log') => void
@@ -43,6 +44,7 @@ export function VisualizationPanel({
   curveErrors,
   settings,
   hasValidReport,
+  curveSettingsStale,
   onRangeChange,
   onXScaleChange,
   onYScaleChange,
@@ -51,6 +53,9 @@ export function VisualizationPanel({
 }: VisualizationPanelProps) {
   // Detect LOG_Y warning in curve
   const logYWarning = curve?.warnings?.find((w) => w.code === 'LOG_Y_AXIS_NOT_REPRESENTABLE')
+
+  // Determine if range is configured (both min and max provided)
+  const rangeConfigured = settings.range.min.trim() !== '' && settings.range.max.trim() !== ''
 
   return (
     <section className="space-y-4" data-testid="visualization-panel">
@@ -61,6 +66,18 @@ export function VisualizationPanel({
           — this chart never computes pharmacology.
         </p>
       </div>
+
+      {/* Curve settings stale notice */}
+      {curveSettingsStale && hasValidReport && (
+        <Alert data-testid="curve-settings-stale">
+          <Info className="size-4" aria-hidden="true" />
+          <AlertTitle>Curve settings changed</AlertTitle>
+          <AlertDescription className="text-sm">
+            Curve settings have been modified since the last visualization update.
+            Click "Update curve" to refresh the chart with current settings.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Range controls */}
       <div className="flex flex-wrap items-end gap-4 rounded-md border p-3">
@@ -118,6 +135,7 @@ export function VisualizationPanel({
                   onChange={() => onXScaleChange(scale)}
                   className="sr-only"
                   aria-label={scale}
+                  data-testid={`x-scale-${scale}`}
                 />
                 <span
                   className={`px-2 py-1 text-xs rounded border transition-colors ${
@@ -147,6 +165,7 @@ export function VisualizationPanel({
                   onChange={() => onYScaleChange(scale)}
                   className="sr-only"
                   aria-label={scale}
+                  data-testid={`y-scale-${scale}`}
                 />
                 <span
                   className={`px-2 py-1 text-xs rounded border transition-colors ${
@@ -171,7 +190,19 @@ export function VisualizationPanel({
         </Button>
       </div>
 
-      {/* Curve errors */}
+      {/* Range not configured notice */}
+      {hasValidReport && !rangeConfigured && curveErrors.length === 0 && (
+        <Alert data-testid="range-not-configured">
+          <Info className="size-4" aria-hidden="true" />
+          <AlertTitle>Curve range not configured</AlertTitle>
+          <AlertDescription className="text-sm">
+            Enter a minimum and maximum value for the range, then click "Update curve"
+            to generate the visualization. The engine requires an explicit plotting domain.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Curve errors (validation failures after explicit range was provided) */}
       {curveErrors.length > 0 && (
         <Alert variant="destructive" data-testid="curve-errors">
           <AlertCircle className="size-4" aria-hidden="true" />
@@ -230,6 +261,10 @@ export function VisualizationPanel({
       ) : !hasValidReport ? (
         <p className="text-sm text-muted-foreground" data-testid="no-curve">
           Calculate to generate a curve.
+        </p>
+      ) : !rangeConfigured ? (
+        <p className="text-sm text-muted-foreground" data-testid="no-curve">
+          Enter a range and click "Update curve" to generate.
         </p>
       ) : (
         <p className="text-sm text-muted-foreground" data-testid="no-curve">

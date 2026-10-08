@@ -38,6 +38,7 @@ export function CalculatorView() {
     draft,
     setModel,
     setDraftField,
+    setPKMode,
     loadFromLibrary,
     setRange,
     setXScale,
@@ -47,6 +48,7 @@ export function CalculatorView() {
     resetInputs,
     applyUrlParams,
     stale,
+    curveSettingsStale,
     report,
     fieldErrors,
     globalErrors,
@@ -106,7 +108,7 @@ export function CalculatorView() {
   // PK mode change
   const handleModeChange = (mode: 'halfLife' | 'k') => {
     if (!isPK) return
-    setDraftField('mode', { value: mode })
+    setPKMode(mode)
   }
 
   // Range change
@@ -296,6 +298,7 @@ export function CalculatorView() {
             curveErrors={curveErrors}
             settings={currentSettings}
             hasValidReport={report?.ok === true}
+            curveSettingsStale={curveSettingsStale}
             onRangeChange={handleRangeChange}
             onXScaleChange={setXScale}
             onYScaleChange={setYScale}

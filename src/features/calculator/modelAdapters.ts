@@ -112,9 +112,9 @@ export interface CalculatorFieldSpec {
 
 // --- Candidate builders ---
 
-function targetCandidates(
+export function targetCandidates(
   drug: Drug,
-  kind: 'kd' | 'ec50',
+  kind: 'kd' | 'ec50' | 'ic50',
   label: string,
 ): readonly LibraryCandidate[] {
   return drug.targets.flatMap((target) => {
@@ -337,6 +337,20 @@ function emptyParameter(): ParameterDraft {
   return { value: '', unit: '' }
 }
 
+/**
+ * The calculator draft type a model id produces. Narrowing the factory's
+ * return type by the literal model id keeps callers (and their tests) from
+ * touching fields of other models without an explicit narrowing step.
+ */
+export type DraftFor<M extends ModelId> = M extends 'pk.first-order-one-compartment'
+  ? FirstOrderPKCalculatorInput
+  : M extends 'occupancy.single-site'
+    ? ReceptorOccupancyCalculatorInput
+    : M extends 'dose-response.hill'
+      ? HillResponseCalculatorInput
+      : never
+
+export function emptyDraft<M extends ModelId>(model: M): DraftFor<M>
 export function emptyDraft(model: ModelId): CalculatorDraft {
   switch (model) {
     case 'pk.first-order-one-compartment':
@@ -427,6 +441,24 @@ export function loadDraftField(draft: CalculatorDraft, key: string, candidate: L
     source: { provenance: candidate.provenance, originLabel: candidate.label },
   }
   return { ...draft, [key]: nextField } as CalculatorDraft
+}
+
+/**
+ * Set PK mode (halfLife | k) on a PK draft, returning a new valid PK draft.
+ *
+ * When the input is already known to be a PK draft, the return type narrows
+ * to the requested mode branch, so callers/tests never need a cast to touch
+ * `halfLife` or `k`. For any other model the draft is returned unchanged.
+ */
+export function setPKMode<M extends 'halfLife' | 'k'>(
+  draft: FirstOrderPKCalculatorInput,
+  mode: M,
+): Extract<FirstOrderPKCalculatorInput, { mode: M }>
+export function setPKMode(draft: CalculatorDraft, mode: 'halfLife' | 'k'): CalculatorDraft
+export function setPKMode(draft: CalculatorDraft, mode: 'halfLife' | 'k'): CalculatorDraft {
+  if (draft.model !== 'pk.first-order-one-compartment') return draft
+  // Mode is a discriminant, not a ParameterDraft. We create a new valid PK draft branch.
+  return { ...draft, mode } as CalculatorDraft
 }
 
 /** Get all visible field specs for a draft. */
