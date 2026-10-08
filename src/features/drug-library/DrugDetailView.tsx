@@ -7,7 +7,7 @@
  * UI (demo/imported rows are read-only views); provenance is displayed,
  * never edited — nothing here can upgrade a value's provenance.
  */
-import { ArrowLeft, Pencil, Trash2 } from 'lucide-react'
+import { ArrowLeft, Pencil, Trash2, Calculator } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -124,6 +124,13 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
         <p className="text-sm text-muted-foreground">CAS: {drug.identifiers.casNumber}</p>
       )}
 
+      {/* Data status badge for example/demo libraries */}
+      {drug.origin === 'built-in-demo' && (
+        <Badge variant="secondary" className="text-xs" data-testid="data-status-badge">
+          Example data — not pharmacological information
+        </Badge>
+      )}
+
       {error !== null && (
         <Alert variant="destructive" data-testid="detail-error">
           <AlertTitle>Operation failed</AlertTitle>
@@ -145,6 +152,9 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
                   <span className="font-medium">{target.name}</span>
                   {target.gene !== undefined && (
                     <span className="text-xs text-muted-foreground">gene {target.gene}</span>
+                  )}
+                  {target.species !== undefined && (
+                    <span className="text-xs text-muted-foreground">species {target.species}</span>
                   )}
                   {target.action !== undefined && (
                     <Badge variant="secondary">{target.action}</Badge>
@@ -213,12 +223,26 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
               <Trash2 aria-hidden="true" className="size-4" />
               Delete
             </Button>
+            <Button asChild data-testid="calculate-from-detail">
+              <Link to={`/calculator?drug=${drug.id}`}>
+                <Calculator className="size-4" aria-hidden="true" />
+                Calculate
+              </Link>
+            </Button>
           </>
         ) : (
-          <p className="text-sm text-muted-foreground" data-testid="readonly-note">
-            This record’s storage origin (“{drug.origin}”) is read-only in the UI — edits are
-            limited to records you entered.
-          </p>
+          <>
+            <p className="text-sm text-muted-foreground" data-testid="readonly-note">
+              This record's storage origin ("{drug.origin}") is read-only in the UI — edits are
+              limited to records you entered.
+            </p>
+            <Button asChild data-testid="calculate-from-detail">
+              <Link to={`/calculator?drug=${drug.id}`}>
+                <Calculator className="size-4" aria-hidden="true" />
+                Calculate
+              </Link>
+            </Button>
+          </>
         )}
       </div>
     </div>
