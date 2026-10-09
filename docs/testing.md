@@ -84,7 +84,9 @@ placement, no-emoji rule),
 `src/features/drug-library/views.test.tsx` (form error summary tied to the
 invalid control with `aria-invalid` / `aria-describedby` and focus moved to
 it, two-step delete acknowledgement with Escape, loading and error
-announcements) and
+announcements, and provenance preservation across edits — unchanged
+parameters keep their complete provenance while only changed or new ones
+are re-stamped, matched by stable identity) and
 `src/features/calculator/CalculatorView.test.tsx` (heading hierarchy, the
 URL ⇄ store deep-link convergence regression, the roving PK
 parameterization radio group, and schema errors surfacing on the fields
@@ -98,7 +100,12 @@ all against the real repository with fake-indexeddb), and
 counts and acknowledgement gating, the four restore outcomes including
 the committed-refresh-failed report whose retry re-runs only the session
 refresh, export failure honesty with no file and no success status, and
-mutual rejection with ordinary import — same real-repository setup).
+mutual rejection with ordinary import), and
+`src/features/drug-library/DrugForm.persistence.test.tsx` (an edit save
+through the real detail → form → store → repository chain keeps unchanged
+parameter provenance whole — citation/DOI/unknown keys included — in the
+actual stored record, and stamps only the parameter that changed — same
+real-repository setup).
 
 ---
 
@@ -275,7 +282,7 @@ lossy edges are listed in `docs/validation.md` §7.
 | Recovery format tests | done — fidelity/sidecar/pointer/limits (`fidelity.test.ts`), string-aware duplicate-key scanner (`duplicateKeys.test.ts`), envelope/limits/version/entry/sidecar/warnings batteries (`archive.test.ts`) |
 | Recovery repository + store tests | done — read-only snapshot export with fail-closed `BACKUP_READ_FAILED`, single-transaction cross-connection consistency, verbatim restore (quarantine + unknown fields + metadata), rejection before any transaction, rollback on mid-write failure, mutual rejection; store outcomes ok / rejected / failed / committed-refresh-failed with the restore never re-run |
 | Recovery UI tests | done — preview count groups, acknowledgement gating, four outcome reports, export failure honesty (no file, no success status), oversized/invalid file rejection, cancel (`RecoveryPanel.test.tsx`) |
-| Test suite total | 650 unit tests (40 files) |
+| Test suite total | 659 unit tests (41 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
 | Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
 | Library reload e2e | done — 1 persistence workflow (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload |

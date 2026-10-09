@@ -424,8 +424,11 @@ supplied by data.
       display, reload persistence — no calculator UI, charts, search,
       dashboards or AI.
 - [x] Scientific editing safeguards: explicit units from the catalog (no
-      silent default), finite non-negative number validation, provenance
-      stamped `user` at submit and never upgraded by the UI.
+      silent default), finite non-negative number validation, unchanged
+      parameters keep their complete provenance on edit (matched by stable
+      target id, parsed value and unit), only new or actually changed
+      parameters are stamped `user` at submit, and provenance is never
+      upgraded by the UI.
 - [x] No invented pharmacological data: fixtures are synthetic and labeled
       as such; the first run is empty.
 - [x] Extensive tests (mapper, migration, import pipeline, repository,

@@ -1,17 +1,24 @@
 /**
  * Minimal UI tests: list rendering/filtering/quarantine banner, detail
  * provenance + storage-origin display, edit/create safeguard behavior
- * (explicit units, validated numbers, no provenance editing).
+ * (explicit units, validated numbers, provenance preservation on edit,
+ * no provenance editing).
  *
  * The singleton store is seeded directly with synthetic fixture state — no
  * database access happens in these tests, and form submissions that fail
  * local validation never reach the repository.
  */
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Drug } from '@/domain/drug/drug'
 import type { DrugInput } from '@/data/repositories/repository'
-import { FIXTURE_NOTE, syntheticDrug, syntheticDrugB } from '../../tests/fixtures'
+import {
+  FIXTURE_NOTE,
+  FIXTURE_TIMESTAMP,
+  syntheticDrug,
+  syntheticDrugB,
+} from '../../tests/fixtures'
 import { useLibraryStore } from '@/app/libraryStore'
 import { DrugDetailView } from './DrugDetailView'
 import { DrugForm } from './DrugForm'
@@ -381,5 +388,247 @@ describe('DrugForm — scientific editing safeguards', () => {
     expect(screen.getByLabelText('Notes')).toHaveTextContent(FIXTURE_NOTE)
     // No provenance controls exist anywhere in the form.
     expect(screen.queryByText(/provenance/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('DrugForm — provenance preservation on edit', () => {
+  /**
+   * Complete synthetic literature provenance: every optional field plus an
+   * unknown extension key — exactly the whole object an unchanged parameter
+   * must keep through an unrelated edit. Invented fixture data, never
+   * pharmacological information.
+   */
+  const LITERATURE = {
+    type: 'literature' as const,
+    source: 'Synthetic fixture source',
+    citation: 'Invented for tests, 2026',
+    doi: '10.5555/synthetic-fixture',
+    url: 'https://example.invalid/synthetic-fixture',
+    accessedAt: FIXTURE_TIMESTAMP,
+    notes: FIXTURE_NOTE,
+    syntheticExtension: 'synthetic-extension-value',
+  }
+  const USER_PROVENANCE = { type: 'user' as const, recordedAt: FIXTURE_TIMESTAMP }
+
+  /**
+   * Two targets whose Kd parameters share the same value and unit but carry
+   * different provenance — any name-based, position-based or order-based
+   * identity mistake therefore surfaces as the wrong provenance object on
+   * the wrong target.
+   */
+  function editableFixture(): Drug {
+    return syntheticDrug({
+      targets: [
+        {
+          id: 'fixture-target-1',
+          name: 'TEST-R',
+          kd: { value: 12.4, unit: 'nM', provenance: LITERATURE },
+        },
+        {
+          id: 'fixture-target-2',
+          name: 'TEST-S',
+          kd: { value: 12.4, unit: 'nM', provenance: USER_PROVENANCE },
+          ic50: { value: 88, unit: 'nM', provenance: USER_PROVENANCE },
+        },
+      ],
+    })
+  }
+
+  function renderEdit(drug: Drug) {
+    const onSave = vi.fn<(input: DrugInput) => Promise<unknown>>(async () => undefined)
+    render(<DrugForm drug={drug} onSave={onSave} onCancel={vi.fn()} />)
+    return { onSave }
+  }
+
+  function targetRows(): HTMLElement[] {
+    return screen.getAllByTestId('target-row')
+  }
+
+  /** A fresh user entry: exactly `{ type, recordedAt }` with a current ISO time. */
+  function expectFreshUserStamp(provenance: unknown): void {
+    expect(provenance).toMatchObject({ type: 'user' })
+    expect(Object.keys(provenance ?? {})).toEqual(['type', 'recordedAt'])
+    const recordedAt = (provenance as { recordedAt?: unknown }).recordedAt
+    expect(recordedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+    expect(recordedAt).not.toBe(FIXTURE_TIMESTAMP)
+  }
+
+  it('preserves the complete provenance of unchanged parameters when name, tags and notes change', async () => {
+    const drug = editableFixture()
+    const { onSave } = renderEdit(drug)
+
+    fireEvent.change(screen.getByLabelText('Name *'), {
+      target: { value: 'Fixture Compound A Renamed' },
+    })
+    fireEvent.change(screen.getByLabelText(/^Tags/), { target: { value: 'fixture, edited' } })
+    fireEvent.change(screen.getByLabelText(/^Notes/), {
+      target: { value: 'Synthetic note after edit' },
+    })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+
+    const input = onSave.mock.calls[0]?.[0] as DrugInput
+    expect(input.identifiers.name).toBe('Fixture Compound A Renamed')
+    expect(input.tags).toEqual(['fixture', 'edited'])
+    expect(input.notes).toBe('Synthetic note after edit')
+
+    // Rows keep their stable stored identity through the edit.
+    expect(input.targets?.[0]?.id).toBe('fixture-target-1')
+    expect(input.targets?.[1]?.id).toBe('fixture-target-2')
+
+    // The literature provenance is written back as the very same whole
+    // object — citation, DOI, URL, accessedAt, notes, unknown extension key.
+    const kd = input.targets?.[0]?.kd
+    expect(kd?.value).toBe(12.4)
+    expect(kd?.unit).toBe('nM')
+    expect(kd?.provenance).toEqual(LITERATURE)
+    expect(kd?.provenance).toBe(LITERATURE) // same object — never rebuilt or mutated
+    expect(kd?.provenance).toHaveProperty('syntheticExtension', 'synthetic-extension-value')
+
+    // Sibling parameters keep their original provenance objects too, and the
+    // source drug object itself was not mutated along the way.
+    expect(input.targets?.[1]?.kd?.provenance).toBe(USER_PROVENANCE)
+    expect(input.targets?.[1]?.ic50?.provenance).toBe(USER_PROVENANCE)
+    expect(drug.targets[0]?.kd?.provenance).toEqual(LITERATURE)
+  })
+
+  it("restamps only the parameter whose value changed; others retain their provenance", async () => {
+    const { onSave } = renderEdit(editableFixture())
+    const rowA = targetRows()[0] as HTMLElement
+    fireEvent.change(within(rowA).getByLabelText('Value *'), { target: { value: '50' } })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+
+    const input = onSave.mock.calls[0]?.[0] as DrugInput
+    const kd = input.targets?.[0]?.kd
+    expect(kd?.value).toBe(50)
+    expectFreshUserStamp(kd?.provenance)
+
+    // Every unaffected parameter keeps its original provenance object.
+    expect(input.targets?.[1]?.kd?.provenance).toBe(USER_PROVENANCE)
+    expect(input.targets?.[1]?.ic50?.provenance).toBe(USER_PROVENANCE)
+  })
+
+  it("restamps only the parameter whose unit changed; others retain their provenance", async () => {
+    const { onSave } = renderEdit(editableFixture())
+    const rowA = targetRows()[0] as HTMLElement
+    fireEvent.change(within(rowA).getByLabelText('Unit *'), { target: { value: 'µM' } })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+
+    const input = onSave.mock.calls[0]?.[0] as DrugInput
+    const kd = input.targets?.[0]?.kd
+    expect(kd?.value).toBe(12.4)
+    expect(kd?.unit).toBe('µM')
+    expectFreshUserStamp(kd?.provenance)
+
+    expect(input.targets?.[1]?.kd?.provenance).toBe(USER_PROVENANCE)
+    expect(input.targets?.[1]?.ic50?.provenance).toBe(USER_PROVENANCE)
+  })
+
+  it('keeps provenance when an equivalent textual number parses to the same value (12.4 → 12.40)', async () => {
+    const { onSave } = renderEdit(editableFixture())
+    const rowA = targetRows()[0] as HTMLElement
+    fireEvent.change(within(rowA).getByLabelText('Value *'), { target: { value: '12.40' } })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+
+    const input = onSave.mock.calls[0]?.[0] as DrugInput
+    const kd = input.targets?.[0]?.kd
+    expect(kd?.value).toBe(12.4) // Object.is-equal to the stored number
+    expect(kd?.provenance).toBe(LITERATURE)
+  })
+
+  it("never carries the previous kind's provenance over to a changed kind", async () => {
+    const { onSave } = renderEdit(editableFixture())
+    const rowA = targetRows()[0] as HTMLElement
+    fireEvent.change(within(rowA).getByLabelText('Parameter *'), { target: { value: 'ki' } })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+
+    const input = onSave.mock.calls[0]?.[0] as DrugInput
+    const target = input.targets?.[0]
+    expect(target?.kd).toBeUndefined() // the old kind is gone, not merged
+    expect(target?.ki?.value).toBe(12.4)
+    expect(target?.ki?.unit).toBe('nM')
+    expectFreshUserStamp(target?.ki?.provenance) // fresh entry — never the old kind's
+    expect(target?.ki?.provenance).not.toHaveProperty('source')
+
+    expect(input.targets?.[1]?.kd?.provenance).toBe(USER_PROVENANCE)
+    expect(input.targets?.[1]?.ic50?.provenance).toBe(USER_PROVENANCE)
+  })
+
+  it('matches provenance by stable identity only — never by name, position or order', async () => {
+    const { onSave } = renderEdit(editableFixture())
+
+    // Rename the surviving target: its own parameters must not move.
+    const rowB = targetRows()[1] as HTMLElement
+    fireEvent.change(within(rowB).getByLabelText('Target name *'), {
+      target: { value: 'TEST-S RENAMED' },
+    })
+
+    // Remove the first target — its literature provenance leaves with it.
+    fireEvent.click(
+      within(targetRows()[0] as HTMLElement).getByRole('button', { name: 'Remove target TEST-R' }),
+    )
+
+    // Re-create a target with the same name and the same Kd value/unit as
+    // the removed one: a new identity must not inherit the old provenance.
+    fireEvent.click(screen.getByTestId('add-target'))
+    const rowsAfterAdd = targetRows()
+    const newRow = rowsAfterAdd[rowsAfterAdd.length - 1] as HTMLElement
+    fireEvent.change(within(newRow).getByLabelText('Target name *'), {
+      target: { value: 'TEST-R' },
+    })
+    fireEvent.click(within(newRow).getByTestId('add-param'))
+    fireEvent.change(within(newRow).getByLabelText('Parameter *'), { target: { value: 'kd' } })
+    fireEvent.change(within(newRow).getByLabelText('Value *'), { target: { value: '12.4' } })
+    fireEvent.change(within(newRow).getByLabelText('Unit *'), { target: { value: 'nM' } })
+
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+
+    const input = onSave.mock.calls[0]?.[0] as DrugInput
+    expect(input.targets).toHaveLength(2)
+
+    // The surviving target shifted array position — its provenance did not.
+    const survivor = input.targets?.[0]
+    expect(survivor?.id).toBe('fixture-target-2')
+    expect(survivor?.name).toBe('TEST-S RENAMED')
+    expect(survivor?.kd?.provenance).toBe(USER_PROVENANCE)
+    expect(survivor?.ic50?.provenance).toBe(USER_PROVENANCE)
+
+    // The re-created row has no stored identity: a fresh user entry — not
+    // the removed target's literature provenance, not the other target's.
+    const recreated = input.targets?.[1]
+    expect(recreated?.name).toBe('TEST-R')
+    expect(recreated).not.toHaveProperty('id')
+    expect(recreated?.kd?.value).toBe(12.4)
+    expectFreshUserStamp(recreated?.kd?.provenance)
+    expect(recreated?.kd?.provenance).not.toHaveProperty('source')
+  })
+
+  it('stamps only a newly added parameter with user provenance', async () => {
+    const { onSave } = renderEdit(editableFixture())
+    const rowA = targetRows()[0] as HTMLElement
+    fireEvent.click(within(rowA).getByTestId('add-param'))
+    const kinds = within(rowA).getAllByLabelText('Parameter *')
+    fireEvent.change(kinds[kinds.length - 1] as HTMLSelectElement, { target: { value: 'ki' } })
+    const values = within(rowA).getAllByLabelText('Value *')
+    fireEvent.change(values[values.length - 1] as HTMLInputElement, { target: { value: '7' } })
+    const units = within(rowA).getAllByLabelText('Unit *')
+    fireEvent.change(units[units.length - 1] as HTMLSelectElement, { target: { value: 'nM' } })
+
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+
+    const input = onSave.mock.calls[0]?.[0] as DrugInput
+    const target = input.targets?.[0]
+    expect(target?.kd?.provenance).toBe(LITERATURE) // existing parameter untouched
+    expect(target?.ki?.value).toBe(7)
+    expectFreshUserStamp(target?.ki?.provenance) // new parameter: normal user entry
+
+    expect(input.targets?.[1]?.kd?.provenance).toBe(USER_PROVENANCE)
+    expect(input.targets?.[1]?.ic50?.provenance).toBe(USER_PROVENANCE)
   })
 })

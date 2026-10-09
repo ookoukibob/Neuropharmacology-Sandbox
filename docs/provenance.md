@@ -45,6 +45,22 @@ Additional fields on every variant: optional `notes`; `recordedAt` /
 6. **Demo data is marked at two levels**: per-record `origin:
    'built-in-demo'` and per-library `dataStatus: 'example'` (see
    [domain-model.md](domain-model.md) §5).
+7. **Unchanged parameters keep their provenance through edits.** The edit
+   form compares every parameter against the stored record by stable
+   target id and parameter kind: when the parsed numeric value is
+   `Object.is`-equal and the unit string is identical, the **complete**
+   provenance object — every field, unknown extension keys included — is
+   written back untouched (same object, never rebuilt or mutated).
+   Editing name, synonyms, tags or notes therefore never rewrites the
+   provenance of a parameter that did not change. Only a parameter whose
+   value or unit actually changed, a newly added parameter, or a parameter
+   whose kind changed receives the normal user-entry stamp
+   `{ "type": "user", "recordedAt": … }`; parameters are matched by
+   identity, never by array position, display name or row order. A
+   *changed* value may still carry unknown provenance-level extension
+   fields forward — that is the storage layer's lossless unknown-field
+   rule (ADR-14), not a provenance rewrite: contract fields are governed
+   by the new domain value.
 
 ---
 

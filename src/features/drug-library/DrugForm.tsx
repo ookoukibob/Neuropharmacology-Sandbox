@@ -7,9 +7,13 @@
  * - explicit units: the unit select starts empty; a parameter cannot be
  *   saved without choosing a molar-concentration unit from the catalog;
  * - validated numbers: values must parse to a finite, non-negative number;
- * - one provenance policy: every stored parameter is stamped
- *   `{ type: 'user', recordedAt }` at submit — the form cannot create or
- *   upgrade any other provenance, and existing provenance is never edited;
+ * - one provenance policy: an existing parameter keeps its complete stored
+ *   provenance when it is unchanged (same stable target id and kind,
+ *   `Object.is`-equal parsed value, identical unit) — written back as the
+ *   same object, never rebuilt or mutated; every new or changed parameter
+ *   is stamped `{ type: 'user', recordedAt }` at submit. The form cannot
+ *   create or upgrade any provenance, and existing provenance is never
+ *   edited;
  * - duplicate target names or duplicate parameter kinds in one target are
  *   rejected before anything reaches the repository.
  */
@@ -90,6 +94,28 @@ function draftsFromDrug(drug: Drug): TargetDraft[] {
       ? { key, id: target.id, name: target.name, params }
       : { key, name: target.name, params }
   })
+}
+
+/**
+ * Stored parameter provenance for edit mode, keyed by stable target id and
+ * then parameter kind — the identity basis of the preservation rule below.
+ * Never matched by name, array position or rendering order. A target
+ * without a stored id cannot establish identity, so it is deliberately
+ * absent: its parameters fall back to user-entry stamping.
+ */
+function storedProvenance(drug: Drug | undefined): Map<string, Map<ParamKind, ScientificValue>> {
+  const byTarget = new Map<string, Map<ParamKind, ScientificValue>>()
+  if (drug === undefined) return byTarget
+  for (const target of drug.targets) {
+    if (target.id === undefined) continue
+    const byKind = new Map<ParamKind, ScientificValue>()
+    for (const kind of ['kd', 'ki', 'ec50', 'ic50'] as const) {
+      const value = target[kind]
+      if (value !== undefined) byKind.set(kind, value)
+    }
+    byTarget.set(target.id, byKind)
+  }
+  return byTarget
 }
 
 function validate(
@@ -181,15 +207,30 @@ function buildInput(
   tags: string[],
   notes: string,
   now: string,
+  original: Drug | undefined,
 ): DrugInput {
+  const stored = storedProvenance(original)
   const targets: TargetInput[] = cleaned.map((row) => {
+    const prior = row.id !== undefined ? stored.get(row.id) : undefined
     const byKind: Partial<Record<ParamKind, ScientificValue>> = {}
     for (const param of row.params) {
       if (param.kind === '') continue
+      const value = Number(param.value)
+      const previous = prior?.get(param.kind)
       byKind[param.kind] = {
-        value: Number(param.value),
+        value,
         unit: param.unit,
-        provenance: { type: 'user', recordedAt: now },
+        // Preservation rule: same target id + kind, `Object.is`-equal parsed
+        // value and identical unit means the parameter did not change — keep
+        // the complete stored provenance object (all fields, unknown
+        // extension keys included) untouched. Anything else is a normal user
+        // entry; the form never creates or upgrades any other provenance.
+        provenance:
+          previous !== undefined &&
+          Object.is(previous.value, value) &&
+          previous.unit === param.unit
+            ? previous.provenance
+            : { type: 'user', recordedAt: now },
       }
     }
     return {
@@ -313,6 +354,7 @@ export function DrugForm({
       splitList(tags),
       notes,
       new Date().toISOString(),
+      drug,
     )
     await onSave(input)
   }
