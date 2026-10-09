@@ -19,7 +19,15 @@
   --muted-foreground: oklch(0.556 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
+  /* Destructive text appears both on white surfaces and on its own 10%
+     tint (soft destructive buttons and badges). The original red-600
+     token measured ~4.0:1 on that tint — below the 4.5:1 AA threshold
+     axe reports as a serious violation — so the token keeps its hue at
+     red-700 lightness (~6.5:1 on white, ~5.5:1 on the tint, ~4.6:1 on
+     the 20% hover tint). The tinted default state is asserted by the
+     axe scan in e2e/a11y.spec.ts; the tint/hover figures are computed
+     from the same token. */
+  --destructive: oklch(0.505 0.213 27.518);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);

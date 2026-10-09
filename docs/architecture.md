@@ -176,7 +176,8 @@ src/
 │   ├── fixtures.ts          # synthetic, explicitly-marked test fixtures
 │   └── fixtures/            # example NPSL library (marked example data)
 └── ...
-e2e/                         # Playwright specs: shell, calculator, import/export workflows
+e2e/                         # Playwright specs: shell, calculator, import/export,
+                             # library persistence, keyboard workflows, accessibility scans
 docs/                        # this documentation
 ```
 
@@ -287,7 +288,9 @@ repository exportLibrary()
    → validated records only    (quarantined records are excluded — the UI
                                 shows an explicit notice with the count)
    → NPSL serializer (preserves provenance, metadata, versions, extensions)
-   → file download          .npsl / .json  (lossless)
+   → file download          .npsl / .json  (lossless for records, provenance
+                                             and extensions; envelope-level
+                                             extras are never stored — see §4.4)
    → CSV projection         (lossy; provenance flattened to columns, text
                              cells formula-guarded with a leading
                              apostrophe — validation.md §7 and spec-review.md §6)
@@ -347,7 +350,7 @@ later phase.
 | 3 | Drug library: Dexie repository, IndexedDB schema + migrations, startup hydration, transactional NPSL import, minimal library UI | 1, 2 | done |
 | 4 | Calculator + scientific visualization: model selector, explicit parameter inputs with provenance-aware library loading, results with calculation traces, CurveData → Plotly chart adapter, linear/log controls, log-Y representability handling, curve settings state — plus the hardening pass (PK mode union fix, stale-state semantics, curve readiness separation) and the critical calculator E2E workflows | 2, 3 | done |
 | 5 | Import/export UI (.npsl, JSON, CSV with field mapping) + round-trip tests | 3 | done |
-| 6 | Accessibility polish, keyboard workflows, expanded E2E coverage | all | next |
+| 6 | Accessibility, keyboard workflows and library persistence E2E: semantic headings/landmarks/page titles, skip link with focus placement, accessible names and announced errors (`aria-invalid` / `aria-describedby` / `role="alert"` / `role="status"`), every core workflow operable without a mouse (library incl. row add/remove and validation recovery, calculator incl. PK parameterization, import/export incl. tabs and the replace gate), axe-core WCAG A/AA scans, a real-IndexedDB library persistence spec, narrow-viewport operability — plus the invalid-Calculate-silently-ignored fix and the URL ⇄ store deep-link loop fix | all | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full
@@ -451,6 +454,50 @@ supplied by data.
       explicit load, stale-state transitions, curve workflow.
 - [x] Docs synchronized with the implementation (README, this document);
       all gates green: typecheck, lint, unit tests, build, E2E.
+
+### Definition of done — Phase 6 accessibility, keyboard workflows and library persistence E2E (delivered)
+
+- [x] Structure: one `h1` per route with level-2 section headings (the
+      vendored `CardTitle` gained an opt-in `headingLevel`), landmarks,
+      `aria-current="page"` on the active route, `<Route> —
+      Neuropharmacology Sandbox` document titles, and a skip link that moves
+      focus to the `#main-content` target (focus also lands on `<main>` after
+      a route change — never on first render).
+- [x] Announcements: library loading is `role="status"`, failures are
+      `role="alert"`; a failed drug-form submit produces an alert summary
+      tied to each invalid control (`aria-invalid` + `aria-describedby`)
+      that also receives focus; an invalid Calculate press now reports its
+      schema errors on the fields instead of failing silently (unit + E2E
+      regression).
+- [x] Keyboard workflows: skip link → main; navigation and route activation;
+      drug form (target/parameter rows added and removed with focus kept in
+      the form, validation → correction → save); delete acknowledgement
+      (confirm / cancel / Escape, focus returned to the delete button);
+      calculator (model select, PK parameterization as a roving radio group
+      with arrow keys, blocking errors, result, visible focus ring on the
+      visually hidden curve-scale inputs); import/export (tabs, replace
+      acknowledgement → confirm) — all without a mouse.
+- [x] Responsive: the header wraps at narrow widths and navigation plus core
+      forms show no horizontal overflow at 375 px (E2E).
+- [x] axe-core (`@axe-core/playwright`, WCAG 2.0/2.1 A + AA tags) over 12
+      stable states: 0 violations, no rule disabled, no violation
+      suppressed. The two confirmed violations were both serious
+      `color-contrast` failures and were fixed in the product rather than
+      silenced: the inactive PK parameterization button
+      (`text-muted-foreground` on `bg-muted`, computed ≈4.34:1) and the
+      destructive buttons (`text-destructive` on their own 10 % tint,
+      computed ≈4.0:1 — `--destructive` keeps its hue at red-700
+      lightness, which clears 4.5:1 on white, on the tint and on the
+      hover tint; the tinted default state is re-asserted by the axe scan
+      in `e2e/a11y.spec.ts`).
+- [x] Library persistence E2E against the real IndexedDB
+      (`e2e/library.spec.ts`): create → detail → reload → edit → reload →
+      delete via acknowledgement → reload, synthetic marked records in an
+      isolated context.
+- [x] A deep link whose `?model=…` differs from the store default no longer
+      ping-pongs between the URL→store and store→URL syncs (unit regression).
+- [x] Docs synchronized (README, this document, `docs/testing.md`); gates
+      green: typecheck, lint, unit tests (578), build, E2E (23).
 
 ---
 

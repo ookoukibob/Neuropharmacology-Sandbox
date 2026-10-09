@@ -22,6 +22,9 @@ function seedState(partial: Partial<LibraryState>): void {
   useLibraryStore.setState(partial)
 }
 
+/** Original action, restored after tests that swap it for a spy. */
+const originalDeleteDrug = useLibraryStore.getState().deleteDrug
+
 afterEach(() => {
   useLibraryStore.setState({
     status: 'idle',
@@ -31,6 +34,7 @@ afterEach(() => {
     selectedDrugId: null,
     error: null,
     filter: '',
+    deleteDrug: originalDeleteDrug,
   })
 })
 
@@ -112,12 +116,16 @@ describe('DrugLibraryView', () => {
   it('surfaces the loading and failure states', () => {
     seedState({ status: 'loading', drugs: [], metadata: undefined })
     const { unmount } = renderList()
-    expect(screen.getByText('Loading library…')).toBeInTheDocument()
+    // Announced as a status, so assistive technology hears the wait state.
+    expect(screen.getByRole('status')).toHaveTextContent('Loading library…')
     unmount()
 
     seedState({ status: 'error', drugs: [], metadata: undefined, error: 'storage unavailable' })
     renderList()
-    expect(screen.getByText(/Library failed to load: storage unavailable/)).toBeInTheDocument()
+    // Blocking failure is announced as an alert, not rendered as plain text.
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Library failed to load: storage unavailable',
+    )
   })
 })
 
@@ -171,6 +179,45 @@ describe('DrugDetailView', () => {
     expect(screen.getByTestId('form-errors')).toHaveTextContent('Name is required.')
     // Still on the form — nothing was sent to the repository.
     expect(screen.getByTestId('drug-form')).toBeInTheDocument()
+  })
+
+  it('requires an explicit acknowledgement before deleting', () => {
+    seedState({ status: 'ready', drugs: [syntheticDrug()], metadata: undefined })
+    renderDetail('fixture-drug-1')
+
+    fireEvent.click(screen.getByTestId('delete-drug'))
+
+    // The destructive button is replaced by a named confirmation step that
+    // names the record and carries focus.
+    const confirm = screen.getByTestId('delete-drug-confirm')
+    expect(screen.getByTestId('delete-confirm-text')).toHaveTextContent('Fixture Compound A')
+    expect(screen.queryByTestId('delete-drug')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(confirm)
+    // Nothing was deleted yet.
+    expect(useLibraryStore.getState().drugs).toHaveLength(1)
+
+    // Escape cancels and returns focus to the Delete button.
+    fireEvent.keyDown(confirm, { key: 'Escape' })
+    expect(screen.queryByTestId('delete-drug-confirm')).not.toBeInTheDocument()
+    expect(screen.getByTestId('delete-drug')).toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByTestId('delete-drug'))
+    expect(useLibraryStore.getState().drugs).toHaveLength(1)
+  })
+
+  it('deletes only after the explicit confirmation is activated', async () => {
+    const deleteDrug = vi.fn(async () => true)
+    useLibraryStore.setState({ deleteDrug })
+    seedState({ status: 'ready', drugs: [syntheticDrug()], metadata: undefined })
+    renderDetail('fixture-drug-1')
+
+    fireEvent.click(screen.getByTestId('delete-drug'))
+    fireEvent.click(screen.getByTestId('delete-drug-confirm'))
+
+    await vi.waitFor(() => expect(deleteDrug).toHaveBeenCalledWith('fixture-drug-1'))
+    // The record leaves the detail view once the repository confirmed it.
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId('drug-detail')).not.toBeInTheDocument(),
+    )
   })
 })
 
@@ -231,6 +278,43 @@ describe('DrugForm — scientific editing safeguards', () => {
     fireEvent.submit(screen.getByTestId('drug-form'))
     expect(screen.getByTestId('form-errors')).toHaveTextContent('cannot be negative')
     expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it('announces a failed submit as an alert and focuses the first invalid control', () => {
+    renderForm()
+    fireEvent.submit(screen.getByTestId('drug-form'))
+
+    expect(screen.getByTestId('form-errors')).toHaveAttribute('role', 'alert')
+
+    const nameInput = screen.getByTestId('drug-name')
+    expect(nameInput).toHaveAttribute('aria-invalid', 'true')
+    expect(nameInput).toHaveAttribute('aria-describedby', 'drug-form-error-0')
+    expect(document.getElementById('drug-form-error-0')).toHaveTextContent('Name is required.')
+    expect(document.activeElement).toBe(nameInput)
+  })
+
+  it('points a parameter error at exactly that parameter control', async () => {
+    const { onSave } = renderForm()
+    fireEvent.change(screen.getByLabelText('Name *'), {
+      target: { value: 'Fixture Compound N' },
+    })
+    addTargetWithName('TEST-R')
+    fillParam('kd', '-3', 'nM')
+    fireEvent.submit(screen.getByTestId('drug-form'))
+
+    const valueInput = document.getElementById('param-value-1-0')
+    expect(valueInput).toHaveAttribute('aria-invalid', 'true')
+    expect(valueInput).toHaveAttribute('aria-describedby', 'drug-form-error-0')
+    expect(document.getElementById('drug-form-error-0')).toHaveTextContent('cannot be negative')
+    expect(document.activeElement).toBe(valueInput)
+    expect(onSave).not.toHaveBeenCalled()
+
+    // Correcting the value clears the association on the next submit.
+    fireEvent.change(valueInput as HTMLInputElement, { target: { value: '3' } })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    expect(screen.queryByTestId('form-errors')).not.toBeInTheDocument()
+    expect(screen.getByTestId('drug-name')).toHaveAttribute('aria-invalid', 'false')
   })
 
   it('requires kind, value and unit together', () => {

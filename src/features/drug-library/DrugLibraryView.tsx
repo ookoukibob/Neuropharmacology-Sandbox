@@ -31,10 +31,18 @@ export function DrugLibraryView() {
           drug.identifiers.synonyms.some((s) => s.toLowerCase().includes(needle)),
       )
 
+  if (status === 'error') {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        Library failed to load: {error ?? 'unknown error'}
+      </p>
+    )
+  }
+
   if (status !== 'ready') {
     return (
-      <p className="text-sm text-muted-foreground">
-        {status === 'error' ? `Library failed to load: ${error ?? 'unknown error'}` : 'Loading library…'}
+      <p role="status" className="text-sm text-muted-foreground">
+        Loading library…
       </p>
     )
   }

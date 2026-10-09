@@ -18,7 +18,7 @@ export function CalculationTrace({ trace }: { trace: readonly TraceStep[] }) {
 
   return (
     <section className="space-y-3" data-testid="calculation-trace">
-      <h3 className="text-sm font-medium">Calculation Trace</h3>
+      <h2 className="text-sm font-medium">Calculation Trace</h2>
       <ol className="space-y-3">
         {trace.map((step) => (
           <li

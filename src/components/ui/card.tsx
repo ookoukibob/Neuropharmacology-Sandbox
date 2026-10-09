@@ -32,9 +32,21 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
+/**
+ * Card title. Renders a plain `div` by default (matches the upstream
+ * primitive); pass `headingLevel` to render the same styled title as a real
+ * `<h2>`/`<h3>` so page sections form a correct heading hierarchy — visually
+ * identical, semantically a heading.
+ */
+function CardTitle({
+  className,
+  headingLevel,
+  ...props
+}: React.ComponentProps<"div"> & { headingLevel?: 2 | 3 }) {
+  const Component =
+    headingLevel === undefined ? 'div' : headingLevel === 2 ? 'h2' : 'h3'
   return (
-    <div
+    <Component
       data-slot="card-title"
       className={cn(
         "text-base leading-snug font-medium group-data-[size=sm]/card:text-sm",

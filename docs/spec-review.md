@@ -83,7 +83,11 @@ exports will differ per implementer, and users may not notice information
 loss.
 **Why it matters.** Silent provenance loss on export defeats the product
 definition.
-**Correction (adopted).** Written policy: `.npsl`/JSON are lossless; CSV is a
+**Correction (adopted).** Written policy: `.npsl`/JSON are lossless (for
+record content and provenance — with two documented exclusions:
+envelope-level extras are reported as `ENVELOPE_FIELDS_DROPPED` rather than
+stored, and quarantined records are excluded from every export with a
+visible warning); CSV is a
 **declared-lossy** projection that flattens each parameter into
 `value, unit, provenance_type, provenance_source` columns (deeper provenance
 fields serialized as a JSON string cell), and the export UI must state the

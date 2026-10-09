@@ -76,6 +76,18 @@ describe('VisualizationPanel', () => {
     expect(screen.getByTestId('x-scale-log')).toBeInTheDocument()
   })
 
+  it('draws the focus indicator on the visible sibling of a visually hidden scale radio', () => {
+    render(<VisualizationPanel {...defaultProps} />)
+
+    const radio = screen.getByTestId('x-scale-log')
+    expect(radio).toHaveClass('peer')
+    // The input itself is `sr-only`, so keyboard focus must be shown by the
+    // visible label sibling via the peer focus-visible ring.
+    const visible = radio.nextElementSibling
+    expect(visible?.className).toContain('peer-focus-visible:ring-2')
+    expect(visible?.className).toContain('peer-focus-visible:ring-ring')
+  })
+
   it('calls onXScaleChange when X scale changes', () => {
     render(<VisualizationPanel {...defaultProps} />)
 

@@ -71,7 +71,7 @@ export function ExportPanel() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Export the library</CardTitle>
+        <CardTitle headingLevel={2}>Export the library</CardTitle>
         <p className="text-sm text-muted-foreground">
           Exports are not filtered or selected: every validated record in the current library is
           included. Records that fail validation are quarantined and excluded from every format —

@@ -32,6 +32,8 @@ and unverified data. It never invents pharmacological parameters.
 **Phase 4 — calculator + scientific visualization (complete, after a
 hardening and closure pass).**
 **Phase 5 — import/export workflows (complete).**
+**Phase 6 — accessibility, keyboard workflows and end-to-end library
+persistence (complete).**
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -39,8 +41,10 @@ hardening and closure pass).**
 | 2 | Calculation engine: first-order PK, single-site occupancy, Hill response, chart-agnostic curves, unit catalog, Decimal.js numerics, calculation traces, provenance propagation — plus the hardening pass (log y-axis validation, consistent numerical-loss reporting, invariant coverage, GitHub Actions CI) | done |
 | 3 | Drug library: Dexie/IndexedDB persistence behind a repository abstraction, versioned schema with in-place migration, startup hydration with quarantine reporting, transactional NPSL import (preview → all-or-nothing commit), minimal library UI (list/select/create/edit/delete with provenance display), export → import round trip | done |
 | 4 | Calculator + visualization: model selector, explicit parameter inputs, provenance-aware library loading (explicit selection only), calculation results with structured traces, CurveData → Plotly chart adapter, linear/log controls, log-Y representability handling, curve settings state — plus the hardening pass (PK mode union fix, stale-state semantics, curve readiness separation) and the critical calculator E2E workflows | done |
-| 5 | Import/export UI: `.npsl`/`.json` import with preview → confirm (merge/replace with explicit destructive acknowledgement), explicit CSV column mapping (nothing inferred from column names, declared unit policy, CSV → versioned NPSL document → same validation pipeline), whole-library export to `.npsl`/`.json` (lossless) and CSV (lossy, with a visible warning), component + CSV unit tests and six E2E workflows | done |
-| 6 | Accessibility polish, keyboard workflows, expanded E2E coverage | next |
+| 5 | Import/export UI: `.npsl`/`.json` import with preview → confirm (merge/replace with explicit destructive acknowledgement), explicit CSV column mapping (nothing inferred from column names, declared unit policy, CSV → versioned NPSL document → same validation pipeline), whole-library export to `.npsl`/`.json` (lossless for records and
+provenance; envelope extras and quarantined records are excluded, each with
+a visible warning) and CSV (lossy, with a visible warning), component + CSV unit tests and six E2E workflows | done |
+| 6 | Accessibility and keyboard workflows: semantic headings, landmarks, page titles and active-route state; a working skip link with focus placement; accessible names, error announcements (`role="alert"` / `aria-invalid` / `aria-describedby`) and focus indicators; every core workflow operable without a mouse (library incl. validation recovery and delete acknowledgement, calculator incl. PK parameterization, import/export incl. tabs and the replace gate); axe-core WCAG A/AA scans of twelve stable states; a real-IndexedDB library persistence E2E; narrow-viewport operability — plus the fix for an invalid Calculate press that used to fail silently | done |
 
 ### What works today
 
@@ -62,9 +66,18 @@ hardening and closure pass).**
 - Import/export in the browser: `.npsl`/`.json` files preview before
   anything is written (replace needs an explicit acknowledgement), CSV
   imports go through a visible column-mapping step with declared units,
-  and the whole library exports to a lossless `.npsl`/`.json` or a
-  lossy-but-convenient CSV that always warns it is not a backup format
-  (its text cells are guarded against spreadsheet formula injection).
+  and the whole library exports to `.npsl`/`.json` — lossless for
+  records, provenance and unknown record-level keys (unknown envelope
+  fields are not stored and are reported as `ENVELOPE_FIELDS_DROPPED`;
+  quarantined records are excluded from every export, with a visible
+  warning) — or to a lossy-but-convenient CSV that always warns it is
+  not a backup format (its text cells are guarded against spreadsheet
+  formula injection).
+- Built to be operated from the keyboard: skip link, landmarks and page
+  titles, one visible focus indicator per control, error summaries tied
+  to the invalid field with `aria-invalid`/`aria-describedby`, a
+  two-step acknowledgement before any destructive action, and axe-core
+  scans (WCAG 2.x A/AA) over the main screens in the E2E suite.
 - Fully static: no backend, no accounts, no cloud sync.
 
 All quality gates run locally and in CI (`.github/workflows/ci.yml`):

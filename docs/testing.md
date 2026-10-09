@@ -12,6 +12,7 @@ Harness (phase 1, working):
 | React Testing Library | component behaviour in jsdom | (same) |
 | Vitest coverage (v8) | `src/domain/**`, `src/engine/**`, `src/data/**` | `npm run test:coverage` |
 | Playwright | end-to-end workflows (`e2e/`) | `npm run test:e2e` |
+| axe-core | automated accessibility scans inside Playwright (`e2e/a11y.spec.ts`) | `npm run test:e2e` |
 
 Setup: `vitest.config` in `vite.config.ts`, `src/tests/setup.ts`
 (jest-dom matchers), fixtures in `src/tests/fixtures/`.
@@ -78,7 +79,16 @@ rendering, provenance labels, absence of emoji as UI.
 What we do **not** assert: pixel styling, class strings of shadcn internals.
 
 Current examples: `src/app/layout/AppLayout.test.tsx` (navigation landmarks,
-skip link, active-route semantics, no-emoji rule) and
+skip link, active-route semantics, page titles, main-region focus
+placement, no-emoji rule),
+`src/features/drug-library/views.test.tsx` (form error summary tied to the
+invalid control with `aria-invalid` / `aria-describedby` and focus moved to
+it, two-step delete acknowledgement with Escape, loading and error
+announcements) and
+`src/features/calculator/CalculatorView.test.tsx` (heading hierarchy, the
+URL ⇄ store deep-link convergence regression, the roving PK
+parameterization radio group, and schema errors surfacing on the fields
+when Calculate runs with empty inputs), and
 `src/features/import-export/ImportExportView.test.tsx` (preview-before-
 write, replace acknowledgement, explicit CSV mapping, export contents, the
 committed-but-refresh-failed report — never "nothing was written" — and
@@ -104,11 +114,29 @@ Critical workflows only (each one is a spec-level guarantee):
      until recalculated;
    - curve workflow: explicit range → chart container, settings changes
      flagged until "Update curve".
-3. Library: create drug → enter parameter with provenance → detail page
-   shows provenance → reload → still present (persistence) — covered by
-   component + repository tests today; a dedicated e2e joins the
-   expanded coverage of phase 6.
-4. Import/export (`e2e/importExport.spec.ts`, implemented — synthetic
+3. Library persistence (`e2e/library.spec.ts`, implemented — real UI and
+   real IndexedDB, no mocks, isolated context per test): create a
+   synthetic record → save → the detail page shows name, target, value,
+   unit, storage-origin badge and provenance badge → reload → the record
+   hydrates with its provenance intact → edit one value → save → reload
+   → the edit persisted → delete through the two-step acknowledgement →
+   reload → the library is empty again.
+4. Keyboard workflows (`e2e/keyboard.spec.ts`, implemented): skip link is
+   the first tab stop and moves focus to the main region; navigation and
+   route activation without a mouse (with focus placement and page
+   title); drug form → validation error → correction → save; calculator
+   model select → PK parameterization radio group → blocking errors →
+   result → focus indicator; import/export tabs and the replace
+   acknowledgement → confirm sequence; plus a 375 px viewport check that
+   navigation and core forms stay operable without horizontal overflow.
+5. Accessibility scans (`e2e/a11y.spec.ts`, implemented): axe-core
+   (`@axe-core/playwright`) over the WCAG 2.0/2.1 A and AA rule tags on
+   12 stable states across four tests — library, create form, detail +
+   edit form, calculator (initial, PK parameterization, with result),
+   empty import/export, CSV mapping, import preview, replace
+   acknowledgement, export. No rule is disabled and no violation is
+   suppressed: a violation fails the spec.
+6. Import/export (`e2e/importExport.spec.ts`, implemented — synthetic
    in-memory buffers, six workflows):
    - valid NPSL → preview shows counts and records, **nothing is written
      before the confirmation**, the committed report shows real counts and
@@ -125,7 +153,7 @@ Critical workflows only (each one is a spec-level guarantee):
      no Ki, storage origin shows `Imported`;
    - CSV export → stable 57-column header, one row per target, and the
      always-visible lossiness warning.
-5. Export round trip at the repository level (export → import → deep
+7. Export round trip at the repository level (export → import → deep
    equality) is covered by repository tests; the E2E layer asserts the
    exported file's content parses back with provenance intact.
 
@@ -157,6 +185,14 @@ Test procedure:
      `ENVELOPE_FIELDS_DROPPED`, not retained).
 4. Assert explicitly documented normalizations (defaults filled, import-time
    stamps) rather than ignoring them.
+5. Scope the "lossless" claim for `.npsl`/`.json` accurately: records,
+   library metadata, provenance and unknown keys at every supported
+   nesting level survive the round trip; two exclusions are documented
+   rather than hidden — unknown top-level *envelope* fields are not
+   stored (the import reports `ENVELOPE_FIELDS_DROPPED`) and quarantined
+   records are excluded from every export (a visible warning appears
+   whenever the quarantine is non-empty, so such an export is
+   explicitly not a complete backup of storage).
 
 Additional round-trip: domain → NPSL → domain (validating the mapper in both
 directions), and a JSON ↔ NPSL identity check (`.npsl` is JSON).
@@ -202,7 +238,9 @@ lossy edges are listed in `docs/validation.md` §7.
 | Calculator tests (adapters, store, schemas, components) | done — drafts, stale semantics, curve settings, PK mode union |
 | CSV tests (parse, write, export, mapping, conversion) | done — quoting/escaping/BOM/errors, spreadsheet formula-injection guard (text cells protected, numeric cells byte-exact), stable header, provenance columns, ambiguity + unit rules, CSV → NPSL document, grouping, row errors |
 | Import/export UI tests | done — preview-before-write, replace gate, cancel, CSV mapping flow, export contents + object-URL lifecycle, committed-but-refresh-failed report (never "nothing was written"), quarantine export warning (visible with data, silent when empty) |
-| Test suite total | 562 unit tests (34 files) |
+| Test suite total | 578 unit tests (35 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
 | Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
-| Library reload e2e | pending — expanded coverage with phase 6; library covered today by component + repository tests |
+| Library reload e2e | done — 1 persistence workflow (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload |
+| Keyboard e2e | done — 6 workflows (`e2e/keyboard.spec.ts`): skip link, navigation, drug form recovery, calculator, import/export confirmation, narrow-viewport operability |
+| Accessibility e2e | done — 4 scans (`e2e/a11y.spec.ts`) covering 12 stable states with axe-core WCAG A/AA tags; no rules disabled, no violations suppressed (0 violations) |

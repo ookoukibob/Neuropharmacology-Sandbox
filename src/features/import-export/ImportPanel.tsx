@@ -309,7 +309,7 @@ export function ImportPanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Select a file</CardTitle>
+          <CardTitle headingLevel={2}>Select a file</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-2">
@@ -367,7 +367,7 @@ export function ImportPanel() {
       {active !== null && (
         <Card data-testid="import-preview">
           <CardHeader>
-            <CardTitle>
+            <CardTitle headingLevel={2}>
               Preview — {active.fileName} ({active.format === 'json' ? '.json' : active.format === 'npsl' ? '.npsl' : '.csv'})
             </CardTitle>
           </CardHeader>

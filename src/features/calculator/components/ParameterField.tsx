@@ -156,7 +156,7 @@ export function ParameterField({
 
         {spec.unit.kind === 'fixed' && (
           <div className="grid gap-1.5 min-w-20">
-            <Label className="text-xs text-muted-foreground">Unit</Label>
+            <span className="text-xs text-muted-foreground">Unit</span>
             <div className="h-9 rounded-md border border-input bg-muted px-2 text-sm flex items-center">
               {spec.unit.symbol}
             </div>

@@ -76,7 +76,7 @@ export function CsvMappingCard({ state, errors, disabled, onChange, onPreview, o
   return (
     <Card data-testid="csv-mapping">
       <CardHeader>
-        <CardTitle>Map CSV columns</CardTitle>
+        <CardTitle headingLevel={2}>Map CSV columns</CardTitle>
         <p className="text-sm text-muted-foreground">
           File: {state.fileName} — {state.headers.length} column
           {state.headers.length === 1 ? '' : 's'}, {state.rows.length} data row

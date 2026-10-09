@@ -14,7 +14,7 @@
  *   rejected before anything reaches the repository.
  */
 import { Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -56,6 +56,16 @@ interface ParamDraft {
   unit: string
 }
 
+/**
+ * One validation failure: the exact message shown in the summary plus the
+ * ids of the controls it belongs to, so each message can be announced with
+ * the relevant field (`aria-describedby`) and flagged (`aria-invalid`).
+ */
+interface FormError {
+  readonly message: string
+  readonly fieldIds: readonly string[]
+}
+
 interface TargetDraft {
   /** React list key (UI-only — never stored). */
   key: number
@@ -85,10 +95,12 @@ function draftsFromDrug(drug: Drug): TargetDraft[] {
 function validate(
   name: string,
   targets: readonly TargetDraft[],
-): { errors: string[]; cleaned: TargetDraft[] } {
-  const errors: string[] = []
+): { errors: FormError[]; cleaned: TargetDraft[] } {
+  const errors: FormError[] = []
   const trimmedName = name.trim()
-  if (trimmedName.length === 0) errors.push('Name is required.')
+  if (trimmedName.length === 0) {
+    errors.push({ message: 'Name is required.', fieldIds: ['drug-name'] })
+  }
 
   const cleaned: TargetDraft[] = []
   const seenNames = new Set<string>()
@@ -98,45 +110,65 @@ function validate(
     if (targetName.length === 0) {
       // A fully blank row is ignored; a row with parameters but no name is an error.
       if (target.params.some((p) => p.kind !== '' || p.value.trim() !== '' || p.unit !== '')) {
-        errors.push(`${label}: name is required when parameters are entered.`)
+        errors.push({
+          message: `${label}: name is required when parameters are entered.`,
+          fieldIds: [`target-name-${target.key}`],
+        })
       }
       return
     }
     const nameKey = targetName.toLowerCase()
     if (seenNames.has(nameKey)) {
-      errors.push(`${label}: duplicate target name “${targetName}”.`)
+      errors.push({
+        message: `${label}: duplicate target name “${targetName}”.`,
+        fieldIds: [`target-name-${target.key}`],
+      })
       return
     }
     seenNames.add(nameKey)
 
     const seenKinds = new Set<ParamKind>()
     const params: ParamDraft[] = []
-    for (const param of target.params) {
+    target.params.forEach((param, paramIndex) => {
       const valueBlank = param.value.trim() === ''
       const unitBlank = param.unit === ''
-      if (param.kind === '' && valueBlank && unitBlank) continue // blank sub-row
+      if (param.kind === '' && valueBlank && unitBlank) return // blank sub-row
       if (param.kind === '' || valueBlank || unitBlank) {
-        errors.push(
-          `${label} (“${targetName}”): each parameter needs a kind, a value and a unit.`,
-        )
-        continue
+        const missing: string[] = []
+        if (param.kind === '') missing.push(`param-kind-${target.key}-${paramIndex}`)
+        if (valueBlank) missing.push(`param-value-${target.key}-${paramIndex}`)
+        if (unitBlank) missing.push(`param-unit-${target.key}-${paramIndex}`)
+        errors.push({
+          message: `${label} (“${targetName}”): each parameter needs a kind, a value and a unit.`,
+          fieldIds: missing,
+        })
+        return
       }
       if (seenKinds.has(param.kind)) {
-        errors.push(`${label} (“${targetName}”): duplicate ${param.kind.toUpperCase()} parameter.`)
-        continue
+        errors.push({
+          message: `${label} (“${targetName}”): duplicate ${param.kind.toUpperCase()} parameter.`,
+          fieldIds: [`param-kind-${target.key}-${paramIndex}`],
+        })
+        return
       }
       const numeric = Number(param.value.trim())
       if (!Number.isFinite(numeric)) {
-        errors.push(`${label} (“${targetName}”): “${param.value}” is not a finite number.`)
-        continue
+        errors.push({
+          message: `${label} (“${targetName}”): “${param.value}” is not a finite number.`,
+          fieldIds: [`param-value-${target.key}-${paramIndex}`],
+        })
+        return
       }
       if (numeric < 0) {
-        errors.push(`${label} (“${targetName}”): concentration values cannot be negative.`)
-        continue
+        errors.push({
+          message: `${label} (“${targetName}”): concentration values cannot be negative.`,
+          fieldIds: [`param-value-${target.key}-${paramIndex}`],
+        })
+        return
       }
       seenKinds.add(param.kind)
       params.push({ kind: param.kind, value: param.value.trim(), unit: param.unit })
-    }
+    })
     cleaned.push({ ...target, name: targetName, params })
   })
 
@@ -178,6 +210,12 @@ function buildInput(
   }
 }
 
+/** A pending "move focus here" request raised when a form row is removed. */
+interface FocusRequest {
+  readonly id: string
+  readonly nonce: number
+}
+
 export function DrugForm({
   drug,
   onSave,
@@ -196,7 +234,44 @@ export function DrugForm({
   const [targets, setTargets] = useState<TargetDraft[]>(() =>
     drug !== undefined ? draftsFromDrug(drug) : [],
   )
-  const [errors, setErrors] = useState<string[]>([])
+  const [errors, setErrors] = useState<readonly FormError[]>([])
+  // Focus destination after a row is removed: the button that performed
+  // the removal disappears together with its row, which would otherwise
+  // drop keyboard focus back to the top of the document. The nonce keeps
+  // repeated removals distinct requests even for the same control.
+  const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null)
+
+  // After a failed submit, move focus to the first invalid control — the
+  // same placement native constraint validation uses — so keyboard and
+  // screen-reader users land on the field and hear its `aria-describedby`
+  // message. Errors only change on submit, never per keystroke, so focus
+  // is never stolen while typing.
+  useEffect(() => {
+    const firstId = errors[0]?.fieldIds[0]
+    if (firstId !== undefined) document.getElementById(firstId)?.focus()
+  }, [errors])
+
+  useEffect(() => {
+    if (focusRequest === null) return
+    document.getElementById(focusRequest.id)?.focus()
+  }, [focusRequest])
+
+  /** Ask the effect above to place focus on a control after the next render. */
+  function requestFocusAfterRemoval(id: string): void {
+    setFocusRequest((previous) => ({ id, nonce: (previous?.nonce ?? 0) + 1 }))
+  }
+
+  /** `aria-describedby` value: links a control to its message(s) in the summary. */
+  function describedBy(fieldId: string): string | undefined {
+    const ids = errors.flatMap((error, index) =>
+      error.fieldIds.includes(fieldId) ? [`drug-form-error-${index}`] : [],
+    )
+    return ids.length > 0 ? ids.join(' ') : undefined
+  }
+
+  function isInvalid(fieldId: string): boolean {
+    return errors.some((error) => error.fieldIds.includes(fieldId))
+  }
 
   /** Next list key derived from current rows — updaters must stay pure
    * (React StrictMode may run them twice, so a shared counter would drift). */
@@ -264,6 +339,8 @@ export function DrugForm({
               id="drug-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              aria-invalid={isInvalid('drug-name')}
+              aria-describedby={describedBy('drug-name')}
               data-testid="drug-name"
             />
           </div>
@@ -293,11 +370,12 @@ export function DrugForm({
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-base">Targets</CardTitle>
+          <CardTitle headingLevel={2} className="text-base">Targets</CardTitle>
           <Button
             type="button"
             variant="outline"
             size="sm"
+            id="add-target"
             data-testid="add-target"
             onClick={() =>
               setTargets((rows) => [
@@ -323,6 +401,8 @@ export function DrugForm({
                     id={`target-name-${row.key}`}
                     value={row.name}
                     onChange={(e) => updateTarget(row.key, { name: e.target.value })}
+                    aria-invalid={isInvalid(`target-name-${row.key}`)}
+                    aria-describedby={describedBy(`target-name-${row.key}`)}
                   />
                 </div>
                 <Button
@@ -330,9 +410,10 @@ export function DrugForm({
                   variant="ghost"
                   size="icon"
                   aria-label={`Remove target ${row.name || row.key}`}
-                  onClick={() =>
+                  onClick={() => {
                     setTargets((rows) => rows.filter((r) => r.key !== row.key))
-                  }
+                    requestFocusAfterRemoval('add-target')
+                  }}
                 >
                   <Trash2 aria-hidden="true" className="size-4" />
                 </Button>
@@ -346,6 +427,8 @@ export function DrugForm({
                       id={`param-kind-${row.key}-${index}`}
                       className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                       value={param.kind}
+                      aria-invalid={isInvalid(`param-kind-${row.key}-${index}`)}
+                      aria-describedby={describedBy(`param-kind-${row.key}-${index}`)}
                       onChange={(e) =>
                         updateParam(row.key, index, {
                           kind: e.target.value as '' | ParamKind,
@@ -366,6 +449,8 @@ export function DrugForm({
                       id={`param-value-${row.key}-${index}`}
                       value={param.value}
                       inputMode="decimal"
+                      aria-invalid={isInvalid(`param-value-${row.key}-${index}`)}
+                      aria-describedby={describedBy(`param-value-${row.key}-${index}`)}
                       onChange={(e) => updateParam(row.key, index, { value: e.target.value })}
                     />
                   </div>
@@ -375,6 +460,8 @@ export function DrugForm({
                       id={`param-unit-${row.key}-${index}`}
                       className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                       value={param.unit}
+                      aria-invalid={isInvalid(`param-unit-${row.key}-${index}`)}
+                      aria-describedby={describedBy(`param-unit-${row.key}-${index}`)}
                       onChange={(e) => updateParam(row.key, index, { unit: e.target.value })}
                     >
                       <option value="">Select…</option>
@@ -390,7 +477,7 @@ export function DrugForm({
                     variant="ghost"
                     size="icon"
                     aria-label="Remove parameter"
-                    onClick={() =>
+                    onClick={() => {
                       setTargets((rows) =>
                         rows.map((r) =>
                           r.key === row.key
@@ -398,7 +485,8 @@ export function DrugForm({
                             : r,
                         ),
                       )
-                    }
+                      requestFocusAfterRemoval(`add-param-${row.key}`)
+                    }}
                   >
                     <Trash2 aria-hidden="true" className="size-4" />
                   </Button>
@@ -409,6 +497,7 @@ export function DrugForm({
                 type="button"
                 variant="ghost"
                 size="sm"
+                id={`add-param-${row.key}`}
                 data-testid="add-param"
                 onClick={() =>
                   setTargets((rows) =>
@@ -429,12 +518,18 @@ export function DrugForm({
       </Card>
 
       {errors.length > 0 && (
-        <Alert variant="destructive" data-testid="form-errors">
+        <Alert
+          variant="destructive"
+          id="drug-form-error-summary"
+          data-testid="form-errors"
+        >
           <AlertTitle>Fix before saving</AlertTitle>
           <AlertDescription>
             <ul className="list-disc pl-4">
-              {errors.map((error) => (
-                <li key={error}>{error}</li>
+              {errors.map((error, index) => (
+                <li key={`error-${index}`} id={`drug-form-error-${index}`}>
+                  {error.message}
+                </li>
               ))}
             </ul>
           </AlertDescription>

@@ -60,7 +60,7 @@ export function VisualizationPanel({
   return (
     <section className="space-y-4" data-testid="visualization-panel">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium">Visualization</h3>
+        <h2 className="text-sm font-medium">Visualization</h2>
         <p className="text-xs text-muted-foreground">
           The curve is sampled by the calculation engine over an explicit range
           — this chart never computes pharmacology.
@@ -133,12 +133,12 @@ export function VisualizationPanel({
                   value={scale}
                   checked={settings.xScale === scale}
                   onChange={() => onXScaleChange(scale)}
-                  className="sr-only"
+                  className="peer sr-only"
                   aria-label={scale}
                   data-testid={`x-scale-${scale}`}
                 />
                 <span
-                  className={`px-2 py-1 text-xs rounded border transition-colors ${
+                  className={`px-2 py-1 text-xs rounded border transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-ring ${
                     settings.xScale === scale
                       ? 'bg-primary text-primary-foreground border-primary'
                       : 'bg-background border-input hover:bg-muted'
@@ -163,12 +163,12 @@ export function VisualizationPanel({
                   value={scale}
                   checked={settings.yScale === scale}
                   onChange={() => onYScaleChange(scale)}
-                  className="sr-only"
+                  className="peer sr-only"
                   aria-label={scale}
                   data-testid={`y-scale-${scale}`}
                 />
                 <span
-                  className={`px-2 py-1 text-xs rounded border transition-colors ${
+                  className={`px-2 py-1 text-xs rounded border transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-ring ${
                     settings.yScale === scale
                       ? 'bg-primary text-primary-foreground border-primary'
                       : 'bg-background border-input hover:bg-muted'

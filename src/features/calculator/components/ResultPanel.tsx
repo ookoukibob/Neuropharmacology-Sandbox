@@ -40,6 +40,7 @@ export function ResultPanel({
     <div className="space-y-4" data-testid="result-panel">
       {stale && (
         <div
+          role="status"
           className="rounded-md border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800"
           data-testid="result-stale"
         >
@@ -49,7 +50,7 @@ export function ResultPanel({
 
       {/* Outputs */}
       <section className="space-y-2" data-testid="result-outputs">
-        <h4 className="text-sm font-medium">Result</h4>
+        <h3 className="text-sm font-medium">Outputs</h3>
         <div className="grid gap-2 sm:grid-cols-2">
           {result.outputs.map((output, idx) => (
             <div
@@ -71,13 +72,13 @@ export function ResultPanel({
 
       {/* Formula */}
       <section className="space-y-1" data-testid="result-formula">
-        <h4 className="text-sm font-medium">Formula</h4>
+        <h3 className="text-sm font-medium">Formula</h3>
         <p className="font-mono text-sm bg-muted p-2 rounded">{result.formula}</p>
       </section>
 
       {/* Inputs used */}
       <section className="space-y-2" data-testid="result-inputs">
-        <h4 className="text-sm font-medium">Inputs Used</h4>
+        <h3 className="text-sm font-medium">Inputs Used</h3>
         <div className="space-y-1">
           {result.inputs.map((input, idx) => (
             <div

@@ -8,7 +8,7 @@
  * never edited — nothing here can upgrade a value's provenance.
  */
 import { ArrowLeft, Pencil, Trash2, Calculator } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -51,11 +51,32 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
   const updateDrug = useLibraryStore((s) => s.updateDrug)
   const deleteDrug = useLibraryStore((s) => s.deleteDrug)
   const [editing, setEditing] = useState(false)
+  // Deletion is irreversible, so it always goes through an explicit,
+  // keyboard-operable acknowledgement step instead of one stray click.
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const wasConfirming = useRef(false)
+
+  // Focus follows the acknowledgement step: into the confirmation when it
+  // opens, back to the Delete button when it is cancelled (Escape or the
+  // Cancel button) — never on first render, so nothing is stolen on load.
+  useEffect(() => {
+    if (confirmingDelete) {
+      document.getElementById('delete-drug-confirm')?.focus()
+    } else if (wasConfirming.current) {
+      document.getElementById('delete-drug')?.focus()
+    }
+    wasConfirming.current = confirmingDelete
+  }, [confirmingDelete])
 
   if (status !== 'ready') {
-    return (
-      <p className="text-sm text-muted-foreground">
-        {status === 'error' ? `Library failed to load: ${error ?? 'unknown error'}` : 'Loading…'}
+    return status === 'error' ? (
+      <Alert variant="destructive" data-testid="detail-load-error">
+        <AlertTitle>Library failed to load</AlertTitle>
+        <AlertDescription>{error ?? 'unknown error'}</AlertDescription>
+      </Alert>
+    ) : (
+      <p role="status" className="text-sm text-muted-foreground">
+        Loading…
       </p>
     )
   }
@@ -140,7 +161,7 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Targets</CardTitle>
+          <CardTitle headingLevel={2} className="text-base">Targets</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {drug.targets.length === 0 ? (
@@ -175,7 +196,7 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Pharmacokinetics (read-only)</CardTitle>
+          <CardTitle headingLevel={2} className="text-base">Pharmacokinetics (read-only)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           <ParameterRow label="Half-life" value={drug.pharmacokinetics.halfLife} />
@@ -201,28 +222,68 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
         {drug.id}
       </p>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {editable ? (
           <>
-            <Button
-              variant="outline"
-              onClick={() => setEditing(true)}
-              data-testid="edit-drug"
-            >
-              <Pencil aria-hidden="true" className="size-4" />
-              Edit
-            </Button>
-            <Button
-              variant="destructive"
-              data-testid="delete-drug"
-              onClick={async () => {
-                const done = await deleteDrug(drug.id)
-                if (done) navigate('/library')
-              }}
-            >
-              <Trash2 aria-hidden="true" className="size-4" />
-              Delete
-            </Button>
+            {confirmingDelete ? (
+              <>
+                <p
+                  id="delete-confirm-text"
+                  className="flex items-center text-sm text-destructive"
+                  data-testid="delete-confirm-text"
+                >
+                  Delete “{drug.identifiers.name}” permanently? This cannot be undone.
+                </p>
+                <div
+                  className="flex gap-2"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setConfirmingDelete(false)
+                  }}
+                >
+                  <Button
+                    variant="destructive"
+                    id="delete-drug-confirm"
+                    data-testid="delete-drug-confirm"
+                    aria-describedby="delete-confirm-text"
+                    onClick={async () => {
+                      const done = await deleteDrug(drug.id)
+                      if (done) navigate('/library')
+                    }}
+                  >
+                    <Trash2 aria-hidden="true" className="size-4" />
+                    Confirm delete
+                  </Button>
+                  <Button
+                    variant="outline"
+                    id="delete-drug-cancel"
+                    data-testid="delete-drug-cancel"
+                    onClick={() => setConfirmingDelete(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => setEditing(true)}
+                  data-testid="edit-drug"
+                >
+                  <Pencil aria-hidden="true" className="size-4" />
+                  Edit
+                </Button>
+                <Button
+                  variant="destructive"
+                  id="delete-drug"
+                  data-testid="delete-drug"
+                  onClick={() => setConfirmingDelete(true)}
+                >
+                  <Trash2 aria-hidden="true" className="size-4" />
+                  Delete
+                </Button>
+              </>
+            )}
             <Button asChild data-testid="calculate-from-detail">
               <Link to={`/calculator?drug=${drug.id}`}>
                 <Calculator className="size-4" aria-hidden="true" />

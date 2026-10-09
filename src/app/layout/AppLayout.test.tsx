@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import { AppLayout } from './AppLayout'
@@ -51,5 +51,39 @@ describe('AppLayout', () => {
     expect(container.textContent ?? '').not.toMatch(
       /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u,
     )
+  })
+
+  it('sets a meaningful document title for the initial route', () => {
+    renderLayout('/calculator')
+    expect(document.title).toBe('Calculator — Neuropharmacology Sandbox')
+  })
+
+  it('updates the document title on client-side navigation', () => {
+    renderLayout('/library')
+
+    expect(document.title).toBe('Drug Library — Neuropharmacology Sandbox')
+    fireEvent.click(screen.getByRole('link', { name: 'Import / Export' }))
+    expect(document.title).toBe('Import / Export — Neuropharmacology Sandbox')
+  })
+
+  it('makes the main region a focus target and moves focus there after navigation', () => {
+    renderLayout('/library')
+    const main = screen.getByRole('main')
+
+    expect(main).toHaveAttribute('tabindex', '-1')
+    expect(main).toHaveAttribute('id', 'main-content')
+    // First load keeps focus on the document — nothing is stolen on entry.
+    expect(document.activeElement).not.toBe(main)
+
+    fireEvent.click(screen.getByRole('link', { name: 'Calculator' }))
+    expect(document.activeElement).toBe(main)
+  })
+
+  it('routes the skip link to the main region', () => {
+    renderLayout()
+
+    const skipLink = screen.getByRole('link', { name: 'Skip to main content' })
+    expect(skipLink).toHaveAttribute('href', '#main-content')
+    expect(document.getElementById('main-content')).toBe(screen.getByRole('main'))
   })
 })

@@ -8,7 +8,7 @@
  * - Full-width: CalculationTrace (when result exists)
  * - Full-width: VisualizationPanel (curve controls + chart)
  */
-import { useEffect } from 'react'
+import { useEffect, useRef, type KeyboardEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Calculator, Database } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -50,6 +50,7 @@ export function CalculatorView() {
     stale,
     curveSettingsStale,
     report,
+    draftErrors,
     fieldErrors,
     globalErrors,
     draftIssues,
@@ -62,29 +63,47 @@ export function CalculatorView() {
   const { drugs } = useLibraryStore()
   const drug = drugId ? drugs.find((d) => d.id === drugId) : undefined
 
-  // Sync URL params on mount
+  // Queries this view pushed into the URL but has not observed yet. When
+  // their echo arrives through `searchParams` it must not be read as an
+  // external navigation: a model/drug change landing while the write is
+  // still in flight would otherwise be reverted by the effect below
+  // (store → URL → store), and the model select silently snapped back
+  // (seen once as a failing "PK mode" workflow). Consuming the echo drops
+  // the entry, so a later history navigation to the same query still
+  // applies — only our own in-flight write is ignored.
+  const pendingQueries = useRef<Set<string>>(new Set())
+
+  // Sync URL params on navigation (deep links, history) → store.
   useEffect(() => {
+    if (pendingQueries.current.delete(searchParams.toString())) return
     applyUrlParams({
       model: searchParams.get('model'),
       drug: searchParams.get('drug'),
     })
   }, [searchParams, applyUrlParams])
 
-  // Sync model/drug changes to URL
+  // Sync model/drug changes to URL. The store is read live inside the
+  // effect: the URL→store effect above may already have updated it in this
+  // same commit, and writing the URL from this render's stale closure made
+  // deep links (`?model=…`) ping-pong between the two directions forever.
   useEffect(() => {
+    const { draft: currentDraft, drugId: currentDrugId } = useCalculatorStore.getState()
     const next = new URLSearchParams(searchParams)
     let changed = false
-    if (next.get('model') !== draft.model) {
-      next.set('model', draft.model)
+    if (next.get('model') !== currentDraft.model) {
+      next.set('model', currentDraft.model)
       changed = true
     }
-    if (next.get('drug') !== drugId) {
-      if (drugId) next.set('drug', drugId)
+    if (next.get('drug') !== currentDrugId) {
+      if (currentDrugId) next.set('drug', currentDrugId)
       else next.delete('drug')
       changed = true
     }
-    if (changed) setSearchParams(next, { replace: true })
-  }, [draft.model, drugId, searchParams, setSearchParams])
+    if (changed) {
+      pendingQueries.current.add(next.toString())
+      setSearchParams(next, { replace: true })
+    }
+  }, [searchParams, draft.model, drugId, setSearchParams])
 
   const model = draft.model
   const specs = getVisibleSpecs(draft)
@@ -111,6 +130,28 @@ export function CalculatorView() {
     setPKMode(mode)
   }
 
+  // Roving tabindex for the PK parameterization radio group: one tab stop,
+  // arrow keys move the selection (APG radio-group pattern) so keyboard
+  // users can switch parameterization without leaving the group.
+  const modeButtons = useRef<Partial<Record<'halfLife' | 'k', HTMLButtonElement | null>>>({})
+
+  function handleModeKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    const delta =
+      event.key === 'ArrowRight' || event.key === 'ArrowDown'
+        ? 1
+        : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+          ? -1
+          : 0
+    if (delta === 0) return
+    event.preventDefault()
+    const current: 'halfLife' | 'k' =
+      'mode' in draft && draft.mode === 'k' ? 'k' : 'halfLife'
+    // Two modes: any arrow step toggles the parameterization.
+    const next: 'halfLife' | 'k' = current === 'halfLife' ? 'k' : 'halfLife'
+    handleModeChange(next)
+    modeButtons.current[next]?.focus()
+  }
+
   // Range change
   const handleRangeChange = (patch: Partial<typeof settings[typeof model]['range']>) => {
     setRange(patch)
@@ -122,8 +163,13 @@ export function CalculatorView() {
   // Current model's settings
   const currentSettings = settings[model as ModelId]
 
-  // Field errors from engine (mapped)
-  const getFieldError = (key: string) => fieldErrors[key]
+  // Field errors from schema validation (draftErrors) and from the engine
+  // (fieldErrors). Schema errors are cleared as soon as the field is edited,
+  // engine errors when the next calculation runs — both are announced by the
+  // inline role="alert" in ParameterField and wired to the input with
+  // aria-invalid / aria-describedby. Reading only the engine map here made
+  // an invalid Calculate press fail silently: no error ever reached the UI.
+  const getFieldError = (key: string) => draftErrors[key] ?? fieldErrors[key]
 
   // Candidates for each field
   const getCandidates = (key: string): LibraryCandidate[] => {
@@ -164,19 +210,28 @@ export function CalculatorView() {
             {/* PK mode toggle */}
             {isPK && (
               <div className="flex items-center gap-2" data-testid="pk-mode-toggle">
-                <Label className="text-sm font-medium">Parameterization</Label>
-                <div className="flex gap-1 bg-muted rounded p-1" role="radiogroup" aria-label="PK parameterization">
+                <span className="text-sm font-medium">Parameterization</span>
+                <div
+                  role="radiogroup"
+                  aria-label="PK parameterization"
+                  className="flex gap-1 bg-muted rounded p-1"
+                  onKeyDown={handleModeKeyDown}
+                >
                   {(['halfLife', 'k'] as const).map((m) => (
                     <button
                       key={m}
                       type="button"
                       role="radio"
                       aria-checked={draft.mode === m}
+                      tabIndex={draft.mode === m ? 0 : -1}
+                      ref={(el) => {
+                        modeButtons.current[m] = el
+                      }}
                       onClick={() => handleModeChange(m)}
                       className={`px-3 py-1.5 text-sm rounded transition-colors ${
                         draft.mode === m
                           ? 'bg-background text-foreground shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground'
+                          : 'text-foreground/75 hover:text-foreground'
                       }`}
                       data-testid={`pk-mode-${m}`}
                     >
@@ -205,7 +260,7 @@ export function CalculatorView() {
         {/* Inputs panel */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
+            <CardTitle headingLevel={2} className="text-base flex items-center gap-2">
               <Calculator className="size-4" aria-hidden="true" />
               Inputs
             </CardTitle>
@@ -261,7 +316,7 @@ export function CalculatorView() {
         {/* Result panel */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Result</CardTitle>
+            <CardTitle headingLevel={2} className="text-base">Result</CardTitle>
           </CardHeader>
           <CardContent className="min-h-[300px]">
             {report?.ok ? (
