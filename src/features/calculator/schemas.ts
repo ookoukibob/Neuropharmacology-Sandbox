@@ -48,7 +48,12 @@ export type MaybeParameterDraft = ParameterDraft | undefined
 
 // --- Helpers ---
 
-const NUMBER_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
+/**
+ * One decimal-number text pattern shared by every draft check — and, since
+ * phase 9B, by the persisted curve display defaults in the preferences
+ * schema (a single definition, no second regex).
+ */
+export const NUMBER_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
 
 const numberText = z
   .string()

@@ -125,6 +125,7 @@ src/
 │   ├── routes.tsx           # central route table
 │   ├── libraryStore.ts      # composition root: Dexie repository + Zustand store
 │   ├── calculatorStore.ts   # composition root: calculator session store
+│   ├── preferencesStore.ts  # composition root: preferences ↔ calculator wiring (phase 9B)
 │   ├── layout/              # AppLayout, PageHeader
 │   └── pages/               # route-level views (thin; delegate to features)
 ├── components/
@@ -320,13 +321,58 @@ Calculator Zustand store
 ├── curveSettingsStale   range/scale settings changed since `curve` was
 │                        generated — an old curve is never presented as current
 └── settings             per-model curve settings: explicit range, points,
-                         x/y scales (session-only, never persisted)
+                         x/y scales (session state — the *saved defaults*
+                         live in the preferences store, §4.7, and are
+                         applied to this store at startup)
 ```
 
 `stale` and `curveSettingsStale` are independent on purpose: editing an
 input does not claim the curve is out of date with respect to its
 settings, and changing the range does not claim the numeric result is
 out of date with respect to its inputs.
+
+### 4.7 Application preferences (device-local, phase 9B)
+
+`/settings` manages two kinds of *presentation* preference, stored in
+**one versioned `localStorage` record** (key
+`neuropharmacology-sandbox.preferences`, structure
+`{version: 1, theme, calculator: {settings}}`; ADR-19) — deliberately
+outside IndexedDB so the scientific storage schema and record formats
+stay untouched:
+
+- **Theme** — `system | light | dark` (documented default: `system`,
+  which follows the operating system). The effective choice is applied
+  as the `.dark` class on the document root — the existing
+  `@custom-variant dark` convention, one mechanism, one writer —
+  synchronously at startup from `main.tsx`, before the first render, so
+  the app paints in the chosen theme. System mode follows
+  `prefers-color-scheme` live; a manual Light/Dark choice is never
+  overridden by a later OS change.
+- **Calculator display defaults** — the per-model curve settings
+  (`Record<ModelId, CurveSettings>`: explicit range, points, x/y scales)
+  each model starts with. The defaults themselves are defined exactly
+  once, in `features/calculator/store.ts`
+  (`defaultCalculatorSettings()`); the persisted copy is validated with
+  Zod **and** the engine's own `validateCurveOptions`, then pushed into
+  the calculator session store at startup (`applyPresentationSettings`)
+  and on every Settings change. Curve ranges and axis scales are
+  presentation configuration — the chart never computes pharmacology —
+  so nothing scientific is stored here.
+
+Boundary: **preferences never hold scientific state.** Input drafts,
+reports, curve data, drug records and provenance are not read or written
+by the preferences layer, and the scoped "Reset application
+preferences" action restores only the theme and the calculator display
+defaults.
+
+Failure handling: malformed JSON, invalid values and unsupported
+versions are discarded wholesale in favour of the documented defaults
+(announced in a `role="status"` note); a browser that denies storage
+runs from in-memory defaults with the same note. Range fields accept
+only blank-or-finite non-negative numbers (points: blank or an integer
+in the engine's 2–5000 bounds), and a fully entered range must satisfy
+the engine's cross-field rules before it is stored — invalid text stays
+visible next to its message and is never persisted.
 
 ---
 
@@ -340,13 +386,13 @@ out of date with respect to its inputs.
 | `/library/:drugId` | Drug Detail (targets, read-only PK, provenance, edit/delete, Calculate link) | 3 (done) |
 | `/calculator` | Calculator — **implemented**: model selector, input forms, results, calculation trace, curve controls + charts | 4 (done) |
 | `/import-export` | Import / Export — placeholder (header only) | 5 |
-| `/settings` | Settings — placeholder (header only) | later |
+| `/settings` | Settings — **implemented**: theme, per-model curve display defaults, data-management links, About, scoped preference reset | 9 (done) |
 | `*` | Not found | 1 (done) |
 
 Every route has a page in `src/app/pages/` so routing, layout and
 navigation are wired and tested; `/import-export` delegates to the
-phase-5 import/export feature, `/settings` gains its real content in a
-later phase.
+phase-5 import/export feature and `/settings` (phase 9B) manages
+device-local presentation preferences — see §4.7.
 
 ---
 
@@ -362,6 +408,7 @@ later phase.
 | 6 | Accessibility, keyboard workflows and library persistence E2E: semantic headings/landmarks/page titles, skip link with focus placement, accessible names and announced errors (`aria-invalid` / `aria-describedby` / `role="alert"` / `role="status"`), every core workflow operable without a mouse (library incl. row add/remove and validation recovery, calculator incl. PK parameterization, import/export incl. tabs and the replace gate), axe-core WCAG A/AA scans, a real-IndexedDB library persistence spec, narrow-viewport operability — plus the invalid-Calculate-silently-ignored fix and the URL ⇄ store deep-link loop fix | all | done |
 | 7 | Dependency security audit and safe remediation: evidence-based `npm audit` baseline (all-tree and `--omit=dev`), full dependency-path evidence for every finding, a blocking production-dependency audit in CI plus a non-blocking full-tree report, and a documented unresolved dev-only advisory with its re-check condition | – | done |
 | 8 | Lossless recovery backup for quarantined records: a separate versioned `.npsb` archive (raw valid + quarantined rows, all metadata rows, explicit fidelity boundary with numeric sidecar), replace-only restore with pre-write validation, atomic commit and commit-aware outcomes — **8A: format contract + ADR-18 (this documentation phase only)**; **8B: export/restore implementation and verification** | 3 | 8A: done · 8B: done |
+| 9 | Settings: device-local presentation preferences — persistent theme (system/light/dark, `.dark` on the document root, live OS follow), per-model curve display defaults with Zod + engine validation, data-management links, About, and a scoped acknowledged reset — scientific data neither stored nor touched | 4 | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full

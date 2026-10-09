@@ -105,7 +105,14 @@ mutual rejection with ordinary import), and
 through the real detail → form → store → repository chain keeps unchanged
 parameter provenance whole — citation/DOI/unknown keys included — in the
 actual stored record, and stamps only the parameter that changed — same
-real-repository setup).
+real-repository setup) and
+`src/app/pages/SettingsPage.test.tsx` (the settings controls against the
+real app stores: theme applied to the document root and persisted,
+per-model curve display defaults with field- and engine-level
+validation, invalid text refused and never saved, the Import / Export
+link, and the acknowledged reset whose scientific-data scope is asserted
+with repository spies and an untouched calculator draft — initialized
+exactly like `main.tsx`).
 
 ---
 
@@ -143,12 +150,13 @@ Critical workflows only (each one is a spec-level guarantee):
    navigation and core forms stay operable without horizontal overflow.
 5. Accessibility scans (`e2e/a11y.spec.ts`, implemented): axe-core
    (`@axe-core/playwright`) over the WCAG 2.0/2.1 A and AA rule tags on
-   16 stable states across five tests — library, create form, detail +
+   18 stable states across six tests — library, create form, detail +
    edit form, calculator (initial, PK parameterization, with result),
    empty import/export, CSV mapping, import preview, replace
-   acknowledgement, export, and the recovery states (initial empty
+   acknowledgement, export, the recovery states (initial empty
    library, rejected archive, preview + acknowledgement, restore
-   outcome). No rule is disabled and no violation is
+   outcome) and the settings states (defaults, reset confirmation). No
+   rule is disabled and no violation is
    suppressed: a violation fails the spec.
 6. Import/export (`e2e/importExport.spec.ts`, implemented — synthetic
    in-memory buffers, six workflows):
@@ -182,7 +190,17 @@ Critical workflows only (each one is a spec-level guarantee):
    - export failure honesty: a stored `Date` fails the export with
      store/key/path/type diagnostics, **no download event** (bounded
      wait, not a sleep) and no success status.
-8. Export round trip at the repository level (export → import → deep
+8. Settings (`e2e/settings.spec.ts`, implemented — synthetic values,
+   isolated context per test, two workflows):
+   - theme → Dark is applied immediately as the `.dark` class on the
+     document root; theme and a valid per-model curve display default
+     both survive a reload; the calculator starts from the saved
+     default; the data-management link lands on Import / Export; the
+     scoped reset (two-step acknowledgement) restores the documented
+     defaults and they persist through another reload;
+   - system mode follows an emulated OS color-scheme change live, and a
+     manual theme choice is never overridden by later OS changes.
+9. Export round trip at the repository level (export → import → deep
    equality) is covered by repository tests; the E2E layer asserts the
    exported file's content parses back with provenance intact.
 
@@ -282,11 +300,15 @@ lossy edges are listed in `docs/validation.md` §7.
 | Recovery format tests | done — fidelity/sidecar/pointer/limits (`fidelity.test.ts`), string-aware duplicate-key scanner (`duplicateKeys.test.ts`), envelope/limits/version/entry/sidecar/warnings batteries (`archive.test.ts`) |
 | Recovery repository + store tests | done — read-only snapshot export with fail-closed `BACKUP_READ_FAILED`, single-transaction cross-connection consistency, verbatim restore (quarantine + unknown fields + metadata), rejection before any transaction, rollback on mid-write failure, mutual rejection; store outcomes ok / rejected / failed / committed-refresh-failed with the restore never re-run |
 | Recovery UI tests | done — preview count groups, acknowledgement gating, four outcome reports, export failure honesty (no file, no success status), oversized/invalid file rejection, cancel (`RecoveryPanel.test.tsx`) |
-| Test suite total | 659 unit tests (41 files) |
+| Preferences tests (schema, storage, store) | done — defaults on first run, save/restore round trip with verbatim string forms, malformed JSON and non-object payloads, unsupported schema versions, invalid theme/scale/value types, engine cross-field range rules (min < max, log-safe min, points bounds), live system-mode theme behavior, manual-theme precedence over OS changes, write-failure degradation (`loadStatus: 'unavailable'`), scoped reset, persisted-key shape (no scientific state) |
+| Calculator presentation-settings tests | done — `applyPresentationSettings` replaces display defaults without touching drafts/report/curve, marks the curve stale when a report exists; `defaultCalculatorSettings` returns fresh independent copies |
+| Settings UI tests | done — four sections with accessible headings, theme applied + persisted per model blocks, invalid range text refused with `aria-invalid`/description, cross-field enforcement, restore-defaults keeps the theme, data-management link, About metadata, acknowledged reset (Escape, focus, scope) with repository mutation spies and an untouched scientific draft, invalid/unavailable-storage notes |
+| Test suite total | 718 unit tests (45 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
 | Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
 | Library reload e2e | done — 1 persistence workflow (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload |
 | Keyboard e2e | done — 6 workflows (`e2e/keyboard.spec.ts`): skip link, navigation, drug form recovery, calculator, import/export confirmation, narrow-viewport operability |
 | Recovery e2e | done — 4 workflows (`e2e/recovery.spec.ts`): quarantine-preserving export → replace → restore round trip with reload persistence, malformed rejection, mutual `.npsb`/`.npsl` rejection, export failure honesty with a bounded no-download wait |
-| Accessibility e2e | done — 5 scans (`e2e/a11y.spec.ts`) covering 16 stable states (incl. four Recovery states) with axe-core WCAG A/AA tags; no rules disabled, no violations suppressed (0 violations) |
+| Settings e2e | done — 2 workflows (`e2e/settings.spec.ts`): theme + calculator display defaults persist across reloads and the scoped reset restores only preferences; system-mode follows live OS color-scheme changes with manual precedence |
+| Accessibility e2e | done — 6 scans (`e2e/a11y.spec.ts`) covering 18 stable states (incl. four Recovery and two Settings states) with axe-core WCAG A/AA tags; no rules disabled, no violations suppressed (0 violations) |
 | Dependency security gate | done — `npm audit --omit=dev`: 0 production vulnerabilities (blocking in CI); full tree: 7 high, all dev-only, from one advisory with no fixed release (`braces` ≤ 3.0.3, GHSA-vfj7-8cjw-p6xm), reported non-blocking |

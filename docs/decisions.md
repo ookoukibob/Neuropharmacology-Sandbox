@@ -348,6 +348,60 @@ interchange only — explicitly not a complete storage backup.
 
 ---
 
+## ADR-19 · Device-local preferences in one versioned `localStorage` record
+
+**Context.** `/settings` (phase 9B) needs a persistent theme and
+per-model curve display defaults. These are presentation preferences,
+not scientific records: putting them in IndexedDB would touch the
+database schema, mapper and migration history for a few hundred bytes of
+UI state, and scattering `localStorage` reads across components would
+create a second, unvalidated source of truth (ADR-4 already anticipated
+"eventually settings" as a Zod-validated structure).
+
+**Decision.**
+- **One record, namespaced key, explicit version.** Key
+  `neuropharmacology-sandbox.preferences`, payload
+  `{version: 1, theme, calculator: {settings}}`, written only by
+  `src/features/preferences/` (schema → storage → theme → store, wired to
+  the calculator store by `src/app/preferencesStore.ts`). IndexedDB,
+  drug records, `.npsl`/`.npsb` formats and the persistence version are
+  untouched.
+- **Presentation preferences only.** `theme` (`system | light | dark`,
+  default `system`) and the calculator's per-model `CurveSettings`
+  (range, points, x/y scales — the chart's configuration; it never
+  computes pharmacology). Input drafts, reports, curve data, drug
+  records and provenance are never read or written by this layer, and
+  the reset action restores only these preferences.
+- **One authoritative state, one write path.** The preferences store is
+  the sole owner of what persists; every mutation validates (Zod
+  structure/formats + the engine's `validateCurveOptions` cross-field
+  rules), persists, and applies (theme class, live calculator
+  settings). A candidate that fails validation is refused outright —
+  state and storage stay put; the Settings UI shows the field message.
+  Defaults are defined once, in the calculator store
+  (`defaultCalculatorSettings()`).
+- **Startup applies before first paint.** `main.tsx` calls
+  `initializePreferences()` synchronously before `render()`; the theme
+  class lands on the document root through the existing `.dark`
+  convention (the only writer), and saved display defaults are pushed
+  into the calculator session store.
+- **Fail safe, degrade visibly.** Malformed JSON, invalid values and
+  unsupported versions are discarded wholesale in favour of the
+  documented defaults; storage that throws yields in-memory defaults.
+  Both cases surface as `role="status"` notes rather than interruptions.
+
+**Consequences.** Preferences survive reloads per device without any
+change to scientific storage; a preference write cannot touch a drug
+record by construction (tests assert it). Version bumps are explicit:
+an unsupported `version` is rejected, never half-applied. Removing the
+record (or blocking storage) returns the app to documented defaults —
+there is no hidden coupling to recover. Trade-off: preferences are not
+part of the `.npsb` recovery archive (device-local UI state, recreated
+in seconds), and there is no sync — by design (no accounts, static
+deployment, ADR-12).
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

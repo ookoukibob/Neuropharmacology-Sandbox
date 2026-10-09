@@ -65,11 +65,24 @@ function defaultSettingsFor(model: ModelId): CurveSettings {
   }
 }
 
-const INITIAL_SETTINGS: Record<ModelId, CurveSettings> = {
-  'pk.first-order-one-compartment': defaultSettingsFor('pk.first-order-one-compartment'),
-  'occupancy.single-site': defaultSettingsFor('occupancy.single-site'),
-  'dose-response.hill': defaultSettingsFor('dose-response.hill'),
+/**
+ * Fresh copies of the application-default curve settings (phase 9B).
+ *
+ * The preferences layer needs its own objects — never the shared
+ * `INITIAL_SETTINGS` references — so persisted defaults and live session
+ * state can never alias each other. The defaults themselves are defined
+ * exactly once, here: the Settings page, preference storage validation and
+ * preference reset all reuse them instead of inventing a second set.
+ */
+export function defaultCalculatorSettings(): Record<ModelId, CurveSettings> {
+  return {
+    'pk.first-order-one-compartment': defaultSettingsFor('pk.first-order-one-compartment'),
+    'occupancy.single-site': defaultSettingsFor('occupancy.single-site'),
+    'dose-response.hill': defaultSettingsFor('dose-response.hill'),
+  }
 }
+
+const INITIAL_SETTINGS: Record<ModelId, CurveSettings> = defaultCalculatorSettings()
 
 export interface CalculatorState {
   // Model & drafts
@@ -104,6 +117,7 @@ export interface CalculatorState {
   setRange: (patch: Partial<RangeDraft>) => void
   setXScale: (scale: 'linear' | 'log') => void
   setYScale: (scale: 'linear' | 'log') => void
+  applyPresentationSettings: (settings: Record<ModelId, CurveSettings>) => void
   applyCurveSettings: () => void
   calculate: () => void
   resetInputs: () => void
@@ -269,6 +283,17 @@ export function createCalculatorStore(): UseBoundStore<StoreApi<CalculatorState>
       const shouldMarkStale = report !== null
       set({ settings: setSettings(get(), draft.model, next), curveSettingsStale: shouldMarkStale })
       if (get().report?.ok) get().applyCurveSettings()
+    },
+
+    applyPresentationSettings: (settings) => {
+      // Wholesale update from the preferences layer (startup, the Settings
+      // page, preference reset) — persisted curve display defaults only,
+      // never a scientific input path: drafts, reports and curve data are
+      // deliberately left alone. Like setRange, an existing result's curve
+      // is flagged for an explicit re-apply rather than regenerated here:
+      // a bulk update mixes range and scale changes, and "Update curve"
+      // stays the authority over chart refreshes.
+      set({ settings: { ...settings }, curveSettingsStale: get().report !== null })
     },
 
     applyCurveSettings: () => {

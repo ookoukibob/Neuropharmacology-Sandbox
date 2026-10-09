@@ -261,3 +261,14 @@ test('a11y: the recovery backup states pass the axe scan', async ({ page }) => {
   await expect(page.getByTestId('recovery-restore-report')).toContainText('Restore complete')
   await scan(page, 'recovery (restore outcome report)')
 })
+
+test('a11y: the settings page passes the axe scan in its default and confirm states', async ({ page }) => {
+  await page.goto('/settings')
+  await expect(page.getByTestId('settings-view')).toBeVisible()
+  await scan(page, 'settings (defaults)')
+
+  // The reset acknowledgement step is a stable, user-reachable state.
+  await page.getByTestId('settings-reset').click()
+  await expect(page.getByTestId('settings-reset-confirm')).toBeVisible()
+  await scan(page, 'settings (reset confirmation)')
+})

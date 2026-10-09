@@ -6,7 +6,7 @@
  * Uses the store factory directly for isolation.
  */
 import { describe, expect, it } from 'vitest'
-import { createCalculatorStore } from './store'
+import { createCalculatorStore, defaultCalculatorSettings } from './store'
 import { getDraftField } from './modelAdapters'
 import type {
   CalculatorDraft,
@@ -636,5 +636,63 @@ describe('calculator store', () => {
       store.getState().applyUrlParams({ model: 'pk.first-order-one-compartment', drug: null })
       expect(store.getState().report).toBeNull()
     })
+  })
+})
+
+describe('applyPresentationSettings (phase 9B)', () => {
+  it('replaces the per-model settings with the given set', () => {
+    const store = setupStore()
+    const settings = defaultCalculatorSettings()
+    settings['occupancy.single-site'] = {
+      range: { min: '0.1', max: '100', points: '120' },
+      xScale: 'linear',
+      yScale: 'linear',
+    }
+
+    store.getState().applyPresentationSettings(settings)
+
+    expect(store.getState().settings['occupancy.single-site']).toEqual(
+      settings['occupancy.single-site'],
+    )
+    expect(store.getState().settings['pk.first-order-one-compartment']).toEqual(
+      defaultCalculatorSettings()['pk.first-order-one-compartment'],
+    )
+  })
+
+  it('leaves drafts, report and curve untouched and sets no stale flag without a report', () => {
+    const store = setupStore()
+    store.getState().setDraftField('kd', { value: '4.2', unit: 'nM' })
+    const draftBefore = store.getState().draft
+
+    store.getState().applyPresentationSettings(defaultCalculatorSettings())
+
+    expect(store.getState().draft).toBe(draftBefore)
+    expect(store.getState().report).toBeNull()
+    expect(store.getState().curve).toBeNull()
+    expect(store.getState().curveSettingsStale).toBe(false)
+  })
+
+  it('flags the curve settings stale when a report exists', () => {
+    const store = setupStore()
+    store.getState().setDraftField('kd', { value: '10', unit: 'nM' })
+    store.getState().setDraftField('concentration', { value: '10', unit: 'nM' })
+    store.getState().calculate()
+    expect(store.getState().report?.ok).toBe(true)
+
+    store.getState().applyPresentationSettings(defaultCalculatorSettings())
+
+    expect(store.getState().curveSettingsStale).toBe(true)
+  })
+})
+
+describe('defaultCalculatorSettings (phase 9B)', () => {
+  it('returns fresh, independent copies of the application defaults', () => {
+    const first = defaultCalculatorSettings()
+    const second = defaultCalculatorSettings()
+    expect(first).toEqual(second)
+    expect(first['occupancy.single-site']).not.toBe(second['occupancy.single-site'])
+    expect(first['occupancy.single-site'].range).not.toBe(
+      second['occupancy.single-site'].range,
+    )
   })
 })
