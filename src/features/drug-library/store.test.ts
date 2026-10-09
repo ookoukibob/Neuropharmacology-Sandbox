@@ -108,6 +108,15 @@ describe('createLibraryStore — hydration', () => {
       exportLibrary: async () => {
         throw new Error('unused')
       },
+      exportRecoveryArchive: async () => {
+        throw new Error('unused')
+      },
+      previewRecoveryArchive: async () => {
+        throw new Error('unused')
+      },
+      restoreRecoveryArchive: async () => {
+        throw new Error('unused')
+      },
     }
     const store = createLibraryStore(failing)
     await store.getState().hydrate()
@@ -374,6 +383,159 @@ describe('createLibraryStore — importLibrary', () => {
       await session.getState().hydrate()
       expect(session.getState().drugs).toHaveLength(1)
       expect(session.getState().error).toBeNull()
+      expect(await db.drugs.count()).toBe(1)
+    } finally {
+      await db.delete()
+    }
+  })
+})
+
+describe('createLibraryStore — restoreArchive', () => {
+  it('commits a valid restore and refreshes the session from storage', async () => {
+    const { db, repo, store } = await makeStore()
+    try {
+      // Archive of a one-drug library with a quarantined raw row.
+      await repo.createDrug({ identifiers: { name: 'Fixture Compound R', synonyms: [] } })
+      await db.drugs.put({ id: 'quarantine-seed', origin: 'bogus' } as never)
+      const exported = await repo.exportRecoveryArchive()
+      if (!exported.ok) throw new Error(JSON.stringify(exported.issues))
+      await store.getState().hydrate()
+      expect(store.getState().drugs).toHaveLength(1)
+      expect(store.getState().quarantine.map((q) => q.id)).toEqual(['quarantine-seed'])
+
+      // Replace the library with different content before restoring.
+      await repo.createDrug({ identifiers: { name: 'Fixture Compound S', synonyms: [] } })
+      await store.getState().hydrate()
+      expect(store.getState().drugs).toHaveLength(2)
+
+      const outcome = await store.getState().restoreArchive(exported.text)
+      expect(outcome.status).toBe('ok')
+      if (outcome.status !== 'ok') throw new Error('expected a committed restore')
+      expect(outcome.report.counts).toEqual(exported.counts)
+      expect(outcome.report.currentBuild).toEqual({ readable: 1, quarantined: 1 })
+      expect(outcome.report.warnings).toEqual([])
+
+      // Session mirrors storage: the archive contents replaced the newer
+      // library, quarantined row included, no error surfaced.
+      expect(store.getState().drugs.map((d) => d.identifiers.name)).toEqual([
+        'Fixture Compound R',
+      ])
+      expect(store.getState().quarantine.map((q) => q.id)).toEqual(['quarantine-seed'])
+      expect(store.getState().error).toBeNull()
+      expect(await db.drugs.count()).toBe(2)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('reports a rejected restore without modifying the library', async () => {
+    const { db, repo, store } = await makeStore()
+    try {
+      await repo.createDrug({ identifiers: { name: 'Fixture Compound T', synonyms: [] } })
+      await store.getState().hydrate()
+
+      const outcome = await store.getState().restoreArchive('{broken')
+      expect(outcome.status).toBe('rejected')
+      if (outcome.status !== 'rejected') throw new Error('expected a rejected restore')
+      expect(outcome.issues[0]?.code).toBe('ARCHIVE_PARSE')
+
+      // Structured issues are the UI's job — no store error, no writes.
+      expect(store.getState().error).toBeNull()
+      expect(store.getState().drugs).toHaveLength(1)
+      expect(await db.drugs.count()).toBe(1)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('surfaces a restore transaction failure as failed and keeps the session intact', async () => {
+    const { db, repo, store } = await makeStore()
+    try {
+      await repo.createDrug({ identifiers: { name: 'Fixture Compound U', synonyms: [] } })
+      const exported = await repo.exportRecoveryArchive()
+      if (!exported.ok) throw new Error(JSON.stringify(exported.issues))
+      await store.getState().hydrate()
+
+      // Direct failure injection mirrors the import tests; the real
+      // transaction rollback is covered in the repository tests.
+      repo.restoreRecoveryArchive = async () => {
+        throw new Error('restore txn failure')
+      }
+      const outcome = await store.getState().restoreArchive(exported.text)
+      expect(outcome).toEqual({ status: 'failed', message: 'restore txn failure' })
+      expect(store.getState().error).toBe('restore txn failure')
+      expect(store.getState().drugs).toHaveLength(1)
+      expect(await db.drugs.count()).toBe(1)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('reports a committed restore when the post-commit refresh fails (never as a rollback)', async () => {
+    const { db, repo } = await makeStore()
+    // Failure injection against the REAL Dexie repository: the restore
+    // transaction commits, then the refresh read throws deterministically.
+    let failReads = false
+    let restoreCalls = 0
+    const proxied = new Proxy(repo, {
+      get(target, prop, receiver) {
+        if (prop === 'getAllDrugs') {
+          return async () => {
+            if (failReads) throw new Error('post-commit read failure')
+            return target.getAllDrugs()
+          }
+        }
+        if (prop === 'restoreRecoveryArchive') {
+          return async (text: string) => {
+            restoreCalls += 1
+            return target.restoreRecoveryArchive(text)
+          }
+        }
+        return Reflect.get(target, prop, receiver)
+      },
+    })
+    const session = createLibraryStore(proxied)
+    try {
+      // Archive of a one-drug library, then start from an empty one.
+      await repo.createDrug({ identifiers: { name: 'Fixture Compound V', synonyms: [] } })
+      const exported = await repo.exportRecoveryArchive()
+      if (!exported.ok) throw new Error(JSON.stringify(exported.issues))
+      await db.drugs.clear()
+      await session.getState().hydrate()
+      expect(session.getState().drugs).toHaveLength(0)
+
+      failReads = true
+      const outcome = await session.getState().restoreArchive(exported.text)
+      expect(outcome.status).toBe('committed-refresh-failed')
+      if (outcome.status !== 'committed-refresh-failed') {
+        throw new Error('expected committed-refresh-failed')
+      }
+      // The report proves the commit happened; the message is the ORIGINAL
+      // refresh error, not a rolled-back-transaction claim.
+      expect(outcome.report.counts).toEqual(exported.counts)
+      expect(outcome.message).toBe('post-commit read failure')
+
+      // The store surfaces commit + refresh failure together.
+      expect(session.getState().error).toContain('Restore committed')
+      expect(session.getState().error).toContain('post-commit read failure')
+      expect(session.getState().error).toContain('database contains the restored records')
+
+      // The session is NOT marked synchronized — contents stay stale.
+      expect(session.getState().drugs).toHaveLength(0)
+
+      // The database DOES contain the restored record.
+      const stored = await repo.getAllDrugs()
+      expect(stored.drugs).toHaveLength(1)
+      expect(stored.drugs[0]?.identifiers.name).toBe('Fixture Compound V')
+      expect(restoreCalls).toBe(1)
+
+      // Recovery is a hydrate retry or a reload — never an automatic
+      // re-run of the restore transaction: the count does not double.
+      failReads = false
+      await session.getState().hydrate()
+      expect(session.getState().drugs).toHaveLength(1)
+      expect(session.getState().error).toBeNull()
+      expect(restoreCalls).toBe(1)
       expect(await db.drugs.count()).toBe(1)
     } finally {
       await db.delete()

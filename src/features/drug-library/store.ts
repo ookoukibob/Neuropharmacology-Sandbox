@@ -12,6 +12,7 @@ import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import type { Drug, DrugId } from '../../domain/drug/drug'
 import type { LibraryMetadata } from '../../domain/library/library'
 import type { ImportIssue, ImportWarning } from '../../data/import/importPipeline'
+import type { RecoveryIssue } from '../../data/recovery/format'
 import type {
   DrugChanges,
   DrugInput,
@@ -19,6 +20,7 @@ import type {
   ImportMode,
   ImportReport,
   QuarantinedRecord,
+  RecoveryReport,
 } from '../../data/repositories/repository'
 
 export type LibraryStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -52,6 +54,31 @@ export type LibraryImportOutcome =
       readonly message: string
     }
 
+/**
+ * Result of a `.npsb` recovery restore (ADR-18), normalized for UI
+ * feedback with the same commit-aware semantics as `LibraryImportOutcome`:
+ * - `ok` — committed AND the session refreshed (report carries counts);
+ * - `rejected` — archive validation failed before any write transaction
+ *   opened; the library was not modified;
+ * - `failed` — the restore transaction threw and rolled back; the previous
+ *   library is intact;
+ * - `committed-refresh-failed` — the transaction COMMITTED, but re-reading
+ *   the session afterwards threw. The database contains the restored
+ *   records while the session may be stale; never reported as a rollback,
+ *   and recovery is a hydrate retry or a reload — the restore itself is
+ *   never re-run automatically.
+ */
+export type LibraryRestoreOutcome =
+  | { readonly status: 'ok'; readonly report: RecoveryReport }
+  | { readonly status: 'rejected'; readonly issues: readonly RecoveryIssue[] }
+  | { readonly status: 'failed'; readonly message: string }
+  | {
+      readonly status: 'committed-refresh-failed'
+      readonly report: RecoveryReport
+      /** The original post-commit refresh error (the commit succeeded). */
+      readonly message: string
+    }
+
 export interface LibraryState {
   readonly status: LibraryStatus
   readonly drugs: readonly Drug[]
@@ -75,6 +102,13 @@ export interface LibraryState {
    * `invalid` and `failed` mean nothing was written.
    */
   importLibrary(text: string, mode: ImportMode): Promise<LibraryImportOutcome>
+  /**
+   * Transactional `.npsb` recovery restore (full snapshot replacement).
+   * `ok` and `committed-refresh-failed` both mean the commit succeeded
+   * (the latter with a stale session); `rejected` and `failed` mean the
+   * library was not modified.
+   */
+  restoreArchive(text: string): Promise<LibraryRestoreOutcome>
 }
 
 function messageOf(error: unknown): string {
@@ -190,6 +224,40 @@ export function createLibraryStore(
         const message = messageOf(error)
         set({
           error: `Import committed, but the session refresh failed: ${message} — the database contains the imported records. Retry the session refresh or reload the page.`,
+        })
+        return { status: 'committed-refresh-failed', report: committed, message }
+      }
+    },
+
+    async restoreArchive(text) {
+      // Phase 1 — validation (read-only, in the repository) then the
+      // database transaction. `rejected` returns before any write path;
+      // a throw here means the transaction aborted: nothing committed.
+      let committed: RecoveryReport
+      try {
+        const outcome = await repo.restoreRecoveryArchive(text)
+        if (!outcome.ok) {
+          return { status: 'rejected', issues: outcome.issues }
+        }
+        committed = outcome.report
+      } catch (error) {
+        const message = messageOf(error)
+        set({ error: message })
+        return { status: 'failed', message }
+      }
+      // Phase 2 — post-commit session refresh. Same contract as the NPSL
+      // import: a failure here is NEVER reported as a rolled-back restore
+      // (the records are already in the database), the session keeps its
+      // stale contents with an explicit committed-state error, and the UI
+      // offers a refresh retry or a reload — never an automatic re-run of
+      // the restore transaction itself.
+      try {
+        await refresh(set)
+        return { status: 'ok', report: committed }
+      } catch (error) {
+        const message = messageOf(error)
+        set({
+          error: `Restore committed, but the session refresh failed: ${message} — the database contains the restored records. Retry the session refresh or reload the page.`,
         })
         return { status: 'committed-refresh-failed', report: committed, message }
       }

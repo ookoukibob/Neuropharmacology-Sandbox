@@ -93,7 +93,12 @@ when Calculate runs with empty inputs), and
 write, replace acknowledgement, explicit CSV mapping, export contents, the
 committed-but-refresh-failed report — never "nothing was written" — and
 the quarantine export warning against a populated vs. empty quarantine —
-all against the real repository with fake-indexeddb).
+all against the real repository with fake-indexeddb), and
+`src/features/import-export/RecoveryPanel.test.tsx` (recovery preview
+counts and acknowledgement gating, the four restore outcomes including
+the committed-refresh-failed report whose retry re-runs only the session
+refresh, export failure honesty with no file and no success status, and
+mutual rejection with ordinary import — same real-repository setup).
 
 ---
 
@@ -131,10 +136,12 @@ Critical workflows only (each one is a spec-level guarantee):
    navigation and core forms stay operable without horizontal overflow.
 5. Accessibility scans (`e2e/a11y.spec.ts`, implemented): axe-core
    (`@axe-core/playwright`) over the WCAG 2.0/2.1 A and AA rule tags on
-   12 stable states across four tests — library, create form, detail +
+   16 stable states across five tests — library, create form, detail +
    edit form, calculator (initial, PK parameterization, with result),
    empty import/export, CSV mapping, import preview, replace
-   acknowledgement, export. No rule is disabled and no violation is
+   acknowledgement, export, and the recovery states (initial empty
+   library, rejected archive, preview + acknowledgement, restore
+   outcome). No rule is disabled and no violation is
    suppressed: a violation fails the spec.
 6. Import/export (`e2e/importExport.spec.ts`, implemented — synthetic
    in-memory buffers, six workflows):
@@ -153,7 +160,22 @@ Critical workflows only (each one is a spec-level guarantee):
      no Ki, storage origin shows `Imported`;
    - CSV export → stable 57-column header, one row per target, and the
      always-visible lossiness warning.
-7. Export round trip at the repository level (export → import → deep
+7. Recovery backup/restore (`e2e/recovery.spec.ts`, implemented —
+   synthetic records, isolated context per test, quarantine seeded
+   through narrowly-scoped raw IndexedDB writes, four workflows):
+   - export → replace → restore round trip: the downloaded `.npsb`
+     carries readable + quarantined + metadata rows with exact counts,
+     a replace import clears the quarantined row, restore brings it
+     back verbatim and it survives a reload;
+   - malformed archive → visible structured rejection, no confirm
+     control, library unchanged now and after a reload;
+   - mutual rejection both directions (`.npsb` in ordinary Import fails
+     on `formatVersion`, `.npsl` in restore fails `ARCHIVE_NOT_NPSB`
+     with import guidance), nothing written;
+   - export failure honesty: a stored `Date` fails the export with
+     store/key/path/type diagnostics, **no download event** (bounded
+     wait, not a sleep) and no success status.
+8. Export round trip at the repository level (export → import → deep
    equality) is covered by repository tests; the E2E layer asserts the
    exported file's content parses back with provenance intact.
 
@@ -250,10 +272,14 @@ lossy edges are listed in `docs/validation.md` §7.
 | Calculator tests (adapters, store, schemas, components) | done — drafts, stale semantics, curve settings, PK mode union |
 | CSV tests (parse, write, export, mapping, conversion) | done — quoting/escaping/BOM/errors, spreadsheet formula-injection guard (text cells protected, numeric cells byte-exact), stable header, provenance columns, ambiguity + unit rules, CSV → NPSL document, grouping, row errors |
 | Import/export UI tests | done — preview-before-write, replace gate, cancel, CSV mapping flow, export contents + object-URL lifecycle, committed-but-refresh-failed report (never "nothing was written"), quarantine export warning (visible with data, silent when empty) |
-| Test suite total | 579 unit tests (35 files) |
+| Recovery format tests | done — fidelity/sidecar/pointer/limits (`fidelity.test.ts`), string-aware duplicate-key scanner (`duplicateKeys.test.ts`), envelope/limits/version/entry/sidecar/warnings batteries (`archive.test.ts`) |
+| Recovery repository + store tests | done — read-only snapshot export with fail-closed `BACKUP_READ_FAILED`, single-transaction cross-connection consistency, verbatim restore (quarantine + unknown fields + metadata), rejection before any transaction, rollback on mid-write failure, mutual rejection; store outcomes ok / rejected / failed / committed-refresh-failed with the restore never re-run |
+| Recovery UI tests | done — preview count groups, acknowledgement gating, four outcome reports, export failure honesty (no file, no success status), oversized/invalid file rejection, cancel (`RecoveryPanel.test.tsx`) |
+| Test suite total | 650 unit tests (40 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
 | Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
 | Library reload e2e | done — 1 persistence workflow (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload |
 | Keyboard e2e | done — 6 workflows (`e2e/keyboard.spec.ts`): skip link, navigation, drug form recovery, calculator, import/export confirmation, narrow-viewport operability |
-| Accessibility e2e | done — 4 scans (`e2e/a11y.spec.ts`) covering 12 stable states with axe-core WCAG A/AA tags; no rules disabled, no violations suppressed (0 violations) |
+| Recovery e2e | done — 4 workflows (`e2e/recovery.spec.ts`): quarantine-preserving export → replace → restore round trip with reload persistence, malformed rejection, mutual `.npsb`/`.npsl` rejection, export failure honesty with a bounded no-download wait |
+| Accessibility e2e | done — 5 scans (`e2e/a11y.spec.ts`) covering 16 stable states (incl. four Recovery states) with axe-core WCAG A/AA tags; no rules disabled, no violations suppressed (0 violations) |
 | Dependency security gate | done — `npm audit --omit=dev`: 0 production vulnerabilities (blocking in CI); full tree: 7 high, all dev-only, from one advisory with no fixed release (`braces` ≤ 3.0.3, GHSA-vfj7-8cjw-p6xm), reported non-blocking |

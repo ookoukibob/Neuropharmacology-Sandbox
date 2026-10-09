@@ -30,7 +30,20 @@ import {
   validateNpslFile,
 } from '../import/importPipeline'
 import { newId } from '../id'
-import { fromRecord, toStoredRecord, type DrugRecord } from '../mappers/records'
+import {
+  PERSISTENCE_VERSION,
+  fromRecord,
+  toStoredRecord,
+  type DrugRecord,
+} from '../mappers/records'
+import {
+  buildRecoveryArchive,
+  buildRecoveryWarnings,
+  classifyArchiveDrugs,
+  parseRecoveryArchive,
+  type RawSnapshotRow,
+  type ValidatedArchive,
+} from '../recovery/archive'
 import { drugSchema, libraryMetadataSchema } from '../schemas/npsl'
 import {
   RepositoryError,
@@ -41,8 +54,16 @@ import {
   type ImportReport,
   type LibraryLoadResult,
   type QuarantinedRecord,
+  type RecoveryExportOutcome,
+  type RecoveryPreviewOutcome,
+  type RecoveryReport,
+  type RecoveryRestoreOutcome,
   type TargetInput,
 } from './repository'
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
 function recordKey(raw: unknown): string {
   if (typeof raw === 'object' && raw !== null) {
@@ -293,6 +314,100 @@ export class DexieDrugRepository implements DrugRepository {
     // Quarantined records are unreadable and therefore not exported; they
     // remain in storage and visible in the quarantine report.
     return { metadata, drugs }
+  }
+
+  async exportRecoveryArchive(): Promise<RecoveryExportOutcome> {
+    let snapshot: { drugs: RawSnapshotRow[]; meta: RawSnapshotRow[] }
+    try {
+      // One read-only transaction over BOTH stores (docs/recovery-backup.md
+      // §7): cursor callbacks capture the real IndexedDB primary key next
+      // to each structured-cloned value, and both reads finish inside the
+      // transaction before any CPU-heavy work (scanning, classification,
+      // serialization) runs on the copies — so counts and entries can
+      // never mix the pre- and post-write sides of a concurrent change.
+      // No fallback path: a read failure is fail-closed BACKUP_READ_FAILED.
+      snapshot = await this.db.transaction('r', this.db.drugs, this.db.meta, async () => {
+        const drugs: RawSnapshotRow[] = []
+        await this.db.drugs.each((value, cursor) => {
+          drugs.push({ key: cursor.primaryKey, value })
+        })
+        const meta: RawSnapshotRow[] = []
+        await this.db.meta.each((value, cursor) => {
+          meta.push({ key: cursor.primaryKey, value })
+        })
+        return { drugs, meta }
+      })
+    } catch (error) {
+      return {
+        ok: false,
+        issues: [
+          {
+            code: 'BACKUP_READ_FAILED',
+            message: `the local library could not be read for backup: ${messageOf(error)}`,
+          },
+        ],
+      }
+    }
+    return buildRecoveryArchive({
+      drugs: snapshot.drugs,
+      meta: snapshot.meta,
+      storage: {
+        databaseVersion: this.db.verno,
+        persistenceVersion: PERSISTENCE_VERSION,
+      },
+      exportedAt: new Date().toISOString(),
+    })
+  }
+
+  async previewRecoveryArchive(text: string): Promise<RecoveryPreviewOutcome> {
+    const parsed = parseRecoveryArchive(text)
+    if (!parsed.ok) return { ok: false, issues: parsed.issues }
+    return { ok: true, report: this.recoveryReport(parsed.archive) }
+  }
+
+  async restoreRecoveryArchive(text: string): Promise<RecoveryRestoreOutcome> {
+    // Complete §8.2 validation BEFORE the first write: a rejected archive
+    // never opens a write transaction, so the library stays untouched.
+    const parsed = parseRecoveryArchive(text)
+    if (!parsed.ok) return { ok: false, issues: parsed.issues }
+    const report = this.recoveryReport(parsed.archive)
+
+    // Raw, verbatim writes are confined to this one operation (ADR-18):
+    // validated JSON-domain rows are written as stored — no schema
+    // re-validation, no normalization, no bookkeeping backfill — so
+    // unknown fields and quarantined rows survive exactly. `put` derives
+    // the key from the in-line `id`, which validation proved equals the
+    // entry key. Both stores are cleared and rewritten inside one `rw`
+    // transaction: full replacement, atomic (any failure aborts and rolls
+    // back — the previous library is intact), and never partially mixed.
+    await this.db.transaction('rw', this.db.drugs, this.db.meta, async () => {
+      await this.db.drugs.clear()
+      await this.db.meta.clear()
+      for (const row of parsed.archive.drugs) {
+        await this.db.drugs.put(row.value as unknown as DrugRecord)
+      }
+      for (const row of parsed.archive.meta) {
+        await this.db.meta.put(row.value as unknown as LibraryMetadata)
+      }
+    })
+    return { ok: true, report }
+  }
+
+  /** Archive counts + this build's derived classification and warnings. */
+  private recoveryReport(archive: ValidatedArchive): RecoveryReport {
+    const currentBuild = classifyArchiveDrugs(archive.drugs)
+    return {
+      counts: archive.counts,
+      currentBuild,
+      warnings: buildRecoveryWarnings(
+        archive,
+        {
+          databaseVersion: this.db.verno,
+          persistenceVersion: PERSISTENCE_VERSION,
+        },
+        currentBuild,
+      ),
+    }
   }
 
   /** CRUD stamp: library-level updatedAt, single metadata entry. */

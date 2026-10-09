@@ -1,10 +1,12 @@
 # Recovery backup format (`.npsb`)
 
-**Status: Phase 8A — contract designed. Nothing in this document is
-implemented.** Export and restore ship in Phase 8B; until then the only
-export formats are `.npsl`/`.json`/`.csv` (interchange — they exclude
-quarantined rows, see §2). No code, schema, migration, dependency or CI
-change accompanies this specification.
+**Status: Phase 8B — implemented.** This contract ships in code: export
+(`exportRecoveryArchive`), preview/restore (`previewRecoveryArchive` /
+`restoreRecoveryArchive`), the store action `restoreArchive`, and the
+Recovery tab UI (`src/data/recovery/`, the repository and store layers,
+`RecoveryPanel.tsx`), verified by the §15 test matrix with every gate
+green. Ordinary export formats are unchanged: `.npsl`/`.json`/`.csv`
+remain interchange-only — they exclude quarantined rows (see §2).
 
 This document is the implementation-ready contract for a lossless-within-
 a-defined-boundary recovery backup of the local IndexedDB library. Every
@@ -21,7 +23,7 @@ including raw rows that the current build cannot validate (quarantine) and
 rows with unknown/future fields — as a single local file, and restore such
 a file verbatim, atomically, under explicit user acknowledgement.
 
-**In scope (Phase 8B):** `.npsb` export, `.npsb` preview/restore UI,
+**Scope (Phase 8B, implemented):** `.npsb` export, `.npsb` preview/restore UI,
 fidelity scanning, numeric sidecar, reclassification reporting.
 
 **Non-goals.**
@@ -133,7 +135,7 @@ Neither path needs to know about the other; tests pin both directions
 | MIME type | `application/json;charset=utf-8` | The archive is text JSON; identical to the existing `.npsl`/`.json` download type (`ExportPanel.tsx`). |
 | Format discriminator | `"formatId": "npsb"` (exact literal) | Authoritative detection; the extension is a hint only. |
 | Archive version | `"backupVersion"`, semver string | **Independent** of NPSL `formatVersion`/`schemaVersion`; the two version spaces never read or write each other's constants. |
-| Reader constant (proposed, 8B) | `BACKUP_VERSION = '1.0.0'` in a new recovery module | Must **not** be added to `npsl.ts` or reuse `checkNpslVersions()` (it is hardwired to the NPSL constants); a sibling helper with the same semantics is written for backups. |
+| Reader constant (implemented) | `BACKUP_VERSION = '1.0.0'` in `src/data/recovery/format.ts` | Must **not** be added to `npsl.ts` or reuse `checkNpslVersions()` (it is hardwired to the NPSL constants); a sibling helper with the same semantics is written for backups. |
 
 **Compatibility rule (same semantics as NPSL §1, separate implementation):**
 an archive is restorable when `backupVersion` and the reader's version have
@@ -443,7 +445,7 @@ deserializes classes or revives functions — data only.
 
 ---
 
-## 7. Backup export algorithm (proposed API: `exportRecoveryArchive()`)
+## 7. Backup export algorithm (API: `exportRecoveryArchive()`)
 
 Read-only; never mutates storage; never falls back to another format.
 
@@ -467,9 +469,13 @@ Read-only; never mutates storage; never falls back to another format.
    - **Fallback (environment cannot hold one transaction):** read rows,
      then re-read a cheap signature (store counts) and compare; one retry
      if it changed; a second change → `BACKUP_READ_FAILED`. Never emit a
-     file assembled from mixed reads. (This transaction behavior is
-     specified, not yet exercised on real browsers in 8A; Phase 8B must
-     prove it with the repository test and an E2E case — §15.)
+     file assembled from mixed reads. (Proven in 8B: a cross-connection
+     repository test drives a concurrent write from a second connection
+     while the snapshot transaction iterates and asserts that row never
+     enters the archive while counts stay self-consistent; every
+     E2E-exported archive asserts counts ≡ entries ≡ file rows. The
+     signature-compare fallback was not needed under fake-indexeddb or
+     Chromium — §15.2, §15.5/4.)
 2. **Classify** each `drugs` row with the current build's `fromRecord()`
    (identical to `getAllDrugs()`) → `readableAtExport`,
    `quarantinedAtExport`. Classification is informational (§9) and never
@@ -490,7 +496,7 @@ Read-only; never mutates storage; never falls back to another format.
 
 ## 8. Restore: validation, preview, atomicity, outcomes
 
-Proposed APIs (names indicative, Phase 8B final):
+APIs (as implemented):
 `previewRecoveryArchive(text)` — validation + read-only classification;
 `restoreRecoveryArchive(text)` — re-validate, then one transaction;
 store action `restoreArchive(text)` — mirrors `importLibrary`'s two-phase
@@ -523,8 +529,10 @@ Any violation → outcome `rejected`, zero writes:
    `ARCHIVE_DUPLICATE_JSON_KEY` with the key name and line/column.
    *Mechanism constraint:* `JSON.parse` alone cannot detect this (it
    silently keeps the last occurrence — verified) and a reviver sees only
-   post-collapse objects; Phase 8B must implement a bounded scanner or
-   equivalent strict parsing.
+   post-collapse objects; the implementation is a bounded, iterative,
+   string-aware scanner (`src/data/recovery/duplicateKeys.ts`) that owns
+   duplicates, depth and lexically malformed strings — any other
+   structural mistake is left to `JSON.parse` → `ARCHIVE_PARSE`.
 3. **Parse:** `JSON.parse(text)` (catching all throwables including
    `RangeError`) → `ARCHIVE_PARSE`.
 4. **Root:** plain object (not array/null/primitive) →
@@ -712,7 +720,7 @@ without a debugger.
 ## 11. User interaction and destructive acknowledgement
 
 Dedicated **Recovery tab** in the Import/Export view (third tab next to
-Import and Export — proposed testid `tab-recovery`), visually and
+Import and Export — testid `tab-recovery`), visually and
 textually separate from NPSL/CSV import choices. The archive is never
 offered inside the ordinary import file picker or mode selector.
 
@@ -729,11 +737,11 @@ partial or "complete backup" message.
    report; nothing else appears.
 2. Preview (§8.3): three count groups clearly labeled — *archive recorded
    at export*, *this build classifies*, *current library* — plus warnings.
-3. Explicit acknowledgement checkbox (proposed `recovery-acknowledge`)
+3. Explicit acknowledgement checkbox (`recovery-acknowledge`)
    whose **label embeds the numbers**, e.g. "I understand this will
    permanently replace my current library — N records and Q quarantined
    rows — with the archive contents (M rows)". The confirm button
-   (proposed `recovery-restore-confirm`) stays disabled until it is
+   (`recovery-restore-confirm`) stays disabled until it is
    checked; the button text itself names the destructive action
    ("Restore backup — replaces everything"). No vague "OK/Continue".
 4. Confirm → progress/busy state → exactly one of the four outcome
@@ -761,8 +769,8 @@ cloud upload or remote storage (consistent with ADR-11/ADR-12).
 | `specialNumbers` annotations (`MAX_SPECIAL_NUMBER_ANNOTATIONS`) | 1 000 000 total | Pointer strings can be a few bytes each, so the text cap alone would permit tens of millions; this bounds per-annotation resolution work independently |
 | Traversal depth (`MAX_DEPTH`) | 100 | Natural record nesting is <10; unknown fields get 10× headroom; prevents stack exhaustion in recursive scans. The duplicate-key scanner (§8.2/2) must be iterative/stack-based |
 
-Constant names are proposed for Phase 8B (their location is an open
-decision, §15.5).
+Constant names and locations are as implemented in
+`src/data/recovery/format.ts` (§15.5/3).
 
 Exceeding any limit → the corresponding `ARCHIVE_*`/`BACKUP_*` rejection
 before writes. Validation cost is bounded by these limits; if a
@@ -848,12 +856,18 @@ writing) are unaffected.
 
 ---
 
-## 15. Future test matrix (Phase 8B — none of this exists yet)
+## 15. Test matrix (Phase 8B — implemented)
 
 All fixtures are **synthetic** (fictional ids/names/values, tagged as test
-fixtures); no real pharmacology. Existing gates stay green unchanged:
+fixtures); no real pharmacology. The matrix below is implemented by:
+`src/data/recovery/fidelity.test.ts`, `duplicateKeys.test.ts`,
+`archive.test.ts` (§15.1), `dexieDrugRepository.recovery.test.ts`
+(§15.2), `store.test.ts` + `RecoveryPanel.test.tsx` (§15.3), and
+`e2e/recovery.spec.ts` + the recovery states in `e2e/a11y.spec.ts`
+(§15.4). Decisions and honest coverage gaps: §15.5. All gates green:
 `npm run typecheck`, `npm run typecheck:e2e`, `npm run lint`, `npm test`,
-`npm run build`, `npm run test:e2e`.
+`npm run build`, `npm run test:e2e`, `git diff --check`,
+`npm audit --omit=dev`.
 
 ### 15.1 Serialization / unit tests
 
@@ -908,27 +922,51 @@ fixtures); no real pharmacology. Existing gates stay green unchanged:
 | Export complete snapshot | Seed one valid record via UI + one invalid row via direct IndexedDB write (existing pattern) → Recovery export → downloaded `.npsb` parses with `drugs.length` equal to the store's row count (valid **and** quarantined) |
 | Clear → restore → reload | Restore the archive over an emptied library → reload → valid record visible; quarantined row present in storage and listed in the quarantine report |
 | Restore rejection is inert | Truncated/edited archive → visible rejection with code; record count and content unchanged after reload |
-| Commit-then-refresh-failure | Restore commits, forced post-commit refresh failure → report says committed, offers refresh retry, and **no second restore runs automatically** (see open decision below — deterministic injection needs an approved test hook; component coverage is authoritative if none) |
+| Commit-then-refresh-failure | Restore commits, forced post-commit refresh failure → report says committed, offers refresh retry, and **no second restore runs automatically** (resolved in §15.5/1: no test hook was added — the component/store tests are authoritative and this E2E row is deliberately not faked) |
 | Mutual rejection | `.npsb` text in ordinary Import → visible schema error, library unchanged; `.npsl` file in Restore → `ARCHIVE_NOT_NPSB` guidance |
-| Accessibility | axe scans over the Recovery tab states (preview, acknowledgement, outcome), consistent with the existing 12-state a11y spec |
+| Accessibility | axe scans over four stable Recovery tab states (initial, rejected archive, preview + acknowledgement, outcome report) in `e2e/a11y.spec.ts`, no disabled rules — 16 scanned states in total |
 
-### 15.5 Open decisions for Phase 8B (honest list)
+### 15.5 Phase 8B decisions — resolutions and honest coverage record
 
-1. **E2E injection for post-commit refresh failure** — no deterministic
-   hook exists in the running app today. 8B must either add a narrowly
-   scoped, documented test hook (a runtime code change, approved
-   separately) or record the component test as the authoritative coverage
-   and document the E2E gap. Do not fake the test.
-2. **Duplicate-key detector design** — behavior is fixed (§8.2/2) but the
-   scanner's exact structure is 8B work; it must be string-aware,
-   iterative and bounded by §12 limits.
-3. **Final API/error-payload names** — `exportRecoveryArchive()`,
-   `previewRecoveryArchive()`, `restoreRecoveryArchive()`,
-   `LibraryRestoreOutcome`, module location (proposed
-   `src/data/recovery/`) and whether codes ride on `RepositoryError` or a
-   dedicated error type are indicative until 8B review.
-4. **Snapshot transaction verification** — §7's single-transaction claim
-   is specified from IndexedDB semantics plus this repository's existing
-   multi-await transaction precedent; 8B must prove it under
-   fake-indexeddb *and* Chromium before relying on it (the §7 fallback is
-   the defined behavior if it does not hold).
+1. **E2E injection for post-commit refresh failure** — resolved by
+   *component-level* injection: `RecoveryPanel.test.tsx` drives the
+   `committed-refresh-failed` branch through `useLibraryStore.setState`
+   (the `ImportExportView.test.tsx` precedent) and proves the refresh
+   retry re-runs only `hydrate`, never `restoreArchive`;
+   `store.test.ts` covers the real repository path with a Proxy
+   (`getAllDrugs` fails after a genuinely committed restore) and
+   asserts the restore call count stays 1 across the retry. **No test
+   hook was added to the app**, and the corresponding E2E row (§15.4)
+   remains deliberately unwritten — the gap is recorded here rather
+   than faked.
+2. **Duplicate-key detector design** — resolved: a string-aware,
+   iterative (frame-stack, no recursion), §12-bounded scanner in
+   `src/data/recovery/duplicateKeys.ts`; it reports the first duplicate
+   in textual order with key/line/column, compares names after JSON
+   string decoding, and defers any other malformedness to `JSON.parse`
+   → `ARCHIVE_PARSE` (§8.2/2).
+3. **Final API/error-payload names** — resolved as implemented:
+   `exportRecoveryArchive()` / `previewRecoveryArchive()` /
+   `restoreRecoveryArchive()` on `DrugRepository` with a dedicated
+   `RecoveryIssue` / `RecoveryErrorCode` taxonomy (not
+   `RepositoryError`), store action
+   `restoreArchive(text): Promise<LibraryRestoreOutcome>`, modules
+   under `src/data/recovery/` (`format.ts`, `fidelity.ts`,
+   `duplicateKeys.ts`, `archive.ts`), UI in `RecoveryPanel.tsx`.
+4. **Snapshot transaction verification** — resolved for the defined
+   environments: the cross-connection repository test (§15.2) drives a
+   concurrent `put` from a second connection while the snapshot
+   transaction iterates and asserts that row never enters the archive
+   (single-transaction scope held under fake-indexeddb); every
+   E2E-exported archive asserts counts ≡ entries ≡ file rows under
+   Chromium. The §7 signature-compare fallback was therefore never
+   triggered and is not exercised by a test.
+
+**Coverage gaps recorded (not silently dropped):** unicode/empty-string
+storage keys and multi-row `meta` archives are not separately
+fixture-tested (canonical keys, single metadata row everywhere);
+cross-build reclassification *on restore* is covered at the
+archive/warning level (§15.1 warnings battery) plus session quarantine
+reporting, not as a dedicated repository scenario; close/reopen
+persistence is covered by the browser-reload E2E instead of a Dexie
+reopen test.

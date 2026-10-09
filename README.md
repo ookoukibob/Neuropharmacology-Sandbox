@@ -34,6 +34,7 @@ hardening and closure pass).**
 **Phase 5 — import/export workflows (complete).**
 **Phase 6 — accessibility, keyboard workflows and end-to-end library
 persistence (complete).**
+**Phase 8 — recovery backup/restore (`.npsb`, complete).**
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -45,6 +46,7 @@ persistence (complete).**
 provenance; envelope extras and quarantined records are excluded, each with
 a visible warning) and CSV (lossy, with a visible warning), component + CSV unit tests and six E2E workflows | done |
 | 6 | Accessibility and keyboard workflows: semantic headings, landmarks, page titles and active-route state; a working skip link with focus placement; accessible names, error announcements (`role="alert"` / `aria-invalid` / `aria-describedby`) and focus indicators; every core workflow operable without a mouse (library incl. validation recovery and delete acknowledgement, calculator incl. PK parameterization, import/export incl. tabs and the replace gate); axe-core WCAG A/AA scans of twelve stable states; a real-IndexedDB library persistence E2E; narrow-viewport operability — plus the fix for an invalid Calculate press that used to fail silently | done |
+| 8 | Recovery backup: `.npsb` full-storage archive (raw rows incl. quarantined and unknown-field records, every metadata row, numeric sidecar for `-0`/`NaN`/`±Infinity`, explicit fidelity boundary), a dedicated Recovery tab with preview → explicit acknowledgement → atomic full-replacement restore and the four outcomes (rejected / failed / ok / committed-refresh-failed, never auto-re-run), mutual rejection with ordinary `.npsl` import, honest export failure with no file — contract designed in 8A (`recovery-backup.md`, ADR-18), implemented and verified in 8B with unit/repository/component/E2E/axe suites | done |
 
 ### What works today
 
@@ -69,10 +71,20 @@ a visible warning) and CSV (lossy, with a visible warning), component + CSV unit
   and the whole library exports to `.npsl`/`.json` — lossless for
   records, provenance and unknown record-level keys (unknown envelope
   fields are not stored and are reported as `ENVELOPE_FIELDS_DROPPED`;
-  quarantined records are excluded from every export, with a visible
+  quarantined records are excluded from every interchange export, with
+  a visible
   warning) — or to a lossy-but-convenient CSV that always warns it is
   not a backup format (its text cells are guarded against spreadsheet
   formula injection).
+- Recovery backup (`.npsb`, separate from interchange): the Recovery tab
+  exports a complete snapshot of both object stores — quarantined and
+  unknown-field rows included — with exact counts and a stated
+  fidelity boundary (no checksum, not authenticated), and restores it
+  verbatim as one acknowledged, all-or-nothing replacement that
+  reports committed vs. rejected vs. failed honestly and never
+  re-runs itself; each format rejects the other's files (`.npsb` in
+  ordinary import fails, `.npsl` in restore fails with import
+  guidance).
 - Built to be operated from the keyboard: skip link, landmarks and page
   titles, one visible focus indicator per control, error summaries tied
   to the invalid field with `aria-invalid`/`aria-describedby`, a

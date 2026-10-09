@@ -270,8 +270,8 @@ storage snapshot. Recovering an invalid raw row verbatim is impossible
 through `replaceLibrary()`/`importLibrary()`, which rebuild domain records
 and re-validate them with `drugSchema`. Losing quarantined or
 unknown-field data permanently is the failure this phase exists to
-prevent; the full contract is `docs/recovery-backup.md` (Phase 8A —
-designed only, not implemented).
+prevent; the full contract is `docs/recovery-backup.md` (designed in
+Phase 8A, implemented in Phase 8B).
 
 **Decision.**
 - **Separate format, not an NPSL extension.** `.npsb` (`formatId: "npsb"`,
@@ -338,12 +338,13 @@ them.
 
 **Consequences.** Phase 8B implements export/preview/restore strictly to
 `docs/recovery-backup.md` (error codes, limits, outcome taxonomy and test
-matrix are already specified); the fidelity boundary is testable
+matrix were already specified); the fidelity boundary is testable
 (export-side scan + post-serialization verification), and future schema
 changes that add object stores or widen the value domain must bump
-`backupVersion` in the same change. Until 8B ships, no backup/restore
-code exists and `.npsl` remains interchange only — explicitly not a
-complete storage backup.
+`backupVersion` in the same change. Phase 8B has shipped: the recovery
+code lives in `src/data/recovery/` plus the repository, store and
+Recovery-tab UI, with the §15 test matrix green. `.npsl` remains
+interchange only — explicitly not a complete storage backup.
 
 ---
 

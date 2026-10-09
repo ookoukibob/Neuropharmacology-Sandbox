@@ -18,6 +18,7 @@ import type {
 } from '../../domain/drug/drug'
 import type { DrugLibrary, LibraryMetadata } from '../../domain/library/library'
 import type { ImportIssue, ImportWarning } from '../import/importPipeline'
+import type { RecoveryCounts, RecoveryIssue, RecoveryWarning } from '../recovery/format'
 
 export type RepositoryErrorCode = 'NOT_FOUND' | 'VALIDATION' | 'STORAGE'
 
@@ -98,6 +99,34 @@ export type ImportReport =
       readonly warnings: readonly ImportWarning[]
     }
 
+/**
+ * Recovery archive (`.npsb`, ADR-18) outcomes. Export and preview/restore
+ * validation never throw for data problems — they report structured
+ * issues so the UI can show exactly what to fix; only genuine storage
+ * failures inside the restore transaction throw (→ `failed`).
+ */
+export type RecoveryExportOutcome =
+  | { readonly ok: true; readonly text: string; readonly counts: RecoveryCounts }
+  | { readonly ok: false; readonly issues: readonly RecoveryIssue[] }
+
+/** Report shared by a preview and a committed restore. */
+export interface RecoveryReport {
+  /** Counts recorded IN the archive (validated, §4.1). */
+  readonly counts: RecoveryCounts
+  /** This build's classification of the archive's drug rows (§8.6). */
+  readonly currentBuild: { readonly readable: number; readonly quarantined: number }
+  /** Non-blocking §8.3 warnings — informational, never gating. */
+  readonly warnings: readonly RecoveryWarning[]
+}
+
+export type RecoveryPreviewOutcome =
+  | { readonly ok: true; readonly report: RecoveryReport }
+  | { readonly ok: false; readonly issues: readonly RecoveryIssue[] }
+
+export type RecoveryRestoreOutcome =
+  | { readonly ok: true; readonly report: RecoveryReport }
+  | { readonly ok: false; readonly issues: readonly RecoveryIssue[] }
+
 export interface DrugRepository {
   /** All valid records plus a quarantine report of invalid ones. */
   getAllDrugs(): Promise<LibraryLoadResult>
@@ -112,4 +141,19 @@ export interface DrugRepository {
   /** NPSL text → parse/schema/semantic validation → transactional commit. */
   importLibrary(text: string, options: { readonly mode: ImportMode }): Promise<ImportReport>
   exportLibrary(): Promise<DrugLibrary>
+  /**
+   * Read-only full-storage snapshot of BOTH stores (quarantined and
+   * unknown-field rows included) as verified `.npsb` text (ADR-18). A
+   * `ok: false` outcome means NO file should be produced.
+   */
+  exportRecoveryArchive(): Promise<RecoveryExportOutcome>
+  /** Validate an archive read-only and classify its rows under this build. */
+  previewRecoveryArchive(text: string): Promise<RecoveryPreviewOutcome>
+  /**
+   * Full snapshot replacement: complete §8.2 validation BEFORE opening
+   * one `rw` transaction, then raw writes of every entry. Throws only on
+   * a genuine transaction failure (rolled back — previous library
+   * intact); validation problems return `ok: false` with no writes.
+   */
+  restoreRecoveryArchive(text: string): Promise<RecoveryRestoreOutcome>
 }

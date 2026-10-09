@@ -183,3 +183,81 @@ test('a11y: import mapping, import preview and the export view pass the axe scan
   await expect(page.getByTestId('export-npsl')).toBeVisible()
   await scan(page, 'export view')
 })
+
+test('a11y: the recovery backup states pass the axe scan', async ({ page }) => {
+  await page.goto('/import-export')
+  await expect(page.getByTestId('library-record-count')).toBeVisible()
+
+  // Initial recovery state on an empty library.
+  await page.getByTestId('tab-recovery').click()
+  await expect(page.getByTestId('recovery-export')).toBeVisible()
+  await scan(page, 'recovery (initial, empty library)')
+
+  // Rejected archive — the structured refusal state.
+  await page.getByTestId('recovery-restore-file').setInputFiles({
+    name: 'broken.npsb',
+    mimeType: 'application/json',
+    buffer: Buffer.from('{"formatId": "npsb",', 'utf8'),
+  })
+  await expect(page.getByTestId('recovery-rejected')).toBeVisible()
+  await scan(page, 'recovery (rejected archive)')
+
+  // Import one synthetic record so the preview counts are non-empty.
+  await page.getByTestId('tab-import').click()
+  const npsl = Buffer.from(
+    JSON.stringify({
+      formatVersion: '1.0.0',
+      schemaVersion: '1.0.0',
+      libraryMetadata: {
+        id: 'a11y-library',
+        name: 'Synthetic A11y Library',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        dataStatus: 'example',
+      },
+      drugs: [
+        {
+          id: 'a11y-recovery-1',
+          origin: 'user',
+          identifiers: { name: 'Synthetic A11y Recovery', synonyms: [] },
+          tags: ['synthetic-fixture'],
+          targets: [],
+          pharmacokinetics: {},
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    }),
+    'utf8',
+  )
+  await page
+    .getByTestId('npsl-file-input')
+    .setInputFiles({
+      name: 'synthetic-a11y-recovery.npsl',
+      mimeType: 'application/json',
+      buffer: npsl,
+    })
+  await expect(page.getByTestId('import-preview')).toBeVisible()
+  await page.getByTestId('confirm-import').click()
+  await expect(page.getByTestId('import-report')).toContainText('Import complete (merge)')
+
+  // Preview + explicit acknowledgement — the destructive gate itself.
+  await page.getByTestId('tab-recovery').click()
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('recovery-export').click()
+  const download = await downloadPromise
+  const archivePath = await download.path()
+  if (archivePath === null) {
+    throw new Error('recovery export produced no file path')
+  }
+  await page.getByTestId('recovery-restore-file').setInputFiles(archivePath)
+  await expect(page.getByTestId('recovery-preview')).toBeVisible()
+  await page.getByTestId('recovery-acknowledge').check()
+  await expect(page.getByTestId('recovery-restore-confirm')).toBeEnabled()
+  await scan(page, 'recovery (preview and acknowledgement)')
+
+  // Committed restore outcome — the success report state.
+  await page.getByTestId('recovery-restore-confirm').click()
+  await expect(page.getByTestId('recovery-restore-report')).toContainText('Restore complete')
+  await scan(page, 'recovery (restore outcome report)')
+})
