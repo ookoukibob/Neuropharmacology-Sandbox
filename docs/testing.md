@@ -84,9 +84,14 @@ placement, no-emoji rule),
 `src/features/drug-library/views.test.tsx` (form error summary tied to the
 invalid control with `aria-invalid` / `aria-describedby` and focus moved to
 it, two-step delete acknowledgement with Escape, loading and error
-announcements, and provenance preservation across edits — unchanged
+announcements, provenance preservation across edits — unchanged
 parameters keep their complete provenance while only changed or new ones
-are re-stamped, matched by stable identity) and
+are re-stamped, matched by stable identity — and target-metadata
+preservation across edits: the supported target-level fields
+(`gene`, `action`, `species`, `notes`) survive unrelated drug edits,
+target renames, parameter changes, row removal with position shifts and
+recreated-target name collisions, are never inherited by new rows, and
+absent fields stay absent with no explicit `undefined` keys) and
 `src/features/calculator/CalculatorView.test.tsx` (heading hierarchy, the
 URL ⇄ store deep-link convergence regression, the roving PK
 parameterization radio group, and schema errors surfacing on the fields
@@ -104,7 +109,10 @@ mutual rejection with ordinary import), and
 `src/features/drug-library/DrugForm.persistence.test.tsx` (an edit save
 through the real detail → form → store → repository chain keeps unchanged
 parameter provenance whole — citation/DOI/unknown keys included — in the
-actual stored record, and stamps only the parameter that changed — same
+actual stored record, stamps only the parameter that changed, and keeps
+every surviving target's `gene` / `action` / `species` / `notes` in the
+raw IndexedDB row — with no metadata migrating onto survivors or
+recreated targets — proven by a fresh repository read; same
 real-repository setup) and
 `src/app/pages/SettingsPage.test.tsx` (the settings controls against the
 real app stores: theme applied to the document root and persisted,
@@ -139,7 +147,11 @@ Critical workflows only (each one is a spec-level guarantee):
    unit, storage-origin badge and provenance badge → reload → the record
    hydrates with its provenance intact → edit one value → save → reload
    → the edit persisted → delete through the two-step acknowledgement →
-   reload → the library is empty again.
+   reload → the library is empty again. Plus the phase 10 workflow: a
+   user-origin record whose target carries supported metadata
+   (`gene`, `action`, `species`, `notes`, entered via the NPSL import
+   path) → an unrelated edit (drug name) → all four fields still shown →
+   real reload → still persisted.
 4. Keyboard workflows (`e2e/keyboard.spec.ts`, implemented): skip link is
    the first tab stop and moves focus to the main region; navigation and
    route activation without a mouse (with focus placement and page
@@ -293,7 +305,7 @@ lossy edges are listed in `docs/validation.md` §7.
 | Schema migration tests | done — v1→v2 upgrade: bookkeeping only, scientific + unknown fields survive |
 | Repository tests | done — CRUD, metadata stamping, quarantine, atomic replace/import rollback, NPSL round trip, reload, extension-field matrix (replace/merge/hydration/edit/export/re-import/rollback) |
 | Import pipeline tests | done — parse/schema/semantic/preview classification, metadata extension resolution, envelope-field warning |
-| Store + library UI tests | done — hydration guard, quarantine report, form safeguards, transactional `importLibrary` outcome (ok / invalid / failed / committed-refresh-failed) |
+| Store + library UI tests | done — hydration guard, quarantine report, form safeguards, target-metadata preservation on edit (unrelated edit, rename, parameter change, multiple targets, removal + position shift, remove-and-recreate, absent fields stay absent, create mode), transactional `importLibrary` outcome (ok / invalid / failed / committed-refresh-failed) |
 | Calculator tests (adapters, store, schemas, components) | done — drafts, stale semantics, curve settings, PK mode union |
 | CSV tests (parse, write, export, mapping, conversion) | done — quoting/escaping/BOM/errors, spreadsheet formula-injection guard (text cells protected, numeric cells byte-exact), stable header, provenance columns, ambiguity + unit rules, CSV → NPSL document, grouping, row errors |
 | Import/export UI tests | done — preview-before-write, replace gate, cancel, CSV mapping flow, export contents + object-URL lifecycle, committed-but-refresh-failed report (never "nothing was written"), quarantine export warning (visible with data, silent when empty) |
@@ -303,10 +315,11 @@ lossy edges are listed in `docs/validation.md` §7.
 | Preferences tests (schema, storage, store) | done — defaults on first run, save/restore round trip with verbatim string forms, malformed JSON and non-object payloads, unsupported schema versions, invalid theme/scale/value types, engine cross-field range rules (min < max, log-safe min, points bounds), live system-mode theme behavior, manual-theme precedence over OS changes, write-failure degradation (`loadStatus: 'unavailable'`), scoped reset, persisted-key shape (no scientific state) |
 | Calculator presentation-settings tests | done — `applyPresentationSettings` replaces display defaults without touching drafts/report/curve, marks the curve stale when a report exists; `defaultCalculatorSettings` returns fresh independent copies |
 | Settings UI tests | done — four sections with accessible headings, theme applied + persisted per model blocks, invalid range text refused with `aria-invalid`/description, cross-field enforcement, restore-defaults keeps the theme, data-management link, About metadata, acknowledged reset (Escape, focus, scope) with repository mutation spies and an untouched scientific draft, invalid/unavailable-storage notes |
-| Test suite total | 718 unit tests (45 files) |
+| Drug-form persistence integration tests | done — real detail → form → store → Dexie chain: whole provenance of unchanged parameters in the raw stored row, user stamp only on the changed parameter, supported target metadata (`gene` / `action` / `species` / `notes`) intact after an unrelated edit, no metadata migration after removal + same-name recreation (raw row + fresh repository read) |
+| Test suite total | 728 unit tests (45 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
 | Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
-| Library reload e2e | done — 1 persistence workflow (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload |
+| Library reload e2e | done — 2 workflows (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload; and target metadata: import user-origin record with `gene`/`action`/`species`/`notes` → unrelated edit → fields still shown → reload → persisted |
 | Keyboard e2e | done — 6 workflows (`e2e/keyboard.spec.ts`): skip link, navigation, drug form recovery, calculator, import/export confirmation, narrow-viewport operability |
 | Recovery e2e | done — 4 workflows (`e2e/recovery.spec.ts`): quarantine-preserving export → replace → restore round trip with reload persistence, malformed rejection, mutual `.npsb`/`.npsl` rejection, export failure honesty with a bounded no-download wait |
 | Settings e2e | done — 2 workflows (`e2e/settings.spec.ts`): theme + calculator display defaults persist across reloads and the scoped reset restores only preferences; system-mode follows live OS color-scheme changes with manual precedence |

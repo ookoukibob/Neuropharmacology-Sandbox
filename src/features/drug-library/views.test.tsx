@@ -2,7 +2,7 @@
  * Minimal UI tests: list rendering/filtering/quarantine banner, detail
  * provenance + storage-origin display, edit/create safeguard behavior
  * (explicit units, validated numbers, provenance preservation on edit,
- * no provenance editing).
+ * target-metadata preservation on edit, no provenance editing).
  *
  * The singleton store is seeded directly with synthetic fixture state — no
  * database access happens in these tests, and form submissions that fail
@@ -630,5 +630,313 @@ describe('DrugForm — provenance preservation on edit', () => {
 
     expect(input.targets?.[1]?.kd?.provenance).toBe(USER_PROVENANCE)
     expect(input.targets?.[1]?.ic50?.provenance).toBe(USER_PROVENANCE)
+  })
+})
+
+describe('DrugForm — target metadata preservation on edit', () => {
+  /**
+   * Synthetic target-level metadata — invented fixture values, never
+   * pharmacological information. Three targets with deliberately different
+   * metadata shapes: all four supported fields, only a gene, and none at
+   * all — absent metadata must stay absent through every edit.
+   */
+  const NOTE_A = 'Synthetic target note A — not pharmacological information.'
+  const LITERATURE = {
+    type: 'literature' as const,
+    source: 'Synthetic fixture source',
+    citation: 'Invented for tests, 2026',
+    syntheticExtension: 'synthetic-extension-value',
+  }
+  const USER_PROVENANCE = { type: 'user' as const, recordedAt: FIXTURE_TIMESTAMP }
+
+  function metadataFixture(): Drug {
+    return syntheticDrug({
+      targets: [
+        {
+          id: 'fixture-target-1',
+          name: 'TEST-R',
+          gene: 'SYNTH-A',
+          action: 'antagonist',
+          species: 'synthetic',
+          notes: NOTE_A,
+          kd: { value: 12.4, unit: 'nM', provenance: LITERATURE },
+        },
+        {
+          id: 'fixture-target-2',
+          name: 'TEST-S',
+          gene: 'SYNTH-B',
+          kd: { value: 12.4, unit: 'nM', provenance: USER_PROVENANCE },
+          ic50: { value: 88, unit: 'nM', provenance: USER_PROVENANCE },
+        },
+        {
+          id: 'fixture-target-3',
+          name: 'TEST-X',
+          kd: { value: 5, unit: 'nM', provenance: USER_PROVENANCE },
+        },
+      ],
+    })
+  }
+
+  function renderEdit(drug: Drug) {
+    const onSave = vi.fn<(input: DrugInput) => Promise<unknown>>(async () => undefined)
+    render(<DrugForm drug={drug} onSave={onSave} onCancel={vi.fn()} />)
+    return { onSave }
+  }
+
+  function targetRows(): HTMLElement[] {
+    return screen.getAllByTestId('target-row')
+  }
+
+  /**
+   * Submit the form and return the exact `DrugInput` handed to `onSave`
+   * (structural parameter type — no dependence on vitest's Mock generics).
+   */
+  async function submitAndGetInput(onSave: {
+    mock: { calls: ReadonlyArray<readonly [input: DrugInput]> }
+  }): Promise<DrugInput> {
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave.mock.calls).toHaveLength(1))
+    return onSave.mock.calls[0]?.[0] as DrugInput
+  }
+
+  it('keeps all four metadata fields when only the drug name, synonyms, tags and notes change', async () => {
+    const drug = metadataFixture()
+    const { onSave } = renderEdit(drug)
+
+    fireEvent.change(screen.getByLabelText('Name *'), {
+      target: { value: 'Fixture Compound A Renamed' },
+    })
+    fireEvent.change(screen.getByLabelText(/^Synonyms/), { target: { value: 'FCA, RENAMED' } })
+    fireEvent.change(screen.getByLabelText(/^Tags/), { target: { value: 'fixture, edited' } })
+    fireEvent.change(screen.getByLabelText(/^Notes/), {
+      target: { value: 'Synthetic note after edit' },
+    })
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.identifiers.name).toBe('Fixture Compound A Renamed')
+    expect(input.identifiers.synonyms).toEqual(['FCA', 'RENAMED'])
+    expect(input.tags).toEqual(['fixture', 'edited'])
+    expect(input.notes).toBe('Synthetic note after edit')
+
+    // The full-metadata target keeps every field, its id and its parameter
+    // provenance (the Phase 9A rule is untouched by this fix).
+    expect(input.targets?.[0]).toMatchObject({
+      id: 'fixture-target-1',
+      name: 'TEST-R',
+      gene: 'SYNTH-A',
+      action: 'antagonist',
+      species: 'synthetic',
+      notes: NOTE_A,
+    })
+    expect(input.targets?.[0]?.kd?.provenance).toBe(LITERATURE)
+
+    // The partial-metadata target keeps exactly its own gene; the bare
+    // target gains nothing.
+    expect(input.targets?.[1]).toMatchObject({ id: 'fixture-target-2', gene: 'SYNTH-B' })
+    expect(input.targets?.[1]).not.toHaveProperty('action')
+    expect(input.targets?.[1]).not.toHaveProperty('species')
+    expect(input.targets?.[1]).not.toHaveProperty('notes')
+    expect(input.targets?.[2]).not.toHaveProperty('gene')
+    expect(input.targets?.[2]).not.toHaveProperty('action')
+    expect(input.targets?.[2]).not.toHaveProperty('species')
+    expect(input.targets?.[2]).not.toHaveProperty('notes')
+
+    // The source record and its nested objects were not mutated along the way.
+    expect(drug.targets[0]).toMatchObject({
+      gene: 'SYNTH-A',
+      action: 'antagonist',
+      species: 'synthetic',
+      notes: NOTE_A,
+    })
+    expect(drug.targets[0]?.kd?.provenance).toEqual(LITERATURE)
+  })
+
+  it('keeps a target’s metadata when only that target is renamed', async () => {
+    const { onSave } = renderEdit(metadataFixture())
+    fireEvent.change(within(targetRows()[0] as HTMLElement).getByLabelText('Target name *'), {
+      target: { value: 'TEST-R RENAMED' },
+    })
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.targets?.[0]).toMatchObject({
+      id: 'fixture-target-1',
+      name: 'TEST-R RENAMED',
+      gene: 'SYNTH-A',
+      action: 'antagonist',
+      species: 'synthetic',
+      notes: NOTE_A,
+    })
+    expect(input.targets?.[0]?.kd?.provenance).toBe(LITERATURE)
+  })
+
+  it('keeps metadata and sibling provenance when one scientific parameter changes', async () => {
+    const { onSave } = renderEdit(metadataFixture())
+    fireEvent.change(within(targetRows()[0] as HTMLElement).getByLabelText('Value *'), {
+      target: { value: '50' },
+    })
+    const input = await submitAndGetInput(onSave)
+
+    // Target metadata rides through the parameter edit unchanged…
+    expect(input.targets?.[0]).toMatchObject({
+      id: 'fixture-target-1',
+      gene: 'SYNTH-A',
+      action: 'antagonist',
+      species: 'synthetic',
+      notes: NOTE_A,
+    })
+    // …the changed parameter alone is restamped (Phase 9A rule intact)…
+    expect(input.targets?.[0]?.kd?.value).toBe(50)
+    expect(input.targets?.[0]?.kd?.provenance).toMatchObject({ type: 'user' })
+    expect(Object.keys(input.targets?.[0]?.kd?.provenance ?? {})).toEqual(['type', 'recordedAt'])
+    // …and the unchanged siblings keep their original provenance objects.
+    expect(input.targets?.[1]?.kd?.provenance).toBe(USER_PROVENANCE)
+    expect(input.targets?.[1]?.ic50?.provenance).toBe(USER_PROVENANCE)
+    expect(input.targets?.[2]?.kd?.provenance).toBe(USER_PROVENANCE)
+    expect(input.targets?.[1]).toMatchObject({ id: 'fixture-target-2', gene: 'SYNTH-B' })
+    expect(input.targets?.[2]).toMatchObject({ id: 'fixture-target-3' })
+    expect(input.targets?.[2]).not.toHaveProperty('gene')
+  })
+
+  it('keeps each target’s own distinct metadata through renames of every row', async () => {
+    const { onSave } = renderEdit(metadataFixture())
+    const names = ['RENAMED-R', 'RENAMED-S', 'RENAMED-X']
+    targetRows().forEach((row, index) => {
+      fireEvent.change(within(row).getByLabelText('Target name *'), {
+        target: { value: names[index] },
+      })
+    })
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.targets?.[0]).toMatchObject({
+      id: 'fixture-target-1',
+      name: 'RENAMED-R',
+      gene: 'SYNTH-A',
+      action: 'antagonist',
+      species: 'synthetic',
+      notes: NOTE_A,
+    })
+    // The second target’s gene is its own — not the first target’s fields.
+    expect(input.targets?.[1]).toMatchObject({
+      id: 'fixture-target-2',
+      name: 'RENAMED-S',
+      gene: 'SYNTH-B',
+    })
+    expect(input.targets?.[1]).not.toHaveProperty('action')
+    expect(input.targets?.[1]).not.toHaveProperty('species')
+    expect(input.targets?.[1]).not.toHaveProperty('notes')
+    // The third target never had metadata and gains none.
+    expect(Object.keys(input.targets?.[2] ?? {})).toEqual(['id', 'name', 'kd'])
+  })
+
+  it('does not move a removed target’s metadata onto a survivor after a position shift', async () => {
+    const { onSave } = renderEdit(metadataFixture())
+
+    // Remove the first row (the full-metadata one) — the survivors shift
+    // up one position — and rename the now-second survivor as well.
+    fireEvent.click(
+      within(targetRows()[0] as HTMLElement).getByRole('button', { name: 'Remove target TEST-R' }),
+    )
+    const shifted = targetRows()
+    fireEvent.change(within(shifted[1] as HTMLElement).getByLabelText('Target name *'), {
+      target: { value: 'TEST-X RENAMED' },
+    })
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.targets).toHaveLength(2)
+    // The survivor that took over position 0 keeps its own gene only —
+    // never the removed target’s action/species/notes.
+    expect(input.targets?.[0]).toMatchObject({
+      id: 'fixture-target-2',
+      name: 'TEST-S',
+      gene: 'SYNTH-B',
+    })
+    expect(input.targets?.[0]).not.toHaveProperty('action')
+    expect(input.targets?.[0]).not.toHaveProperty('species')
+    expect(input.targets?.[0]).not.toHaveProperty('notes')
+    // The survivor that shifted to position 1 stays bare.
+    expect(input.targets?.[1]).toMatchObject({ id: 'fixture-target-3', name: 'TEST-X RENAMED' })
+    expect(Object.keys(input.targets?.[1] ?? {})).toEqual(['id', 'name', 'kd'])
+  })
+
+  it('does not restore or inherit metadata when a removed target’s name is recreated', async () => {
+    const { onSave } = renderEdit(metadataFixture())
+
+    // Remove the full-metadata TEST-R, then add a new target with the same
+    // name and the same Kd value/unit: a new identity inherits nothing.
+    fireEvent.click(
+      within(targetRows()[0] as HTMLElement).getByRole('button', { name: 'Remove target TEST-R' }),
+    )
+    fireEvent.click(screen.getByTestId('add-target'))
+    const rowsAfterAdd = targetRows()
+    const newRow = rowsAfterAdd[rowsAfterAdd.length - 1] as HTMLElement
+    fireEvent.change(within(newRow).getByLabelText('Target name *'), {
+      target: { value: 'TEST-R' },
+    })
+    fireEvent.click(within(newRow).getByTestId('add-param'))
+    fireEvent.change(within(newRow).getByLabelText('Parameter *'), { target: { value: 'kd' } })
+    fireEvent.change(within(newRow).getByLabelText('Value *'), { target: { value: '12.4' } })
+    fireEvent.change(within(newRow).getByLabelText('Unit *'), { target: { value: 'nM' } })
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.targets).toHaveLength(3)
+    // Survivors keep their own metadata (and the shifted bare one stays bare).
+    expect(input.targets?.[0]).toMatchObject({ id: 'fixture-target-2', gene: 'SYNTH-B' })
+    expect(input.targets?.[0]).not.toHaveProperty('action')
+    expect(Object.keys(input.targets?.[1] ?? {})).toEqual(['id', 'name', 'kd'])
+    // The recreated row carries only what the form collected: no stored id,
+    // no gene/action/species/notes — not even as explicit undefined keys.
+    expect(input.targets?.[2]?.name).toBe('TEST-R')
+    expect(Object.keys(input.targets?.[2] ?? {})).toEqual(['name', 'kd'])
+    expect(input.targets?.[2]?.kd?.value).toBe(12.4)
+  })
+
+  it('leaves absent metadata absent after an unrelated edit — no fabricated or undefined keys', async () => {
+    const { onSave } = renderEdit(metadataFixture())
+    fireEvent.change(screen.getByLabelText(/^Tags/), { target: { value: 'fixture, edited' } })
+    const input = await submitAndGetInput(onSave)
+
+    // Exact key sets: the partial target has only its gene, the bare
+    // target none of the four fields — an explicit `field: undefined`
+    // key would fail these assertions just like a fabricated value.
+    expect(Object.keys(input.targets?.[0] ?? {})).toEqual([
+      'id',
+      'name',
+      'gene',
+      'action',
+      'species',
+      'notes',
+      'kd',
+    ])
+    expect(Object.keys(input.targets?.[1] ?? {})).toEqual(['id', 'name', 'gene', 'kd', 'ic50'])
+    expect(Object.keys(input.targets?.[2] ?? {})).toEqual(['id', 'name', 'kd'])
+    expect(input.targets?.[1]).toMatchObject({ gene: 'SYNTH-B' })
+  })
+
+  it('create mode submits only what the user entered — no metadata is invented', async () => {
+    const onSave = vi.fn<(input: DrugInput) => Promise<unknown>>(async () => undefined)
+    render(<DrugForm onSave={onSave} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'New Compound' } })
+    fireEvent.click(screen.getByTestId('add-target'))
+    fireEvent.change(within(targetRows()[0] as HTMLElement).getByLabelText('Target name *'), {
+      target: { value: 'NEW-T' },
+    })
+    fireEvent.click(within(targetRows()[0] as HTMLElement).getByTestId('add-param'))
+    fireEvent.change(within(targetRows()[0] as HTMLElement).getByLabelText('Parameter *'), {
+      target: { value: 'kd' },
+    })
+    fireEvent.change(within(targetRows()[0] as HTMLElement).getByLabelText('Value *'), {
+      target: { value: '4.2' },
+    })
+    fireEvent.change(within(targetRows()[0] as HTMLElement).getByLabelText('Unit *'), {
+      target: { value: 'nM' },
+    })
+    const input = await submitAndGetInput(onSave)
+
+    // The repository assigns the id (never the UI) and no stored metadata
+    // exists to inherit: exactly name + parameter, nothing else.
+    expect(Object.keys(input.targets?.[0] ?? {})).toEqual(['name', 'kd'])
+    expect(input.targets?.[0]?.name).toBe('NEW-T')
+    expect(input.targets?.[0]?.kd).toMatchObject({ value: 4.2, unit: 'nM' })
   })
 })

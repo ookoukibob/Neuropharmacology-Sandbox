@@ -212,6 +212,16 @@ user action
 
 A failed validation leaves both IndexedDB and application state untouched.
 
+Editing an existing record also preserves data the form does not expose:
+the supported target-level metadata (`gene`, `action`, `species`, `notes`)
+of every surviving target is reattached by stable target id when the
+submitted target list is built, so an unrelated edit never silently
+deletes it, a removed target's metadata leaves with it, and fields a
+record never had stay absent. The submitted `targets` array still replaces
+the stored list wholesale (the repository contract is unchanged), and this
+adds no metadata editing controls, no schema field and no interchange
+format change.
+
 ### 4.3 Calculation
 
 ```
@@ -409,6 +419,7 @@ device-local presentation preferences — see §4.7.
 | 7 | Dependency security audit and safe remediation: evidence-based `npm audit` baseline (all-tree and `--omit=dev`), full dependency-path evidence for every finding, a blocking production-dependency audit in CI plus a non-blocking full-tree report, and a documented unresolved dev-only advisory with its re-check condition | – | done |
 | 8 | Lossless recovery backup for quarantined records: a separate versioned `.npsb` archive (raw valid + quarantined rows, all metadata rows, explicit fidelity boundary with numeric sidecar), replace-only restore with pre-write validation, atomic commit and commit-aware outcomes — **8A: format contract + ADR-18 (this documentation phase only)**; **8B: export/restore implementation and verification** | 3 | 8A: done · 8B: done |
 | 9 | Settings: device-local presentation preferences — persistent theme (system/light/dark, `.dark` on the document root, live OS follow), per-model curve display defaults with Zod + engine validation, data-management links, About, and a scoped acknowledged reset — scientific data neither stored nor touched | 4 | done |
+| 10 | Data integrity: preserve supported target-level metadata (`gene`, `action`, `species`, `notes`) through the drug edit workflow — feature-layer regression fix (reattach by stable target id at submit) with form-level, real-repository and E2E coverage; no new editing UI, schema or format change | 3 | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full
@@ -476,6 +487,13 @@ supplied by data.
       target id, parsed value and unit), only new or actually changed
       parameters are stamped `user` at submit, and provenance is never
       upgraded by the UI.
+- [x] Target metadata preservation (phase 10 fix): the supported
+      target-level fields the form cannot edit (`gene`, `action`,
+      `species`, `notes`) survive edits to existing targets — reattached
+      by stable target id at submit, never by array position or display
+      name; a removed target's metadata leaves with it, a recreated target
+      inherits nothing, and fields a record never had stay absent. No
+      metadata editing controls, schema or interchange change was added.
 - [x] No invented pharmacological data: fixtures are synthetic and labeled
       as such; the first run is empty.
 - [x] Extensive tests (mapper, migration, import pipeline, repository,

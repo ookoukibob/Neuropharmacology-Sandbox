@@ -15,7 +15,13 @@
  *   create or upgrade any provenance, and existing provenance is never
  *   edited;
  * - duplicate target names or duplicate parameter kinds in one target are
- *   rejected before anything reaches the repository.
+ *   rejected before anything reaches the repository;
+ * - preserved target metadata: the supported target-level fields this form
+ *   cannot edit (`gene`, `action`, `species`, `notes`) are reattached from
+ *   the stored record by stable target id at submit — the same identity
+ *   basis as provenance — so an unrelated edit never silently deletes them,
+ *   and fields the record never had stay absent (nothing is filled in or
+ *   synthesized).
  */
 import { Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -25,7 +31,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import type { Drug } from '@/domain/drug/drug'
+import type { Drug, ReceptorTarget } from '@/domain/drug/drug'
 import type { ScientificValue } from '@/domain/pharmacology/scientific-value'
 import { unitCatalog } from '@/domain/pharmacology/unit-catalog'
 import type { DrugInput, TargetInput } from '@/data/repositories/repository'
@@ -73,7 +79,13 @@ interface FormError {
 interface TargetDraft {
   /** React list key (UI-only — never stored). */
   key: number
-  /** Domain identity — present only for rows loaded from an existing record. */
+  /**
+   * Domain identity — present only for rows loaded from an existing record.
+   * The draft holds only what the form edits plus this stable id; stored-
+   * only data (parameter provenance, target-level metadata) is resolved
+   * from the record at submit time by that id — see `storedProvenance` and
+   * `storedTargetMetadata`.
+   */
   id?: string
   name: string
   params: ParamDraft[]
@@ -114,6 +126,36 @@ function storedProvenance(drug: Drug | undefined): Map<string, Map<ParamKind, Sc
       if (value !== undefined) byKind.set(kind, value)
     }
     byTarget.set(target.id, byKind)
+  }
+  return byTarget
+}
+
+/** Target-level fields the form preserves but has no editing control for. */
+type TargetMetadata = Pick<ReceptorTarget, 'gene' | 'action' | 'species' | 'notes'>
+
+/**
+ * Supported target-level metadata for edit mode, keyed by stable target id
+ * — the same identity basis as `storedProvenance`, never array position or
+ * display name: removing a row shifts positions and names are editable, so
+ * neither may decide which stored `gene` / `action` / `species` / `notes`
+ * belongs to which target. A target without a stored id cannot establish
+ * identity, so it is deliberately absent — the form never guesses which
+ * original target a row represents (the repository assigns a fresh id to
+ * rows that arrive without one). Each entry carries only the fields the
+ * record actually has; nothing is defaulted or synthesized, so absent
+ * metadata stays absent.
+ */
+function storedTargetMetadata(drug: Drug | undefined): Map<string, TargetMetadata> {
+  const byTarget = new Map<string, TargetMetadata>()
+  if (drug === undefined) return byTarget
+  for (const target of drug.targets) {
+    if (target.id === undefined) continue
+    byTarget.set(target.id, {
+      ...(target.gene !== undefined ? { gene: target.gene } : {}),
+      ...(target.action !== undefined ? { action: target.action } : {}),
+      ...(target.species !== undefined ? { species: target.species } : {}),
+      ...(target.notes !== undefined ? { notes: target.notes } : {}),
+    })
   }
   return byTarget
 }
@@ -210,8 +252,10 @@ function buildInput(
   original: Drug | undefined,
 ): DrugInput {
   const stored = storedProvenance(original)
+  const metadata = storedTargetMetadata(original)
   const targets: TargetInput[] = cleaned.map((row) => {
     const prior = row.id !== undefined ? stored.get(row.id) : undefined
+    const meta = row.id !== undefined ? metadata.get(row.id) : undefined
     const byKind: Partial<Record<ParamKind, ScientificValue>> = {}
     for (const param of row.params) {
       if (param.kind === '') continue
@@ -236,6 +280,16 @@ function buildInput(
     return {
       ...(row.id !== undefined ? { id: row.id } : {}),
       name: row.name,
+      // Supported target-level metadata the form cannot edit: reattached
+      // from the stored record by stable target id (never by position,
+      // name or parameter similarity) so an unrelated edit — including a
+      // row removal that shifts positions — never silently drops it. Each
+      // key is emitted only when that exact stored target has it: absent
+      // stays absent, present values are written back unchanged.
+      ...(meta?.gene !== undefined ? { gene: meta.gene } : {}),
+      ...(meta?.action !== undefined ? { action: meta.action } : {}),
+      ...(meta?.species !== undefined ? { species: meta.species } : {}),
+      ...(meta?.notes !== undefined ? { notes: meta.notes } : {}),
       ...(byKind.kd !== undefined ? { kd: byKind.kd } : {}),
       ...(byKind.ki !== undefined ? { ki: byKind.ki } : {}),
       ...(byKind.ec50 !== undefined ? { ec50: byKind.ec50 } : {}),

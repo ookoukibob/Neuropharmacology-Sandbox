@@ -2,8 +2,11 @@
  * Edit → persistence integration tests (jsdom + fake-indexeddb, real Dexie
  * repository): a save through the actual detail → form → store → repository
  * chain writes unchanged parameters with their whole provenance (citation,
- * DOI, URL, unknown extension keys included) into the stored record, and
- * stamps user provenance only on the parameter that actually changed.
+ * DOI, URL, unknown extension keys included) into the stored record, stamps
+ * user provenance only on the parameter that actually changed, and keeps
+ * the supported target-level metadata (`gene`, `action`, `species`,
+ * `notes`) of every surviving target in the raw stored row — matched by
+ * stable target id, never by position or name.
  * All fixture values are synthetic test data — not pharmacological
  * information.
  */
@@ -50,11 +53,18 @@ beforeEach(async () => {
       {
         id: 'fixture-target-1',
         name: 'TEST-R',
+        // Full supported target metadata on the first target, partial
+        // (gene only) on the second, none expected to migrate either way.
+        gene: 'SYNTH-P1',
+        action: 'modulator',
+        species: 'synthetic',
+        notes: 'Synthetic target metadata — not pharmacological information.',
         kd: { value: 12.4, unit: 'nM', provenance: LITERATURE },
       },
       {
         id: 'fixture-target-2',
         name: 'TEST-S',
+        gene: 'SYNTH-P2',
         kd: { value: 12.4, unit: 'nM', provenance: USER_PROVENANCE },
         ic50: { value: 88, unit: 'nM', provenance: USER_PROVENANCE },
       },
@@ -146,5 +156,122 @@ describe('DrugForm — edit persistence (real repository)', () => {
     // The unaffected sibling parameters are untouched in storage.
     expect(raw?.targets[1]?.kd?.provenance).toEqual(USER_PROVENANCE)
     expect(raw?.targets[1]?.ic50?.provenance).toEqual(USER_PROVENANCE)
+  })
+
+  it('keeps target gene/action/species/notes in the raw stored row after an unrelated edit', async () => {
+    renderDetail()
+    fireEvent.click(screen.getByTestId('edit-drug'))
+    fireEvent.change(screen.getByTestId('drug-name'), {
+      target: { value: 'Fixture Compound A Renamed' },
+    })
+    fireEvent.change(screen.getByLabelText(/^Tags/), { target: { value: 'fixture, edited' } })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await waitFor(() => expect(screen.queryByTestId('drug-form')).not.toBeInTheDocument())
+
+    // The raw IndexedDB row still carries every supported metadata field
+    // on the target that had them — with stable ids and untouched
+    // provenance (the Phase 9A rule) — and the edited drug fields changed.
+    const raw = await storedRecord()
+    expect(raw?.identifiers.name).toBe('Fixture Compound A Renamed')
+    expect(raw?.tags).toEqual(['fixture', 'edited'])
+    expect(raw?.targets).toHaveLength(2)
+    expect(raw?.targets[0]).toMatchObject({
+      id: 'fixture-target-1',
+      name: 'TEST-R',
+      gene: 'SYNTH-P1',
+      action: 'modulator',
+      species: 'synthetic',
+      notes: 'Synthetic target metadata — not pharmacological information.',
+    })
+    expect(raw?.targets[0]?.kd?.value).toBe(12.4)
+    expect(raw?.targets[0]?.kd?.provenance).toEqual(LITERATURE)
+
+    // The second target keeps only its own gene: no field migrated over
+    // and nothing was fabricated (an explicit `undefined` key would fail
+    // `not.toHaveProperty` just like a wrong value).
+    expect(raw?.targets[1]).toMatchObject({ id: 'fixture-target-2', gene: 'SYNTH-P2' })
+    expect(raw?.targets[1]).not.toHaveProperty('action')
+    expect(raw?.targets[1]).not.toHaveProperty('species')
+    expect(raw?.targets[1]).not.toHaveProperty('notes')
+    expect(raw?.targets[1]?.kd?.provenance).toEqual(USER_PROVENANCE)
+    expect(raw?.targets[1]?.ic50?.provenance).toEqual(USER_PROVENANCE)
+
+    // A fresh repository read hydrates the same metadata and provenance.
+    const reloaded = await libraryRepository.getDrug(drugId)
+    expect(reloaded?.targets[0]).toMatchObject({
+      id: 'fixture-target-1',
+      gene: 'SYNTH-P1',
+      action: 'modulator',
+      species: 'synthetic',
+      notes: 'Synthetic target metadata — not pharmacological information.',
+    })
+    expect(reloaded?.targets[0]?.kd?.provenance).toEqual(LITERATURE)
+    expect(reloaded?.targets[1]).toMatchObject({ id: 'fixture-target-2', gene: 'SYNTH-P2' })
+    expect(reloaded?.targets[1]).not.toHaveProperty('action')
+    expect(reloaded?.targets[1]).not.toHaveProperty('species')
+    expect(reloaded?.targets[1]).not.toHaveProperty('notes')
+  })
+
+  it('never migrates removed metadata onto survivors or recreated targets in storage', async () => {
+    renderDetail()
+    fireEvent.click(screen.getByTestId('edit-drug'))
+
+    // Remove the full-metadata target, then recreate a target with the
+    // same name and the same Kd value/unit as the removed one.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Remove target TEST-R' }),
+    )
+    fireEvent.click(screen.getByTestId('add-target'))
+    const rows = screen.getAllByTestId('target-row')
+    const newRow = rows[rows.length - 1] as HTMLElement
+    fireEvent.change(within(newRow).getByLabelText('Target name *'), {
+      target: { value: 'TEST-R' },
+    })
+    fireEvent.click(within(newRow).getByTestId('add-param'))
+    fireEvent.change(within(newRow).getByLabelText('Parameter *'), { target: { value: 'kd' } })
+    fireEvent.change(within(newRow).getByLabelText('Value *'), { target: { value: '12.4' } })
+    fireEvent.change(within(newRow).getByLabelText('Unit *'), { target: { value: 'nM' } })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await waitFor(() => expect(screen.queryByTestId('drug-form')).not.toBeInTheDocument())
+
+    const raw = await storedRecord()
+    expect(raw?.targets).toHaveLength(2)
+
+    // The survivor shifted from position 1 to position 0: it keeps its own
+    // gene and provenance — never the removed target's action/species/notes.
+    expect(raw?.targets[0]).toMatchObject({ id: 'fixture-target-2', gene: 'SYNTH-P2' })
+    expect(raw?.targets[0]).not.toHaveProperty('action')
+    expect(raw?.targets[0]).not.toHaveProperty('species')
+    expect(raw?.targets[0]).not.toHaveProperty('notes')
+    expect(raw?.targets[0]?.kd?.provenance).toEqual(USER_PROVENANCE)
+    expect(raw?.targets[0]?.ic50?.provenance).toEqual(USER_PROVENANCE)
+
+    // The recreated target is a new identity: the repository assigned it a
+    // fresh id, it carries no metadata (name matching never reattaches the
+    // removed target's fields), and its parameter is a normal user entry.
+    const recreated = raw?.targets[1]
+    expect(recreated?.name).toBe('TEST-R')
+    expect(typeof recreated?.id).toBe('string')
+    expect(recreated?.id).not.toBe('')
+    expect(recreated?.id).not.toBe('fixture-target-1')
+    expect(recreated).not.toHaveProperty('gene')
+    expect(recreated).not.toHaveProperty('action')
+    expect(recreated).not.toHaveProperty('species')
+    expect(recreated).not.toHaveProperty('notes')
+    expect(recreated?.kd?.value).toBe(12.4)
+    expect(recreated?.kd?.provenance).toMatchObject({ type: 'user' })
+    const freshStamp = recreated?.kd?.provenance as { recordedAt?: unknown } | undefined
+    expect(freshStamp?.recordedAt).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    )
+    expect(freshStamp?.recordedAt).not.toBe(FIXTURE_TIMESTAMP)
+
+    // The fresh read agrees with the raw row.
+    const reloaded = await libraryRepository.getDrug(drugId)
+    expect(reloaded?.targets[0]).toMatchObject({ id: 'fixture-target-2', gene: 'SYNTH-P2' })
+    expect(reloaded?.targets[0]).not.toHaveProperty('action')
+    expect(reloaded?.targets[1]?.name).toBe('TEST-R')
+    expect(reloaded?.targets[1]).not.toHaveProperty('gene')
+    expect(reloaded?.targets[1]).not.toHaveProperty('notes')
   })
 })
