@@ -497,7 +497,7 @@ supplied by data.
 - [x] A deep link whose `?model=…` differs from the store default no longer
       ping-pongs between the URL→store and store→URL syncs (unit regression).
 - [x] Docs synchronized (README, this document, `docs/testing.md`); gates
-      green: typecheck, lint, unit tests (578), build, E2E (23).
+      green: typecheck, lint, unit tests (579), build, E2E (23).
 
 ---
 

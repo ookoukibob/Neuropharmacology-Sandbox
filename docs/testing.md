@@ -238,7 +238,7 @@ lossy edges are listed in `docs/validation.md` §7.
 | Calculator tests (adapters, store, schemas, components) | done — drafts, stale semantics, curve settings, PK mode union |
 | CSV tests (parse, write, export, mapping, conversion) | done — quoting/escaping/BOM/errors, spreadsheet formula-injection guard (text cells protected, numeric cells byte-exact), stable header, provenance columns, ambiguity + unit rules, CSV → NPSL document, grouping, row errors |
 | Import/export UI tests | done — preview-before-write, replace gate, cancel, CSV mapping flow, export contents + object-URL lifecycle, committed-but-refresh-failed report (never "nothing was written"), quarantine export warning (visible with data, silent when empty) |
-| Test suite total | 578 unit tests (35 files) |
+| Test suite total | 579 unit tests (35 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
 | Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
 | Library reload e2e | done — 1 persistence workflow (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload |
