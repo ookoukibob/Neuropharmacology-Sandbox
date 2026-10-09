@@ -261,6 +261,92 @@ there is exactly one source of truth and one write path.
 
 ---
 
+## ADR-18 · Separate `.npsb` recovery archive; quarantine stays derived
+
+**Context.** Ordinary exports (`.npsl`/`.json`/`.csv`) intentionally exclude
+quarantined rows — `exportLibrary()` returns readable drugs only and the
+UI announces the excluded count — so no current format is a complete
+storage snapshot. Recovering an invalid raw row verbatim is impossible
+through `replaceLibrary()`/`importLibrary()`, which rebuild domain records
+and re-validate them with `drugSchema`. Losing quarantined or
+unknown-field data permanently is the failure this phase exists to
+prevent; the full contract is `docs/recovery-backup.md` (Phase 8A —
+designed only, not implemented).
+
+**Decision.**
+- **Separate format, not an NPSL extension.** `.npsb` (`formatId: "npsb"`,
+  independent `backupVersion`, strict seven-key envelope, row entries
+  `{key, value, specialNumbers?}`) keeps ordinary import strict: a `.npsb`
+  file fails `parseNpsl()` (no `formatVersion`) and an `.npsl` file fails
+  the recovery format check — mutual rejection, both tested.
+- **Quarantine stays derived** (ADR-15): rows are stored raw; each build
+  classifies them at hydration. The archive records export-time counts as
+  *information*; restore reproduces rows verbatim and reports both the
+  archive's classification and the receiving build's — it never mutates or
+  rejects rows to make them agree. No second quarantine store: it would
+  duplicate validity truth, freeze export-build judgments and need its own
+  migration (a future "user acknowledged" flag would be its own ADR).
+- **Restore = full snapshot replacement in one transaction** (`clear` +
+  raw `put` of every `drugs`/`meta` entry; all meta rows, not only the
+  first), with complete validation — size, duplicate JSON keys, parse,
+  format id, version, envelope/entry shapes, key ≡ `value.id`, duplicate
+  keys, sidecar placeholders, counts — *before* the transaction opens.
+  Any in-transaction failure aborts with full rollback (same guarantee
+  `replaceLibrary` relies on). Raw writes bypass `drugSchema` **only**
+  inside this dedicated operation; `drugSchema`, `importLibrary` and
+  `replaceLibrary` are untouched. Outcomes mirror import: `rejected` /
+  `failed` (rolled back, previous library intact) / `ok` /
+  `committed-refresh-failed` (committed — never reported as rollback,
+  never auto-re-run).
+- **Supported value domain = JSON domain plus four numeric shapes.**
+  `null`/booleans/strings/dense arrays/plain objects round-trip as JSON;
+  `-0`, `NaN`, `±Infinity` are restored exactly via an entry-level
+  `specialNumbers` sidecar (RFC 6901 pointers, own-property-only
+  resolution, placeholder checks) and are verified by re-parsing the
+  serialized output and deep-comparing (`Object.is` leaves; prototypes and
+  key order non-contractual) **before** any download. Everything else
+  (`Date`, `Map`, binary, `BigInt`, `undefined`, sparse holes, cycles,
+  non-string keys, …) fails the export with store/key/path/type — never
+  coerced, omitted or partially written. No general-purpose serializer:
+  those states are unreachable through the application's write paths.
+- **Keys and metadata:** primary keys are captured from `cursor.key`
+  (not the display-only `recordKey()`), string keys only (every write path
+  validates `id: z.string().min(1)`; non-string keys imply external
+  writes → explicit export failure), and `key ≡ value.id` is enforced on
+  restore; duplicate keys are rejected pre-write because IDB `put`
+  silently overwrites. All `meta` rows are captured and restored (the app
+  itself reads only the first).
+- **No checksum in v1.** Valid JSON and structural validation prove
+  schema conformance only — not integrity or authenticity — and the docs
+  say so plainly; a checksum would first need an algorithm + canonical
+  byte definition (envelope change → minor bump), and would not add
+  authenticity anyway.
+
+**Alternatives rejected.** *Extending the NPSL envelope with raw rows* —
+turns ordinary import into a validation escape hatch and breaks `drugs[]`
+meaning (ADR-8). *Persistent quarantine store* — dual sources of truth,
+staleness on every write, mandatory migration; ADR-15 already suffices.
+*Merge restore* — undefined update/delete semantics for schema-invalid
+rows; silent-loss territory. *Encoding every structured-clone type* — a
+general-purpose serializer whose escaping bugs become the new data-loss
+risk, for states the contract never produces. *Silently normalizing `-0`
+→ `0`* — `JSON.stringify`'s default, invisible value change; forbidden.
+*Requiring a boundary failure on `-0`/`±Infinity` too* — these are
+reachable today (form `-0`, `1e400` in unknown fields) and unremovable
+through the UI, which would deadlock the one feature meant to preserve
+them.
+
+**Consequences.** Phase 8B implements export/preview/restore strictly to
+`docs/recovery-backup.md` (error codes, limits, outcome taxonomy and test
+matrix are already specified); the fidelity boundary is testable
+(export-side scan + post-serialization verification), and future schema
+changes that add object stores or widen the value domain must bump
+`backupVersion` in the same change. Until 8B ships, no backup/restore
+code exists and `.npsl` remains interchange only — explicitly not a
+complete storage backup.
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

@@ -296,6 +296,13 @@ repository exportLibrary()
                              apostrophe — validation.md §7 and spec-review.md §6)
 ```
 
+None of these three exports is a complete storage snapshot: quarantined
+raw rows are excluded from all of them and the UI announces the excluded
+count, so ordinary exports must never be presented as full backups. The
+planned full-storage format is the separate `.npsb` recovery archive
+(phase 8): the contract is designed (8A — [recovery-backup.md](recovery-backup.md),
+ADR-18), the export/restore implementation is pending (8B).
+
 ### 4.6 Calculator state (session-only)
 
 The calculator store is transient UI state; it never touches IndexedDB
@@ -352,6 +359,7 @@ later phase.
 | 5 | Import/export UI (.npsl, JSON, CSV with field mapping) + round-trip tests | 3 | done |
 | 6 | Accessibility, keyboard workflows and library persistence E2E: semantic headings/landmarks/page titles, skip link with focus placement, accessible names and announced errors (`aria-invalid` / `aria-describedby` / `role="alert"` / `role="status"`), every core workflow operable without a mouse (library incl. row add/remove and validation recovery, calculator incl. PK parameterization, import/export incl. tabs and the replace gate), axe-core WCAG A/AA scans, a real-IndexedDB library persistence spec, narrow-viewport operability — plus the invalid-Calculate-silently-ignored fix and the URL ⇄ store deep-link loop fix | all | done |
 | 7 | Dependency security audit and safe remediation: evidence-based `npm audit` baseline (all-tree and `--omit=dev`), full dependency-path evidence for every finding, a blocking production-dependency audit in CI plus a non-blocking full-tree report, and a documented unresolved dev-only advisory with its re-check condition | – | done |
+| 8 | Lossless recovery backup for quarantined records: a separate versioned `.npsb` archive (raw valid + quarantined rows, all metadata rows, explicit fidelity boundary with numeric sidecar), replace-only restore with pre-write validation, atomic commit and commit-aware outcomes — **8A: format contract + ADR-18 (this documentation phase only)**; **8B: export/restore implementation and verification (pending)** | 3 | 8A: done · 8B: pending |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full
