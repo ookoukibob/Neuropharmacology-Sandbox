@@ -79,13 +79,14 @@ source of truth for "valid".
 Structurally valid data can still be scientifically wrong. The import
 checks are implemented as pure functions in
 `src/data/import/importPipeline.ts` with unit tests; calculator-input
-checks arrive with phase 4.
+checks are enforced by the engine's validation layer (phase 2) and
+rendered field-by-field by the calculator (phase 4).
 
 | Check | Rule | Outcome (at import) |
 | --- | --- | --- |
 | Unit known | every `unit` exists in the unit catalog | warning `UNKNOWN_UNIT` — imported exactly as declared; a calculation that *uses* it fails with the engine's `UNIT_UNKNOWN` |
 | Unit dimension | `halfLife` is time, `kd`/`ki`/`ec50`/`ic50` are molar- or mass-concentration, `bioavailability` is dimensionless | warning `UNEXPECTED_DIMENSION` — never rewritten |
-| Cross-parameter consistency | one target may not carry both `kd` and `ki` **for the same measurement** with conflicting literature sources | warning (phase 6 mapping UI) |
+| Cross-parameter consistency | one target may not carry both `kd` and `ki` **for the same measurement** with conflicting literature sources | warning (phase 5 mapping UI) |
 | Duplicate ids | unique `Drug.id`, unique `targets[].id` per drug | error `DUPLICATE_ID` — blocking |
 | Duplicate names | same `identifiers.name` twice in one file | warning `DUPLICATE_NAME` — names are labels, not identities |
 | Ranges | fraction-like values in range, non-negative where required | error (form) / engine-side (calculator) |
@@ -106,7 +107,7 @@ File selected
   → PREVIEW: file info, counts, per-record status, full error/warning list,
              field mapping UI for CSV, conflict resolution (merge/replace)
              (preview data functions ship in phase 3 — `previewNpslImport`;
-             the wizard UI with CSV field mapping is phase 6)
+             the wizard UI with CSV field mapping is phase 5)
   → user confirms
   → single Dexie transaction: metadata + drugs written atomically
   → success summary

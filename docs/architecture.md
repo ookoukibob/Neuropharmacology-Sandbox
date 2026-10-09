@@ -64,10 +64,13 @@ Strict top-down dependencies. A layer may only import from layers below it.
                 │
 ┌───────────────▼──────────────────────────────────────────────────┐
 │  Serialization / file formats                                    │
-│  src/data/schemas/**  (Zod: NPSL, CSV mapping, calculator input) │
-│  src/data/built-in/** (bundled demo libraries)                   │
+│  src/data/schemas/**  (Zod: NPSL file format; CSV mapping later) │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+Calculator input schemas are Zod too, but they are not an interchange
+format: they live next to the calculator feature
+(`src/features/calculator/schemas.ts`) and validate form drafts.
 
 Mermaid version:
 
@@ -80,7 +83,7 @@ flowchart TD
     State --> Repo
     Engine --> Domain[Domain models]
     Repo --> Domain
-    Repo --> Schemas[Schemas: Zod NPSL / CSV / input]
+    Repo --> Schemas[Schemas: Zod NPSL file format]
     Schemas --> Domain
     Charts[Chart adapter: Plotly] --> UI
     Engine -->|CurveData| Charts
@@ -121,18 +124,20 @@ src/
 │   ├── App.tsx              # RouterProvider
 │   ├── routes.tsx           # central route table
 │   ├── libraryStore.ts      # composition root: Dexie repository + Zustand store
+│   ├── calculatorStore.ts   # composition root: calculator session store
 │   ├── layout/              # AppLayout, PageHeader
 │   └── pages/               # route-level views (thin; delegate to features)
 ├── components/
 │   ├── ui/                  # shadcn/ui primitives (generated, treat as vendor code)
-│   ├── charts/              # CurveData -> Plotly adapters (phase 5)
-│   └── forms/               # shared scientific input controls (phase 4)
-├── features/                # one folder per feature (phase 3+)
-│   ├── drug-library/        #   list/detail/form views + session store (phase 3)
-│   ├── pharmacokinetics/    #   PK calculator UI
-│   ├── receptor-occupancy/  #   occupancy calculator UI
-│   ├── dose-response/       #   Hill calculator UI
-│   └── import-export/       #   import wizard, export dialog, store
+│   └── charts/              # CurveData -> Plotly adapter + lazy chart component (phase 4)
+├── features/                # one folder per feature
+│   ├── drug-library/        #   list/detail/form views (phase 3)
+│   └── calculator/          #   model adapter registry, input drafts, session store,
+│                            #   CalculatorView (phase 4)
+│       ├── schemas.ts       #   Zod structural validation of form drafts
+│       ├── store.ts         #   drafts, report, stale flags, curve settings
+│       └── components/      #   ParameterField, ResultPanel, CalculationTrace,
+│                            #   VisualizationPanel, ErrorPanel, ProvenanceBadge
 ├── domain/                  # pure domain types and guards
 │   ├── drug/                #   Drug, ReceptorTarget, Pharmacokinetics
 │   ├── pharmacology/        #   ScientificValue, units + unit catalog
@@ -142,6 +147,7 @@ src/
 │   ├── types.ts             #   CalculationReport, trace, CurveData contracts
 │   ├── index.ts             #   public API barrel
 │   ├── registry.ts          #   ModelDescriptor registry (labels, formulas, assumptions)
+│   ├── input.ts             #   engine input types (one per model)
 │   ├── numeric/             #   Decimal helpers: 12-digit report rounding, loss detection
 │   ├── validate/            #   shared input validation → typed CalculationError
 │   ├── units/               #   dimension checks + unit conversion used by models
@@ -151,17 +157,19 @@ src/
 │   ├── occupancy/           #   single-site binding model + curve generator
 │   └── dose-response/       #   Hill equation + curve generator
 ├── data/
-│   ├── schemas/             # Zod schemas (NPSL now; calculator input, CSV later)
+│   ├── schemas/             # Zod schemas (NPSL file format now; CSV later)
 │   ├── db/                  # single versioned Dexie module + upgrade hooks (phase 3)
 │   ├── mappers/             # persistence DTO <-> domain, NPSL export document
 │   ├── import/              # NPSL parse -> schema -> semantic -> preview pipeline
-│   ├── built-in/            # bundled demo libraries (marked example/demo)
+│   ├── id.ts                # stable id helpers
 │   └── repositories/        # repository interface + Dexie implementation (phase 3)
 ├── tests/
 │   ├── setup.ts             # Vitest setup (jest-dom matchers)
-│   └── fixtures.ts          # synthetic, explicitly-marked test fixtures
+│   ├── report.ts            # shared report assertion helpers
+│   ├── fixtures.ts          # synthetic, explicitly-marked test fixtures
+│   └── fixtures/            # example NPSL library (marked example data)
 └── ...
-e2e/                         # Playwright specs
+e2e/                         # Playwright specs: shell + calculator workflows
 docs/                        # this documentation
 ```
 
@@ -198,14 +206,34 @@ A failed validation leaves both IndexedDB and application state untouched.
 ### 4.3 Calculation
 
 ```
-calculator inputs (validated)
-   → engine model.calculate(input)
-   → CalculationReport
-        ok: true  → inputs, formula, trace, outputs, assumptions, warnings
-        ok: false → CalculationError[] (e.g. MISSING_PARAMETER)
-   → result panel + calculation details (UI)
-   → optional: generateCurve() → CurveData → chart adapter → Plotly
+Calculator draft (Zustand, per model; PK mode is a discriminant)
+   ↓
+Zod structural validation           (presence, finite number, unit present —
+                                     never a scientific rule)
+   ↓
+model adapter                       (draft → engine input; provenance only
+                                     from an explicit library load)
+   ↓
+scientific engine                   (pure; the single scientific authority)
+   ↓
+CalculationReport
+     ok: true  → inputs, formula, trace, outputs, assumptions, warnings
+     ok: false → CalculationError[] (rendered verbatim, mapped to fields)
+   ↓
+result panel + calculation trace    (UI; no formula is recreated there)
+   ↓  explicit range + "Update curve" — never automatic
+CurveData                           (engine sampling; warnings attached,
+                                     point data never altered)
+   ↓
+chart adapter                       (CurveData → Plotly traces/layout;
+                                     never computes pharmacology)
+   ↓
+Plotly chart (lazy-loaded)
 ```
+
+No layer between the draft and the engine applies a scientific rule, and
+no layer after the engine alters curve data — axis fallbacks change the
+display only (see ADR-16).
 
 ### 4.4 Import (all-or-nothing)
 
@@ -231,6 +259,29 @@ Zustand/repository data
                              validation.md §5 and spec-review.md §6)
 ```
 
+### 4.6 Calculator state (session-only)
+
+The calculator store is transient UI state; it never touches IndexedDB
+(the library remains the source of truth) and it holds only these
+architectural guarantees:
+
+```
+Calculator Zustand store
+├── draft                active model + its inputs (PK mode discriminant)
+├── report               last CalculationReport (null | ok | failed)
+├── stale                inputs changed since `report` was calculated
+├── curve                last CurveData for the explicit range (else null)
+├── curveSettingsStale   range/scale settings changed since `curve` was
+│                        generated — an old curve is never presented as current
+└── settings             per-model curve settings: explicit range, points,
+                         x/y scales (session-only, never persisted)
+```
+
+`stale` and `curveSettingsStale` are independent on purpose: editing an
+input does not claim the curve is out of date with respect to its
+settings, and changing the range does not claim the numeric result is
+out of date with respect to its inputs.
+
 ---
 
 ## 5. Routes
@@ -238,15 +289,17 @@ Zustand/repository data
 | Path | View | Phase |
 | --- | --- | --- |
 | `/` | redirect → `/library` | 1 (done) |
-| `/library` | Drug Library | 2 |
-| `/library/:drugId` | Drug Detail (Overview / Pharmacokinetics / Targets / Provenance tabs) | 2 |
-| `/calculator` | Calculator (model selector, inputs, results, trace, charts) | 3 |
-| `/import-export` | Import / Export | 4 |
-| `/settings` | Settings | 4 |
+| `/library` | Drug Library (list, filter, quarantine report, create entry point) | 3 (done) |
+| `/library/new` | New Drug Record (create form, explicit units) | 3 (done) |
+| `/library/:drugId` | Drug Detail (targets, read-only PK, provenance, edit/delete, Calculate link) | 3 (done) |
+| `/calculator` | Calculator — **implemented**: model selector, input forms, results, calculation trace, curve controls + charts | 4 (done) |
+| `/import-export` | Import / Export — placeholder (header only) | 5 |
+| `/settings` | Settings — placeholder (header only) | later |
 | `*` | Not found | 1 (done) |
 
-All placeholder views exist in `src/app/pages/` so routing, layout and
-navigation are already wired and tested.
+Every route has a page in `src/app/pages/` so routing, layout and
+navigation are wired and tested; `/import-export` and `/settings` gain
+their real content in a later phase.
 
 ---
 
@@ -257,13 +310,12 @@ navigation are already wired and tested.
 | 1 | Architecture, domain types, NPSL schema + tests, app shell, test harness | — | done |
 | 2 | Calculation engine models (PK, occupancy, Hill) + unit catalog + full unit tests + hardening (log y-axis validation, consistent numerical-loss policy, invariant coverage, CI) | 1 | done |
 | 3 | Drug library: Dexie repository, IndexedDB schema + migrations, startup hydration, transactional NPSL import, minimal library UI | 1, 2 | done |
-| 4 | Calculator UI + calculation trace rendering | 2, 3 | current |
-| 5 | Charts (CurveData → Plotly adapters, linear/log controls) | 4 | pending |
-| 6 | Import/export UI (.npsl, JSON, CSV with field mapping) + round-trip tests | 3 | pending |
-| 7 | Accessibility polish, keyboard workflows, e2e coverage | all | pending |
+| 4 | Calculator + scientific visualization: model selector, explicit parameter inputs with provenance-aware library loading, results with calculation traces, CurveData → Plotly chart adapter, linear/log controls, log-Y representability handling, curve settings state — plus the hardening pass (PK mode union fix, stale-state semantics, curve readiness separation) and the critical calculator E2E workflows | 2, 3 | done |
+| 5 | Import/export UI (.npsl, JSON, CSV with field mapping) + round-trip tests | 3 | next |
+| 6 | Accessibility polish, keyboard workflows, expanded E2E coverage | all | pending |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
-commit) ships with phase 3 at the repository level; phase 6 adds the full
+commit) ships with phase 3 at the repository level; phase 5 adds the full
 import/export UI (field mapping, CSV).
 
 Out of scope for the MVP (explicitly): backend, accounts, LLM features,
@@ -329,6 +381,40 @@ supplied by data.
 - [x] Extensive tests (mapper, migration, import pipeline, repository,
       store, views); ADR-14…17 written; docs/tree/status updated; all
       gates green; `src/engine` purity re-verified.
+
+### Definition of done — Phase 4 calculator + visualization (delivered)
+
+- [x] Model selector populated from the engine registry; input forms
+      driven by adapter field specs; PK parameterization is a
+      discriminated union with an explicit mode toggle that preserves
+      typed input in both directions.
+- [x] Explicit inputs only: no scientific default anywhere; Zod performs
+      structural validation before the engine runs and engine errors are
+      rendered verbatim and mapped back to their fields.
+- [x] Provenance-aware library loading: candidates appear only for the
+      record in context and are loaded only by explicit selection;
+      provenance rides into the report's inputs; typed values make no
+      source claim; nothing is ever auto-selected or upgraded.
+- [x] Full result rendering: outputs, formula, inputs used with
+      provenance badges, assumptions, warnings, structured calculation
+      trace.
+- [x] CurveData → Plotly behind the project-owned chart adapter (lazy
+      chart), explicit range + "Update curve", linear/log x/y controls,
+      `LOG_Y_AXIS_NOT_REPRESENTABLE` falls back to a linear y-axis while
+      the warning is surfaced verbatim; the chart never computes
+      pharmacology.
+- [x] Stale semantics: input edits, library loads and PK mode switches
+      mark the result stale; curve settings changes are tracked
+      separately (`curveSettingsStale`) so an old curve is never
+      presented as current (readiness and settings are independent).
+- [x] Hardening pass: union-safe test fixtures and adapters (0
+      TypeScript errors, no weakened types), no `@ts-ignore`/`any`
+      escapes, dropped tests restored.
+- [x] Critical E2E workflows (synthetic records only): occupancy
+      calculation, PK mode-switch regression, drug → calculator with
+      explicit load, stale-state transitions, curve workflow.
+- [x] Docs synchronized with the implementation (README, this document);
+      all gates green: typecheck, lint, unit tests, build, E2E.
 
 ---
 

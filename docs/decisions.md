@@ -228,8 +228,10 @@ results; throwing at chart time would bury the reason.
 (unknown scales are `OUT_OF_RANGE`) and, after sampling, emits exactly one
 `LOG_Y_AXIS_NOT_REPRESENTABLE` warning when a log y-axis conflicts with the
 points. Curve data is never altered — no filtering, clamping or
-recomputation. The chart layer (phase 5) must reject or fall back based on
-the warning; the warning registry documents severity `warning`.
+recomputation. The chart layer must reject or fall back based on
+the warning (implemented in phase 4: the panel surfaces the warning
+verbatim and the adapter forces a linear y-axis); the warning registry
+documents severity `warning`.
 **Consequences.** Results stay byte-identical whatever the axis choice, and
 the decision "this cannot be drawn on log-Y" reaches the UI as data. Tests
 cover positive/zero/negative/underflowed-zero/linear cases plus data

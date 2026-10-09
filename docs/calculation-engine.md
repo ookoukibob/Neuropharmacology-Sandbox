@@ -147,13 +147,15 @@ interface EngineModel<I> {
 export const MODELS: Record<ModelId, ModelDescriptor> = { ... }
 ```
 
-Why: an `EngineModel<I>` wrapper needs each model's input schema to type its
-`calculate`, which does not exist yet (schemas arrive with the calculator UI,
-phase 4), and wiring calculate functions into the registry while models
-import descriptor constants from it would create a module cycle. Models are
-exported as plain functions today (`calculateFirstOrderPK`,
-`calculateReceptorOccupancy`, `calculateHillResponse`); the `EngineModel`
-wrapper is a mechanical addition when input schemas land. A test
+Why: an `EngineModel<I>` wrapper needs each model's input schema next to its
+descriptor. The calculator (phase 4) landed Zod draft schemas that mirror the
+engine input types field-for-field, but they live with the feature
+(`src/features/calculator/schemas.ts`), not in the engine — and wiring
+calculate functions into the registry while models import descriptor
+constants from it would create a module cycle. Models are exported as plain
+functions today (`calculateFirstOrderPK`, `calculateReceptorOccupancy`,
+`calculateHillResponse`); the `EngineModel` wrapper remains a mechanical
+addition if engine-owned input schemas land. A test
 (`src/engine/registry.test.ts`) guards key/descriptor drift.
 
 Implemented models:
@@ -290,8 +292,9 @@ The engine contains no model that maps:
 
 such a model would require an explicit validated formulation plus all of its
 parameters. Without them, `MODEL_NOT_APPLICABLE` is the answer — the code is
-part of the taxonomy now and is documented as *reserved* until a UI-level
-"unsupported calculation" path emits it (phase 4). The Hill model
+part of the taxonomy now and is documented as *reserved*: the engine has no
+producer — the calculator (phase 4) renders it only as the display code for
+engine errors that map to no specific field. The Hill model
 outputs `E` — a dimensionless mathematical response scaled by user-supplied
 `E0`/`Emax` — and is labeled a model result, never "efficacy".
 

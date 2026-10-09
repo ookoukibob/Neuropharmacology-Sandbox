@@ -29,19 +29,39 @@ and unverified data. It never invents pharmacological parameters.
 **Phase 1 — technical foundation (complete).**
 **Phase 2 — scientific calculation engine (complete, after a hardening pass).**
 **Phase 3 — drug library + local persistence (complete).**
+**Phase 4 — calculator + scientific visualization (complete, after a
+hardening and closure pass).**
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
 | 1 | Architecture, domain types, NPSL schema + tests, app shell, test harness | done |
 | 2 | Calculation engine: first-order PK, single-site occupancy, Hill response, chart-agnostic curves, unit catalog, Decimal.js numerics, calculation traces, provenance propagation — plus the hardening pass (log y-axis validation, consistent numerical-loss reporting, invariant coverage, GitHub Actions CI) | done |
 | 3 | Drug library: Dexie/IndexedDB persistence behind a repository abstraction, versioned schema with in-place migration, startup hydration with quarantine reporting, transactional NPSL import (preview → all-or-nothing commit), minimal library UI (list/select/create/edit/delete with provenance display), export → import round trip | done |
-| 4 | Calculator UI + calculation trace rendering | current |
-| 5 | Charts (CurveData → Plotly adapters, linear/log controls) | pending |
-| 6 | Import/export UI (.npsl, JSON, CSV with field mapping) | pending |
-| 7 | Accessibility polish, keyboard workflows, e2e coverage | pending |
+| 4 | Calculator + visualization: model selector, explicit parameter inputs, provenance-aware library loading (explicit selection only), calculation results with structured traces, CurveData → Plotly chart adapter, linear/log controls, log-Y representability handling, curve settings state — plus the hardening pass (PK mode union fix, stale-state semantics, curve readiness separation) and the critical calculator E2E workflows | done |
+| 5 | Import/export UI (.npsl, JSON, CSV with field mapping) | next |
+| 6 | Accessibility polish, keyboard workflows, expanded E2E coverage | pending |
+
+### What works today
+
+- A local drug library: create, edit and delete records in the browser
+  (IndexedDB). Every stored scientific value carries explicit provenance;
+  the application never invents a parameter or a source.
+- The three MVP scientific models — first-order one-compartment
+  elimination, single-site receptor occupancy, Hill/Emax dose–response —
+  calculated only from explicit user-entered parameters or values
+  explicitly loaded from the library.
+- Structured calculation traces: formula, substituted inputs,
+  intermediate steps, assumptions and warnings for every result.
+- Chart-agnostic curve data sampled by the engine over an explicit range,
+  visualized with Plotly behind a project-owned adapter, with linear/log
+  axis controls and log-Y representability handling.
+- Provenance preserved end to end: a library-loaded value keeps its
+  provenance badge in the input and in the report's inputs used; typed
+  values are labelled as making no source claim.
+- Fully static: no backend, no accounts, no cloud sync.
 
 All quality gates run locally and in CI (`.github/workflows/ci.yml`):
-typecheck, lint, tests, build, and the Playwright smoke test.
+typecheck, lint, tests, build, and the Playwright end-to-end workflows.
 
 See [docs/architecture.md](docs/architecture.md) for the roadmap and
 [docs/spec-review.md](docs/spec-review.md) for specification issues found

@@ -457,8 +457,18 @@ export function setPKMode<M extends 'halfLife' | 'k'>(
 export function setPKMode(draft: CalculatorDraft, mode: 'halfLife' | 'k'): CalculatorDraft
 export function setPKMode(draft: CalculatorDraft, mode: 'halfLife' | 'k'): CalculatorDraft {
   if (draft.model !== 'pk.first-order-one-compartment') return draft
-  // Mode is a discriminant, not a ParameterDraft. We create a new valid PK draft branch.
-  return { ...draft, mode } as CalculatorDraft
+  // Mode is a discriminant, not a ParameterDraft: switching keeps the
+  // shared fields (c0, time) and the inactive mode's parameter (so typed
+  // input survives a round trip back) while presenting the requested
+  // branch. The inactive parameter is read through the union-safe
+  // accessor; only a hand-built draft that never carried it (tests) gets
+  // a fresh empty one, because the branch type requires the field.
+  if (mode === 'halfLife') {
+    const halfLife = getDraftField(draft, 'halfLife')
+    return { ...draft, mode, halfLife: halfLife ?? emptyParameter() }
+  }
+  const k = getDraftField(draft, 'k')
+  return { ...draft, mode, k: k ?? emptyParameter() }
 }
 
 /** Get all visible field specs for a draft. */

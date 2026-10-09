@@ -191,7 +191,7 @@ structures get Zod schemas next to their types; the literature-provenance
 form must have distinct source/citation/DOI/URL fields with `source`
 required (`docs/validation.md` §2). *Open:* whether DOI/URL fields are
 format-validated strictly or only warned about — to be settled with the
-form implementation (phase 4).
+literature-provenance form, which the phase-4 calculator did not include.
 
 ---
 

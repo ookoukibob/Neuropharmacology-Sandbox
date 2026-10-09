@@ -86,13 +86,25 @@ Critical workflows only (each one is a spec-level guarantee):
 
 1. Shell: load → navigate between views → boundary notice visible
    (`e2e/shell.spec.ts`, implemented).
-2. Library: create drug → enter parameter with provenance → detail page
-   shows provenance → reload → still present (persistence).
-3. Calculator: select model → missing input → error rendered → fill inputs →
-   trace shows formula and intermediates → curve renders.
+2. Calculator (`e2e/calculator.spec.ts`, implemented — all synthetic
+   values, records tagged as test fixtures):
+   - occupancy calculation → result, formula, calculation trace;
+   - PK half-life ↔ rate-constant switching preserves inputs and
+     recalculates (regression for the discriminated-union bug);
+   - drug → calculator: candidate visible but never auto-selected,
+     explicit load carries provenance into the report;
+   - stale state: input edits and library loads mark the result stale
+     until recalculated;
+   - curve workflow: explicit range → chart container, settings changes
+     flagged until "Update curve".
+3. Library: create drug → enter parameter with provenance → detail page
+   shows provenance → reload → still present (persistence) — covered by
+   component + repository tests today; a dedicated e2e joins the
+   expanded coverage of phase 6.
 4. Import: import invalid file → error listed, library unchanged; import valid
-   file → records appear with provenance intact.
-5. Export: export `.npsl` → re-import → data equal (round trip through UI).
+   file → records appear with provenance intact (phase 5, with the wizard UI).
+5. Export: export `.npsl` → re-import → data equal (round trip through UI;
+   phase 5).
 
 Config: `playwright.config.ts` (chromium; dev server auto-started).
 
@@ -159,5 +171,7 @@ which fields survive (`docs/validation.md` §7).
 | Repository tests | done — CRUD, metadata stamping, quarantine, atomic replace/import rollback, NPSL round trip, reload |
 | Import pipeline tests | done — parse/schema/semantic/preview classification |
 | Store + library UI tests | done — hydration guard, quarantine report, form safeguards |
-| Test suite total | 287 tests |
-| Library/calculator/import e2e | calculator + import wizard e2e (phases 4, 6); library covered by component + repository tests |
+| Calculator tests (adapters, store, schemas, components) | done — drafts, stale semantics, curve settings, PK mode union |
+| Test suite total | 441 unit tests (28 files) |
+| Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
+| Library reload / import / export e2e | pending — import wizard e2e with phase 5, expanded coverage (incl. library reload) with phase 6; library covered today by component + repository tests |
