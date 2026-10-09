@@ -351,6 +351,7 @@ later phase.
 | 4 | Calculator + scientific visualization: model selector, explicit parameter inputs with provenance-aware library loading, results with calculation traces, CurveData → Plotly chart adapter, linear/log controls, log-Y representability handling, curve settings state — plus the hardening pass (PK mode union fix, stale-state semantics, curve readiness separation) and the critical calculator E2E workflows | 2, 3 | done |
 | 5 | Import/export UI (.npsl, JSON, CSV with field mapping) + round-trip tests | 3 | done |
 | 6 | Accessibility, keyboard workflows and library persistence E2E: semantic headings/landmarks/page titles, skip link with focus placement, accessible names and announced errors (`aria-invalid` / `aria-describedby` / `role="alert"` / `role="status"`), every core workflow operable without a mouse (library incl. row add/remove and validation recovery, calculator incl. PK parameterization, import/export incl. tabs and the replace gate), axe-core WCAG A/AA scans, a real-IndexedDB library persistence spec, narrow-viewport operability — plus the invalid-Calculate-silently-ignored fix and the URL ⇄ store deep-link loop fix | all | done |
+| 7 | Dependency security audit and safe remediation: evidence-based `npm audit` baseline (all-tree and `--omit=dev`), full dependency-path evidence for every finding, a blocking production-dependency audit in CI plus a non-blocking full-tree report, and a documented unresolved dev-only advisory with its re-check condition | – | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full
@@ -499,6 +500,36 @@ supplied by data.
 - [x] Docs synchronized (README, this document, `docs/testing.md`); gates
       green: typecheck, lint, unit tests (579), build, E2E (23).
 
+### Definition of done — Phase 7A dependency security audit and remediation (delivered)
+
+- [x] Baseline captured before any change: `npm audit`, `npm audit --json`,
+      `npm audit --omit=dev`, `npm audit --omit=dev --json`,
+      `npm ls --all` and `npm ls shadcn fast-glob braces`, each interpreted
+      rather than treated as an exit-code pass/fail.
+- [x] Production tree verified clean: **0 vulnerabilities** across 326
+      production packages (verified with the local npm 11.19.0 and again
+      with npm 10.9.4, the npm-10 major that CI's Node 22 provides). Every
+      flagged package is `dev: true` in the
+      lockfile, absent from `npm ls --omit=dev`, and unreferenced by `src/`
+      and `e2e/`.
+- [x] All 7 high findings traced to one advisory — `braces` ≤ 3.0.3
+      (GHSA-vfj7-8cjw-p6xm), reached only through the `shadcn` CLI — and
+      classified with their full paths, severity and impact. No safe
+      remediation exists today (no patched `braces` release,
+      `shadcn@4.21.4` is already the latest, `overrides` has no safe
+      version to pin, `npm audit fix --force` would break the documented
+      component workflow), so it stays unresolved and documented with a
+      concrete re-check condition instead of being hidden: no ignore
+      files, no dependency-classification changes, no manual lockfile
+      edits, no lint suppressions.
+- [x] CI hardened: the gates job blocks on `npm audit --omit=dev`
+      (retried once so a transient registry failure is not reported as a
+      finding) and reports the full-tree audit as a non-blocking step,
+      keeping the dev-only finding visible on every run.
+- [x] `package.json` and `package-lock.json` unchanged; `npm ci` still
+      reproduces the tree; gates green afterwards: typecheck, lint, unit
+      tests (579), build, E2E (23), `git diff --check`.
+
 ---
 
 ## 7. Commands
@@ -512,10 +543,33 @@ supplied by data.
 | `npm test` | Vitest (unit, schema, component) |
 | `npm run test:coverage` | Coverage for domain/engine/data |
 | `npm run test:e2e` | Playwright (first run: `npx playwright install chromium`) |
+| `npm audit --omit=dev` | Dependency security: production advisories (blocking gate in CI) |
+| `npm audit` | Dependency security: full tree (reported by CI as non-blocking) |
 
 Known tooling notes:
 
-- `npm audit` reports vulnerabilities in the `shadcn` **CLI devDependency**
-  only (transitive dev tooling). It is not shipped in the build.
+- **Dependency audit (verified 2026-10-09, phase 7A).** The production tree
+  is clean: `npm audit --omit=dev` reports **0 vulnerabilities** (326 of 799
+  installed packages are production). The full tree reports **7 high**
+  findings that all trace to a single advisory — `braces` ≤ 3.0.3
+  (GHSA-vfj7-8cjw-p6xm / CVE-2026-93687, stack-exhaustion DoS, no
+  confidentiality or integrity impact) — reached only through the `shadcn`
+  **CLI devDependency**: `shadcn@4.21.4 → fast-glob@3.3.3 →
+  micromatch@4.0.8 → braces@3.0.3`, plus `shadcn → @shadcn/registry@0.1.3`
+  and `shadcn → ts-morph@26.0.0 → @ts-morph/common@0.27.0 → fast-glob`.
+  Every package on those paths is `dev: true` in the lockfile,
+  `npm ls --omit=dev` lists none of them, and nothing in `src/` or `e2e/`
+  imports them — it is not in the shipped bundle, the build, or the test
+  run, only in the interactive `shadcn add` workflow.
+  **Unresolved because no fixed release exists**: the advisory's patched
+  range is *none* and `braces@3.0.3` is the newest published version, so a
+  plain `npm audit fix` has nothing to install, an `overrides` entry would
+  have no safe version to pin, and the suggested `npm audit fix --force`
+  would downgrade `shadcn` 4.21.4 → 1.0.0 (breaking, and `shadcn add` is
+  the documented component workflow — ADR-2). **Next action:** once
+  `braces` ≥ 3.0.4 publishes, run `npm update braces` and expect
+  `npm audit` to go green. CI keeps the finding visible: the gates job
+  blocks on `npm audit --omit=dev` and runs the full-tree audit as a
+  non-blocking report.
 - `es5-ext` postinstall warning comes from Plotly's dependency chain and is
   harmless.

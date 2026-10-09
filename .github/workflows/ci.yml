@@ -20,6 +20,20 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Dependency security. The blocking gate covers the tree that is
+      # actually shipped: `npm audit --omit=dev` must find nothing (green
+      # today). The retry exists because npm audit is a live registry call
+      # and a transient network failure must not be reported as a
+      # vulnerability — a real finding fails both attempts. The full-tree
+      # report is deliberately non-blocking: the shadcn CLI chain still
+      # carries one dev-only advisory with no fixed release yet
+      # (braces <=3.0.3, GHSA-vfj7-8cjw-p6xm); it stays visible on every
+      # run and documented in docs/architecture.md "Known tooling notes".
+      - name: Audit production dependencies (blocking)
+        run: npm audit --omit=dev || npm audit --omit=dev
+      - name: Report full-tree audit (non-blocking)
+        run: npm audit
+        continue-on-error: true
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test

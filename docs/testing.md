@@ -215,7 +215,11 @@ lossy edges are listed in `docs/validation.md` §7.
   [calculation-engine.md](calculation-engine.md) §3 and gain a producing
   test the moment a producer exists.
 - `npm run typecheck` (strict), `npm run lint`, `npm test` and `npm run build`
-  must all pass before merging a change.
+  must all pass before merging a change. CI additionally requires
+  `npm audit --omit=dev` (production dependency advisories) to pass, and
+  reports the full-tree `npm audit` as a non-blocking step because of the
+  known dev-only `shadcn` chain — see `docs/architecture.md` §7
+  "Known tooling notes" for the verified baseline.
 - Coverage numbers are a smoke alarm, not a goal: an untested *case* (missing
   parameter, bad unit) matters more than an untested line.
 
@@ -244,3 +248,4 @@ lossy edges are listed in `docs/validation.md` §7.
 | Library reload e2e | done — 1 persistence workflow (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload |
 | Keyboard e2e | done — 6 workflows (`e2e/keyboard.spec.ts`): skip link, navigation, drug form recovery, calculator, import/export confirmation, narrow-viewport operability |
 | Accessibility e2e | done — 4 scans (`e2e/a11y.spec.ts`) covering 12 stable states with axe-core WCAG A/AA tags; no rules disabled, no violations suppressed (0 violations) |
+| Dependency security gate | done — `npm audit --omit=dev`: 0 production vulnerabilities (blocking in CI); full tree: 7 high, all dev-only, from one advisory with no fixed release (`braces` ≤ 3.0.3, GHSA-vfj7-8cjw-p6xm), reported non-blocking |

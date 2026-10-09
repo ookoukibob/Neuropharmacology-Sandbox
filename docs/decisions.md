@@ -271,4 +271,9 @@ there is exactly one source of truth and one write path.
   sync). Components were relocated to `src/components/ui` after the CLI wrote
   them to a literal `@\` folder.
 - `npm audit` flags dev-only transitive deps of the `shadcn` CLI package; it
-  does not affect the shipped bundle.
+  does not affect the shipped bundle. Phase 7A verified this precisely:
+  production audit clean (0 vulnerabilities), full tree 7 high from a single
+  advisory with **no fixed release** (`braces` ≤ 3.0.3,
+  GHSA-vfj7-8cjw-p6xm). CI therefore blocks on `npm audit --omit=dev` and
+  reports the full tree without blocking; the re-check condition and full
+  dependency paths live in `docs/architecture.md` §7 "Known tooling notes".
