@@ -53,7 +53,14 @@ Errors block the operation; warnings are surfaced in the preview but do not.
   `calculated` → `model`, `derived` → `method` + `from`;
 - normalization defaults for omitted collections (`tags`, `targets`,
   `synonyms`, `pharmacokinetics`, `dataStatus`);
-- forward compatibility: unknown keys are preserved, never silently dropped.
+- forward compatibility: unknown keys are kept by the loose parse and
+  preserved end-to-end — inside `libraryMetadata` and inside every nesting
+  level of a drug record (root, identifiers, targets, parameters,
+  provenance, pharmacokinetics) through preview → import → storage →
+  export (Merge collision policy in `docs/npsl-format.md` §6). Unknown
+  keys at the top level of the envelope have no storage location; they are
+  reported as warning `ENVELOPE_FIELDS_DROPPED` instead of being dropped
+  silently.
 
 The same Zod-first approach is used for calculator inputs and user-defined
 drug forms (phases 3–4): every user-editable structure has a schema next to
@@ -122,6 +129,19 @@ Guarantees:
   with reasons; the user chooses to fix the file or skip them explicitly.
 - **No provenance upgrades** during import (see
   [provenance.md](provenance.md) §2).
+- **Extension fields preserved; Merge collisions deterministic.** Unknown
+  fields accepted by the loose schema survive the full round trip at every
+  supported nesting level (drug root, identifiers, targets, parameters,
+  provenance, pharmacokinetics, library metadata). On Merge of an existing
+  id, the incoming file wins a key collision and stored-only extensions are
+  kept — incoming extensions are never silently discarded. Unknown
+  envelope-level fields are reported as `ENVELOPE_FIELDS_DROPPED` because
+  storage has nowhere to keep them.
+- **Honest commit reporting.** A committed transaction is never presented
+  as a rollback: if the session refresh *after* a successful commit fails,
+  the outcome is `committed-refresh-failed` — the UI states the records
+  were written, shows the original refresh error, and offers a session
+  refresh retry (the import itself is never re-run automatically).
 
 Validation of existing data at startup: on boot, the repository layer
 validates/migrates persisted records. Migration never discards data
@@ -216,6 +236,20 @@ CSV is structurally weaker than JSON:
   cell; storage `origin` stays its own column, distinct from provenance.
   The UI shows an always-visible warning that CSV is a lossy projection
   and recommends `.npsl` for backup (see `spec-review.md` §6).
+- **Export — spreadsheet formula-injection guard.** Spreadsheets can
+  *execute* text cells that start with `=`, `+`, `-` or `@` — including
+  behind leading whitespace or control characters they trim first. Every
+  text cell (ids, names, notes, units, enum cells, timestamps, provenance
+  cells) therefore passes through a guard before RFC-4180 quoting:
+  dangerous cells gain a leading apostrophe (the established spreadsheet
+  text marker), ordinary text is emitted byte-identically, and numeric
+  value cells (`String(finite number)`) are never touched, so legitimate
+  values such as `-2.5`, `0` and `1e-9` survive exactly. The guard exists
+  only in the export representation — the in-memory library and its
+  records are never modified — and a CSV re-import keeps the apostrophe
+  verbatim. This is a documented mitigation, not a proof: how consumers
+  treat the marker varies, which is one more reason CSV is never the
+  authoritative backup (the UI states both facts).
 
 ---
 

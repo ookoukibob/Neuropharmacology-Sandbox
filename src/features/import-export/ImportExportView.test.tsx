@@ -94,6 +94,68 @@ describe('ImportExportView — NPSL import', () => {
     })
   })
 
+  it('shows a committed report — not "nothing was written" — when the refresh fails after commit', async () => {
+    // Drive the UI branch deterministically: the store returns the
+    // committed-but-refresh-failed outcome (the store's own behavior is
+    // covered in store.test.ts against the real Dexie repository).
+    const originalImportLibrary = useLibraryStore.getState().importLibrary
+    let importCalls = 0
+    useLibraryStore.setState({
+      importLibrary: async () => {
+        importCalls += 1
+        return {
+          status: 'committed-refresh-failed',
+          report: {
+            ok: true,
+            mode: 'merge',
+            total: 1,
+            created: 1,
+            updated: 0,
+            warnings: [],
+          },
+          message: 'post-commit read failure',
+        }
+      },
+    })
+    try {
+      render(<ImportExportView />)
+
+      fireEvent.change(screen.getByTestId('npsl-file-input'), {
+        target: { files: [file(NPSL_ONE, 'library.npsl', 'application/json')] },
+      })
+      await screen.findByTestId('import-preview')
+      fireEvent.click(screen.getByTestId('confirm-import'))
+
+      // The report states the commit explicitly, with counts and the
+      // ORIGINAL refresh error as the recovery context.
+      const report = await screen.findByTestId('import-report')
+      expect(report).toHaveTextContent('Import committed — session refresh failed')
+      expect(report).toHaveTextContent('1 created, 0 updated')
+      expect(screen.getByTestId('refresh-error')).toHaveTextContent('post-commit read failure')
+      expect(screen.getByTestId('retry-refresh')).toBeEnabled()
+
+      // Never the rollback wording for a committed import.
+      expect(report).not.toHaveTextContent(/nothing was written/i)
+      expect(report).not.toHaveTextContent(/library is unchanged/i)
+
+      // The committed preview is cleared — Confirm cannot be pressed again.
+      expect(screen.queryByTestId('import-preview')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('confirm-import')).not.toBeInTheDocument()
+      expect(importCalls).toBe(1)
+
+      // Retrying refreshes the session — it never re-runs the import.
+      fireEvent.click(screen.getByTestId('retry-refresh'))
+      await waitFor(() =>
+        expect(screen.getByTestId('library-record-count')).toHaveTextContent(
+          'Current library: 0 records',
+        ),
+      )
+      expect(importCalls).toBe(1)
+    } finally {
+      useLibraryStore.setState({ importLibrary: originalImportLibrary })
+    }
+  })
+
   it('blocks malformed input with visible errors and writes nothing', async () => {
     render(<ImportExportView />)
 
@@ -318,6 +380,35 @@ describe('ImportExportView — export', () => {
     expect(csvText).toContain('Synthetic fixture source')
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-1')
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-2')
+  })
+
+  it('warns about quarantined records during export — and stays quiet when quarantine is empty', async () => {
+    await libraryRepository.replaceLibrary(syntheticLibrary([syntheticDrug()]))
+    render(<ImportExportView />)
+    activateTab('tab-export')
+
+    // Empty quarantine: no noisy warning.
+    expect(screen.queryByTestId('export-quarantine-warning')).not.toBeInTheDocument()
+
+    // Seed an invalid stored record (quarantine = invalid rows reported on
+    // hydration, never deleted) and re-hydrate the session.
+    const db = new SandboxDatabase()
+    await db.drugs.put({ id: 'quarantined-1', origin: 'bogus' } as never)
+    await useLibraryStore.getState().hydrate()
+
+    const warning = await screen.findByTestId('export-quarantine-warning')
+    expect(warning).toHaveTextContent('1 stored record failed validation')
+    expect(warning).toHaveTextContent('NOT included')
+    expect(warning).toHaveTextContent('not a complete backup')
+
+    // Exports exclude the quarantined record — never silently inserted,
+    // and the exported count is the validated record count.
+    fireEvent.click(screen.getByTestId('export-npsl'))
+    await screen.findByTestId('export-status')
+    expect(screen.getByTestId('export-status')).toHaveTextContent('1 record')
+    const exported = JSON.parse(await captured[0]!.text()) as { drugs: { id: string }[] }
+    expect(exported.drugs).toHaveLength(1)
+    expect(exported.drugs[0]?.id).toBe('fixture-drug-1')
   })
 
   it('surfaces an export failure as an error status', async () => {

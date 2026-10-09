@@ -63,7 +63,8 @@ hardening and closure pass).**
   anything is written (replace needs an explicit acknowledgement), CSV
   imports go through a visible column-mapping step with declared units,
   and the whole library exports to a lossless `.npsl`/`.json` or a
-  lossy-but-convenient CSV that always warns it is not a backup format.
+  lossy-but-convenient CSV that always warns it is not a backup format
+  (its text cells are guarded against spreadsheet formula injection).
 - Fully static: no backend, no accounts, no cloud sync.
 
 All quality gates run locally and in CI (`.github/workflows/ci.yml`):

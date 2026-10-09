@@ -312,6 +312,69 @@ describe('createLibraryStore — importLibrary', () => {
       expect(outcome).toEqual({ status: 'failed', message: 'storage failure' })
       expect(store.getState().error).toBe('storage failure')
       expect(store.getState().drugs).toEqual([])
+      // A genuine transaction failure really did roll back.
+      expect(await db.drugs.count()).toBe(0)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('reports a committed import when the post-commit refresh fails (never as a rollback)', async () => {
+    const { db, repo } = await makeStore()
+    // Failure injection against the REAL Dexie repository: the import
+    // transaction commits, then the refresh read throws deterministically.
+    let failReads = false
+    const proxied = new Proxy(repo, {
+      get(target, prop, receiver) {
+        if (prop === 'getAllDrugs') {
+          return async () => {
+            if (failReads) throw new Error('post-commit read failure')
+            return target.getAllDrugs()
+          }
+        }
+        return Reflect.get(target, prop, receiver)
+      },
+    })
+    const session = createLibraryStore(proxied)
+    try {
+      await session.getState().hydrate()
+      expect(session.getState().drugs).toHaveLength(0)
+
+      failReads = true
+      const outcome = await session
+        .getState()
+        .importLibrary(syntheticNpslText([syntheticDrug()]), 'merge')
+      expect(outcome.status).toBe('committed-refresh-failed')
+      if (outcome.status !== 'committed-refresh-failed') {
+        throw new Error('expected committed-refresh-failed')
+      }
+      // The report proves the commit happened; the message is the ORIGINAL
+      // refresh error, not a rolled-back-transaction claim.
+      expect(outcome.report.ok).toBe(true)
+      expect(outcome.report.created).toBe(1)
+      expect(outcome.message).toBe('post-commit read failure')
+
+      // The store surfaces commit + refresh failure together.
+      expect(session.getState().error).toContain('Import committed')
+      expect(session.getState().error).toContain('post-commit read failure')
+      expect(session.getState().error).toContain('database contains the imported records')
+
+      // The session is NOT marked synchronized — contents stay stale and
+      // visibly flagged instead of being silently refreshed or cleared.
+      expect(session.getState().drugs).toHaveLength(0)
+
+      // The database DOES contain the imported record.
+      const stored = await repo.getAllDrugs()
+      expect(stored.drugs).toHaveLength(1)
+      expect(stored.drugs[0]?.identifiers.name).toBe('Fixture Compound A')
+
+      // Recovery is a hydrate retry — never an automatic re-import: the
+      // session catches up and the record count does not double.
+      failReads = false
+      await session.getState().hydrate()
+      expect(session.getState().drugs).toHaveLength(1)
+      expect(session.getState().error).toBeNull()
+      expect(await db.drugs.count()).toBe(1)
     } finally {
       await db.delete()
     }

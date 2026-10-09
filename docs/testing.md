@@ -53,7 +53,9 @@ Curve generation additionally tests: point counts, axis scale declarations
 
 - valid fixture parses; all five provenance variants preserved;
 - normalization defaults (empty collections, `dataStatus`);
-- forward compatibility (unknown top-level/drug keys preserved);
+- forward compatibility (the loose parse keeps unknown keys — envelope,
+  metadata and every drug nesting level; full round-trip preservation and
+  the merge collision policy are covered by the repository/mapper tests);
 - rejections: non-finite value, wrong value type, empty unit, unknown
   provenance type, `literature` without `source`, missing
   `libraryMetadata`, malformed ISO date, invalid version string;
@@ -78,8 +80,10 @@ What we do **not** assert: pixel styling, class strings of shadcn internals.
 Current examples: `src/app/layout/AppLayout.test.tsx` (navigation landmarks,
 skip link, active-route semantics, no-emoji rule) and
 `src/features/import-export/ImportExportView.test.tsx` (preview-before-
-write, replace acknowledgement, explicit CSV mapping, export contents —
-against the real repository with fake-indexeddb).
+write, replace acknowledgement, explicit CSV mapping, export contents, the
+committed-but-refresh-failed report — never "nothing was written" — and
+the quarantine export warning against a populated vs. empty quarantine —
+all against the real repository with fake-indexeddb).
 
 ---
 
@@ -148,7 +152,9 @@ Test procedure:
      preserved;
    - drug identity, targets (including Kd/Ki/EC50/IC50 separation), tags,
      notes preserved;
-   - unknown forward-compatible keys survive.
+   - unknown forward-compatible keys survive (every supported nesting
+     level plus library metadata; envelope-level extras are reported as
+     `ENVELOPE_FIELDS_DROPPED`, not retained).
 4. Assert explicitly documented normalizations (defaults filled, import-time
    stamps) rather than ignoring them.
 
@@ -188,15 +194,15 @@ lossy edges are listed in `docs/validation.md` §7.
 | AppLayout component tests | done |
 | Playwright config + shell smoke test | done |
 | Engine model tests (matrix §1) | done — 3 models, curves, units, numeric, registry |
-| Persistence DTO mapper tests | done — round trip, validation, unknown-field preservation |
+| Persistence DTO mapper tests | done — round trip, validation, unknown-field preservation (previous-record *and* incoming-drug sources, deterministic merge collisions) |
 | Schema migration tests | done — v1→v2 upgrade: bookkeeping only, scientific + unknown fields survive |
-| Repository tests | done — CRUD, metadata stamping, quarantine, atomic replace/import rollback, NPSL round trip, reload |
-| Import pipeline tests | done — parse/schema/semantic/preview classification |
-| Store + library UI tests | done — hydration guard, quarantine report, form safeguards, transactional `importLibrary` outcome (ok / invalid / failed) |
+| Repository tests | done — CRUD, metadata stamping, quarantine, atomic replace/import rollback, NPSL round trip, reload, extension-field matrix (replace/merge/hydration/edit/export/re-import/rollback) |
+| Import pipeline tests | done — parse/schema/semantic/preview classification, metadata extension resolution, envelope-field warning |
+| Store + library UI tests | done — hydration guard, quarantine report, form safeguards, transactional `importLibrary` outcome (ok / invalid / failed / committed-refresh-failed) |
 | Calculator tests (adapters, store, schemas, components) | done — drafts, stale semantics, curve settings, PK mode union |
-| CSV tests (parse, write, export, mapping, conversion) | done — quoting/escaping/BOM/errors, stable header, provenance columns, ambiguity + unit rules, CSV → NPSL document, grouping, row errors |
-| Import/export UI tests | done — preview-before-write, replace gate, cancel, CSV mapping flow, export contents + object-URL lifecycle |
-| Test suite total | 535 unit tests (34 files) |
+| CSV tests (parse, write, export, mapping, conversion) | done — quoting/escaping/BOM/errors, spreadsheet formula-injection guard (text cells protected, numeric cells byte-exact), stable header, provenance columns, ambiguity + unit rules, CSV → NPSL document, grouping, row errors |
+| Import/export UI tests | done — preview-before-write, replace gate, cancel, CSV mapping flow, export contents + object-URL lifecycle, committed-but-refresh-failed report (never "nothing was written"), quarantine export warning (visible with data, silent when empty) |
+| Test suite total | 562 unit tests (34 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
 | Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
 | Library reload e2e | pending — expanded coverage with phase 6; library covered today by component + repository tests |

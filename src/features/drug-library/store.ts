@@ -28,8 +28,14 @@ export type LibraryStatus = 'idle' | 'loading' | 'ready' | 'error'
  * - `ok` — committed by the repository (report carries created/updated counts);
  * - `invalid` — rejected by validation; nothing was written, so the session
  *   state still mirrors storage and no refresh happens;
- * - `failed` — the storage layer threw (I/O, quota); the transaction aborted
- *   and the store surfaces the message like every other mutation failure.
+ * - `failed` — the storage layer threw (I/O, quota) *before* the commit
+ *   point; the transaction aborted and the store surfaces the message like
+ *   every other mutation failure;
+ * - `committed-refresh-failed` — the transaction COMMITTED, but re-reading
+ *   the session afterwards threw. The database contains the imported
+ *   records while the session may be stale; this is never reported as a
+ *   rolled-back import, and recovery is a hydrate retry or a reload — the
+ *   import itself is never re-run automatically.
  */
 export type LibraryImportOutcome =
   | { readonly status: 'ok'; readonly report: Extract<ImportReport, { readonly ok: true }> }
@@ -39,6 +45,12 @@ export type LibraryImportOutcome =
       readonly warnings: readonly ImportWarning[]
     }
   | { readonly status: 'failed'; readonly message: string }
+  | {
+      readonly status: 'committed-refresh-failed'
+      readonly report: Extract<ImportReport, { readonly ok: true }>
+      /** The original post-commit refresh error (the commit succeeded). */
+      readonly message: string
+    }
 
 export interface LibraryState {
   readonly status: LibraryStatus
@@ -57,7 +69,11 @@ export interface LibraryState {
   createDrug(input: DrugInput): Promise<Drug | null>
   updateDrug(id: DrugId, changes: DrugChanges): Promise<Drug | null>
   deleteDrug(id: DrugId): Promise<boolean>
-  /** Transactional NPSL import; refreshes the session only on success. */
+  /**
+   * Transactional NPSL import. `ok` and `committed-refresh-failed` both
+   * mean the database commit succeeded (the latter with a stale session);
+   * `invalid` and `failed` mean nothing was written.
+   */
   importLibrary(text: string, mode: ImportMode): Promise<LibraryImportOutcome>
 }
 
@@ -145,6 +161,9 @@ export function createLibraryStore(
     },
 
     async importLibrary(text, mode) {
+      // Phase 1 — the database transaction. Throwing here means the
+      // transaction aborted: a genuine failure with nothing committed.
+      let committed: Extract<ImportReport, { readonly ok: true }>
       try {
         const report = await repo.importLibrary(text, { mode })
         if (!report.ok) {
@@ -152,12 +171,27 @@ export function createLibraryStore(
           // written, so storage still matches the session — no refresh.
           return { status: 'invalid', errors: report.errors, warnings: report.warnings }
         }
-        await refresh(set)
-        return { status: 'ok', report }
+        committed = report
       } catch (error) {
         const message = messageOf(error)
         set({ error: message })
         return { status: 'failed', message }
+      }
+      // Phase 2 — post-commit session refresh. A failure here must NEVER
+      // be reported as a rolled-back import: the records are already in
+      // the database. The session keeps its previous (now stale) contents
+      // and gets an explicit error instead of a false "unchanged" claim;
+      // the UI offers a hydrate retry or a reload, never an automatic
+      // re-run of the import.
+      try {
+        await refresh(set)
+        return { status: 'ok', report: committed }
+      } catch (error) {
+        const message = messageOf(error)
+        set({
+          error: `Import committed, but the session refresh failed: ${message} — the database contains the imported records. Retry the session refresh or reload the page.`,
+        })
+        return { status: 'committed-refresh-failed', report: committed, message }
       }
     },
   }))

@@ -14,10 +14,23 @@
  * e.g. citation/doi/notes). Storage `origin` is a plain column and stays
  * distinct from scientific provenance.
  *
+ * Spreadsheet formula injection: every cell built from text (ids, names,
+ * notes, units, enums, timestamps, provenance cells) is passed through
+ * `protectAgainstFormulaInjection` before the writer's RFC-4180 quoting,
+ * so a dangerous text cell from an imported record is stored with a
+ * leading apostrophe instead of being executed when the CSV is opened.
+ * Numeric value cells deliberately bypass the guard: they are serialized
+ * with `String(finite number)`, which can only produce a numeric literal
+ * (digits, `.`, `e±`, leading `-`) — a spreadsheet parses that as a
+ * number, never as a command, and guarding would corrupt legitimate
+ * negative values such as `-2.5`. Text transformations happen only in
+ * this export representation — the library and its records are never
+ * modified (this is a pure function of an exported `DrugLibrary`).
+ *
  * CSV is a lossy projection (unknown forward-compat fields are dropped,
- * CSV import re-stamps `origin` and bookkeeping timestamps) — `.npsl`
- * remains the lossless backup/interchange format. Nothing here mutates
- * the library: this is a pure function of an exported `DrugLibrary`.
+ * CSV import re-stamps `origin` and bookkeeping timestamps, and a
+ * re-import keeps the formula guard's apostrophe on formerly dangerous
+ * cells) — `.npsl` remains the lossless backup/interchange format.
  */
 import type { Drug, ReceptorTarget } from '@/domain/drug/drug'
 import type { DrugLibrary } from '@/domain/library/library'
@@ -28,7 +41,18 @@ import {
   CSV_TARGET_PARAMS,
   paramColumnNames,
 } from './params'
-import { toCsv } from './writeCsv'
+import { protectAgainstFormulaInjection, toCsv } from './writeCsv'
+
+/**
+ * One text cell: guarded against spreadsheet formula injection before the
+ * writer's quoting. Every text-derived cell (ids, labels, notes, units,
+ * enum cells, timestamps, provenance strings) goes through here because
+ * any of them can originate from an imported file. Numeric value cells
+ * never do — see the module comment.
+ */
+function textCell(value: string): string {
+  return protectAgainstFormulaInjection(value)
+}
 
 /** Drug-level columns (identity, bookkeeping, notes). */
 const DRUG_COLUMNS: readonly string[] = [
@@ -67,7 +91,9 @@ export const CSV_HEADERS: readonly string[] = [
 ]
 
 function listCell(values: readonly string[]): string {
-  return values.join('; ')
+  // Guarded at cell granularity: the whole joined cell is one spreadsheet
+  // cell, and only a *leading* trigger can cause evaluation.
+  return textCell(values.join('; '))
 }
 
 /** Provenance → `[type, source, json]` companion cells. */
@@ -81,39 +107,42 @@ function provenanceCells(provenance: Provenance | undefined): [string, string, s
     delete rest.source
   }
   const json = Object.keys(rest).length > 0 ? JSON.stringify(rest) : ''
-  return [provenance.type, source, json]
+  return [textCell(provenance.type), textCell(source), textCell(json)]
 }
 
 /** `[value, unit, provenance type, provenance source, provenance json]`. */
 function scientificCells(value: MaybeScientificValue): [string, string, string, string, string] {
   if (value === undefined) return ['', '', '', '', '']
   const [type, source, json] = provenanceCells(value.provenance)
-  return [String(value.value), value.unit, type, source, json]
+  // The value cell is numeric by schema (`finite number`): emitted with
+  // String() and deliberately NOT formula-guarded, so `-2.5`, `0` and
+  // `1e-9` survive byte-exact (see the module comment).
+  return [String(value.value), textCell(value.unit), type, source, json]
 }
 
 function drugLevelCells(drug: Drug): string[] {
   return [
-    drug.id,
-    drug.origin,
-    drug.identifiers.name,
+    textCell(drug.id),
+    textCell(drug.origin),
+    textCell(drug.identifiers.name),
     listCell(drug.identifiers.synonyms),
-    drug.identifiers.description ?? '',
-    drug.identifiers.casNumber ?? '',
+    textCell(drug.identifiers.description ?? ''),
+    textCell(drug.identifiers.casNumber ?? ''),
     listCell(drug.tags),
-    drug.notes ?? '',
-    drug.createdAt ?? '',
-    drug.updatedAt ?? '',
+    textCell(drug.notes ?? ''),
+    textCell(drug.createdAt ?? ''),
+    textCell(drug.updatedAt ?? ''),
   ]
 }
 
 function targetCells(target: ReceptorTarget | undefined): string[] {
   return [
-    target?.id ?? '',
-    target?.name ?? '',
-    target?.gene ?? '',
-    target?.action ?? '',
-    target?.species ?? '',
-    target?.notes ?? '',
+    textCell(target?.id ?? ''),
+    textCell(target?.name ?? ''),
+    textCell(target?.gene ?? ''),
+    textCell(target?.action ?? ''),
+    textCell(target?.species ?? ''),
+    textCell(target?.notes ?? ''),
   ]
 }
 
@@ -126,7 +155,7 @@ function rowsForDrug(drug: Drug): string[][] {
       ...drugLevelCells(drug),
       ...targetCells(target),
       ...CSV_TARGET_PARAMS.flatMap((p) => scientificCells(target?.[p.key])),
-      drug.pharmacokinetics.notes ?? '',
+      textCell(drug.pharmacokinetics.notes ?? ''),
       ...CSV_PK_PARAMS.flatMap((p) => scientificCells(drug.pharmacokinetics[p.key])),
     ]
     return row

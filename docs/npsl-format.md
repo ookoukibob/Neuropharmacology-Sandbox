@@ -180,11 +180,19 @@ structure. (A real example file lives at
 
 - **Known fields are strictly typed.** A wrong type (`value: "1"`, unknown
   provenance `type`, malformed date) is a hard validation error.
-- **Unknown fields are preserved, not rejected.** Objects are parsed
-  "loose": keys written by a future minor version survive
-  `parse → import → export` instead of being silently dropped. This is why
-  `npslFileSchema` uses `z.looseObject` and is covered by a round-trip test
-  (`preserves unknown keys for forward compatibility`).
+- **Unknown fields are preserved where storage can keep them.** Objects
+  are parsed "loose": keys the current build does not know survive
+  `parse → preview → import → storage → export` — at the drug record root,
+  in `identifiers`, `targets[]`, in every scientific parameter and its
+  `provenance`, in `pharmacokinetics`, and in `libraryMetadata`. Merge of
+  an existing id resolves collisions deterministically: the incoming file
+  wins a key, stored-only extension keys are kept (never silently
+  discarded). The one exception: unknown keys at the *top level of the
+  envelope* have no storage location — they are reported as warning
+  `ENVELOPE_FIELDS_DROPPED` instead of being silently dropped. Covered by
+  the repository round-trip tests (`dexieDrugRepository.test.ts`,
+  "extension fields"), the mapper tests (`records.test.ts`) and the
+  preview tests (`importPipeline.test.ts`).
 - **Version gates decide readability** (§1). Newer-minor files are refused
   with guidance rather than half-imported.
 - **Normalization is explicit and documented**: omitted collections default

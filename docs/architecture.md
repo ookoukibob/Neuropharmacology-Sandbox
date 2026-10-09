@@ -263,14 +263,34 @@ and confirmation: file selection and preview are read-only, and the
 single write path is the store's `importLibrary` → repository transaction
 (same pipeline, re-validated inside the transaction).
 
+Two follow-up rules keep import outcomes and forward compatibility honest:
+
+- **Commit vs. refresh.** The store separates the transaction from the
+  session re-read that follows it. `ok` and `committed-refresh-failed`
+  both mean the records are in the database; the latter carries the
+  original refresh error, leaves the session visibly stale, and offers a
+  hydrate retry — a committed import is never reported as a rollback and
+  never re-run automatically. `invalid`/`failed` mean nothing was written.
+- **Extension (unknown-field) preservation.** Unknown keys accepted by
+  the loose schema are written from the incoming file (replace and
+  first-time merge) and kept from storage when the file never mentioned
+  them; a collision is won by the incoming file. Metadata extensions
+  survive a replace via `resolveLibraryMetadata`; merge never touches
+  library metadata. Envelope-level extras have no storage location and
+  surface as warning `ENVELOPE_FIELDS_DROPPED`
+  (details: `docs/npsl-format.md` §6).
+
 ### 4.5 Export
 
 ```
 repository exportLibrary()
-   → NPSL serializer (preserves provenance, metadata, versions)
+   → validated records only    (quarantined records are excluded — the UI
+                                shows an explicit notice with the count)
+   → NPSL serializer (preserves provenance, metadata, versions, extensions)
    → file download          .npsl / .json  (lossless)
-   → CSV projection         (lossy; provenance flattened to columns — see
-                             validation.md §7 and spec-review.md §6)
+   → CSV projection         (lossy; provenance flattened to columns, text
+                             cells formula-guarded with a leading
+                             apostrophe — validation.md §7 and spec-review.md §6)
 ```
 
 ### 4.6 Calculator state (session-only)

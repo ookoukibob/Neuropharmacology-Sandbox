@@ -11,6 +11,8 @@ import { parseCsv } from './parseCsv'
 
 const library = syntheticLibrary([syntheticDrug(), syntheticDrugB()])
 
+const headerIndex = (name: string): number => CSV_HEADERS.indexOf(name)
+
 describe('CSV export — schema', () => {
   it('has a stable, unique header covering identity, target and PK columns', () => {
     expect(CSV_HEADERS).toHaveLength(57)
@@ -131,5 +133,117 @@ describe('CSV export — serialization', () => {
     expect(result.table.rows[0]?.[3]).toBe('Q, one')
     expect(result.table.rows[0]?.[4]).toBe('line1\nline2')
     expect(result.table.rows[0]?.[6]).toBe('a,b')
+  })
+})
+
+describe('CSV export — spreadsheet formula injection guard', () => {
+  /** A record whose every text surface carries a dangerous leading value. */
+  const hostile = syntheticLibrary([
+    syntheticDrug({
+      identifiers: {
+        name: '=1+1',
+        synonyms: ['+SUM(A1:A9)', 'Plain synonym'],
+        description: ' -2+3 hidden behind a space',
+        casNumber: '@SYSTEM("id")',
+      },
+      tags: ['-tag-looking'],
+      notes: '\t=cmd|calc',
+      targets: [
+        {
+          id: '-target-id',
+          name: '=HAZARD',
+          gene: '+GENE',
+          action: 'agonist',
+          species: '@species',
+          kd: {
+            value: -2.5,
+            unit: 'nM',
+            provenance: {
+              type: 'literature',
+              source: '=EVIL("source")',
+              citation: 'Synthetic hostile fixture, 2026',
+              notes: 'provenance note with = inside is inert mid-cell',
+            },
+          },
+          ic50: {
+            value: 1e-9,
+            unit: 'M',
+            provenance: { type: 'user', recordedAt: '2026-01-01T00:00:00.000Z' },
+          },
+        },
+      ],
+      pharmacokinetics: {
+        halfLife: {
+          value: 0,
+          unit: 'h',
+          provenance: { type: 'user', recordedAt: '2026-01-01T00:00:00.000Z' },
+        },
+      },
+    }),
+  ])
+
+  it('guards dangerous text cells in the actual exported rows', () => {
+    const [row] = libraryToCsvRows(hostile)
+    expect(row).toBeDefined()
+    expect(row![headerIndex('name')]).toBe("'=1+1")
+    expect(row![headerIndex('synonyms')]).toBe("'+SUM(A1:A9); Plain synonym")
+    expect(row![headerIndex('description')]).toBe("' -2+3 hidden behind a space")
+    expect(row![headerIndex('cas_number')]).toBe("'@SYSTEM(\"id\")")
+    expect(row![headerIndex('tags')]).toBe("'-tag-looking")
+    expect(row![headerIndex('notes')]).toBe("'\t=cmd|calc")
+    expect(row![headerIndex('target_id')]).toBe("'-target-id")
+    expect(row![headerIndex('target_name')]).toBe("'=HAZARD")
+    expect(row![headerIndex('target_gene')]).toBe("'+GENE")
+    expect(row![headerIndex('target_species')]).toBe("'@species")
+    // Provenance source cells are untrusted text too.
+    expect(row![headerIndex('kd_provenance_source')]).toBe("'=EVIL(\"source\")")
+    expect(row![headerIndex('kd_provenance_type')]).toBe('literature')
+  })
+
+  it('preserves numeric scientific cells byte-exact (negatives, zero, notation)', () => {
+    const [row] = libraryToCsvRows(hostile)
+    expect(row![headerIndex('kd')]).toBe('-2.5')
+    expect(row![headerIndex('ic50')]).toBe('1e-9')
+    expect(row![headerIndex('half_life')]).toBe('0')
+    // No apostrophe ever lands on a value cell — guarding them would
+    // corrupt legitimate negative numbers.
+    expect(row![headerIndex('kd')]).not.toMatch(/^'/)
+    expect(row![headerIndex('kd_unit')]).toBe('nM')
+    expect(row![headerIndex('half_life_unit')]).toBe('h')
+  })
+
+  it('produces structurally valid CSV that parses back cell-for-cell', () => {
+    const text = libraryToCsv(hostile)
+    const result = parseCsv(text)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.table.headers).toEqual([...CSV_HEADERS])
+    expect(result.table.rows).toEqual(libraryToCsvRows(hostile))
+    // JSON companion cells still start with `{` (inert by shape) and parse.
+    const json = result.table.rows[0]![headerIndex('kd_provenance_json')]!
+    expect(json.startsWith('{')).toBe(true)
+    expect(JSON.parse(json)).toEqual({
+      citation: 'Synthetic hostile fixture, 2026',
+      notes: 'provenance note with = inside is inert mid-cell',
+    })
+  })
+
+  it('never mutates the library — the guard exists only in the CSV text', () => {
+    const before = JSON.stringify(hostile)
+    libraryToCsv(hostile)
+    libraryToCsvRows(hostile)
+    expect(JSON.stringify(hostile)).toBe(before)
+    expect(hostile.drugs[0]?.identifiers.name).toBe('=1+1')
+    expect(hostile.drugs[0]?.targets[0]?.kd?.value).toBe(-2.5)
+  })
+
+  it('leaves ordinary records byte-identical (no apostrophes appear)', () => {
+    const text = libraryToCsv(library)
+    expect(text).not.toContain("'")
+    const result = parseCsv(text)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.table.rows[0]?.[headerIndex('name')]).toBe('Fixture Compound A')
+    expect(result.table.rows[0]?.[headerIndex('kd')]).toBe('12.4')
   })
 })

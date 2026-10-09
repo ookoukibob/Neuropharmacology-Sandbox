@@ -12,8 +12,19 @@ import { z } from 'zod'
  * with an explicit message instead of being partially imported.
  *
  * Forward compatibility: objects are parsed "loose" (unknown keys are kept,
- * not rejected), so fields added by future minor versions survive a
- * parse -> migrate -> export round trip instead of being silently dropped.
+ * not rejected). What survives a full `parse → validate → import → storage
+ * → export` round trip (phase-5 hardening, tested through the repository):
+ * - unknown keys inside `libraryMetadata`;
+ * - unknown keys at every nesting level of `drugs`: the record root,
+ *   `identifiers`, `targets[]`, the scientific parameters (`kd`/`ki`/`ec50`/
+ *   `ic50`, PK values), their `provenance` objects, and
+ *   `pharmacokinetics`.
+ * Merge policy for an existing id: an incoming extension is written (the
+ * file wins a key collision); stored extensions the file never mentions
+ * are kept (see `toStoredRecord`).
+ * NOT retained: unknown keys at the top level of the envelope itself —
+ * storage has no place for them, so the import reports warning
+ * `ENVELOPE_FIELDS_DROPPED` rather than dropping them silently.
  * Known fields are still strictly typed: a wrong type is a hard error.
  *
  * Scientific parameters are NEVER flattened: every parameter is

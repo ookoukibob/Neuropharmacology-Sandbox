@@ -15,6 +15,7 @@ import {
   syntheticMetadata,
   syntheticNpslText,
 } from '../../tests/fixtures'
+import { fieldAt } from '../../tests/runtimeFields'
 import { SandboxDatabase } from '../db/database'
 import { serializeNpslDocument, toNpslDocument } from '../mappers/npslDocument'
 import { toRecord } from '../mappers/records'
@@ -411,6 +412,291 @@ describe('DexieDrugRepository — importLibrary', () => {
       })
       expect(report.ok).toBe(true)
       if (report.ok) expect(report.warnings.map((w) => w.code)).toContain('DUPLICATE_NAME')
+    } finally {
+      await db.delete()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Extension fields: the loose-schema contract exercised through the real
+// repository path (file → validation → transaction → storage → hydration →
+// export → re-import). Synthetic test data only — never pharmacological
+// information.
+// ---------------------------------------------------------------------------
+
+/**
+ * A synthetic NPSL file whose record carries unknown extension fields at
+ * every nesting level the schema accepts, optionally with extensions on the
+ * library metadata and the envelope itself.
+ */
+const EXTENSION_DRUG = {
+  id: 'fixture-drug-1',
+  origin: 'user',
+  identifiers: {
+    name: 'Fixture Compound A',
+    synonyms: ['Synthetic'],
+    identifierExtension: 'id-ext',
+  },
+  tags: ['fixture'],
+  rootExtension: { nested: 'root-ext' },
+  targets: [
+    {
+      id: 'fixture-target-1',
+      name: 'TEST-R',
+      targetExtension: 'target-ext',
+      kd: {
+        value: 12.4,
+        unit: 'nM',
+        parameterExtension: 'param-ext',
+        provenance: {
+          type: 'literature',
+          source: 'Synthetic fixture source',
+          citation: 'Invented for tests, 2026',
+          provenanceExtension: 'prov-ext',
+        },
+      },
+    },
+  ],
+  pharmacokinetics: {
+    pkExtension: 'pk-ext',
+    halfLife: {
+      value: 8,
+      unit: 'h',
+      provenance: { type: 'user', recordedAt: '2026-01-01T00:00:00.000Z' },
+    },
+  },
+  notes: 'Synthetic fixture — not pharmacological information.',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+}
+
+function extendedNpslText(
+  drugs: readonly unknown[],
+  metadataExtras: Record<string, unknown> = {},
+  envelopeExtras: Record<string, unknown> = {},
+): string {
+  return JSON.stringify({
+    formatVersion: '1.0.0',
+    schemaVersion: '1.0.0',
+    libraryMetadata: {
+      id: 'fixture-library',
+      name: 'Synthetic fixture library',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      dataStatus: 'example',
+      ...metadataExtras,
+    },
+    drugs,
+    ...envelopeExtras,
+  })
+}
+
+/** Every extension level a preserved record must expose. */
+function expectDrugExtensions(drug: unknown): void {
+  expect(fieldAt(drug, 'rootExtension')).toEqual({ nested: 'root-ext' })
+  expect(fieldAt(drug, 'identifiers', 'identifierExtension')).toBe('id-ext')
+  expect(fieldAt(drug, 'targets', '0', 'targetExtension')).toBe('target-ext')
+  expect(fieldAt(drug, 'targets', '0', 'kd', 'parameterExtension')).toBe('param-ext')
+  expect(fieldAt(drug, 'targets', '0', 'kd', 'provenance', 'provenanceExtension')).toBe('prov-ext')
+  expect(fieldAt(drug, 'pharmacokinetics', 'pkExtension')).toBe('pk-ext')
+  // Known scientific values ride along untouched alongside the extensions.
+  expect(fieldAt(drug, 'targets', '0', 'kd', 'value')).toBe(12.4)
+  expect(fieldAt(drug, 'targets', '0', 'kd', 'unit')).toBe('nM')
+}
+
+describe('DexieDrugRepository — extension fields (unknown-field preservation)', () => {
+  it('replace import carries extensions through storage, hydration, metadata and export', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const report = await repo.importLibrary(
+        extendedNpslText([EXTENSION_DRUG], { customMetadataField: 'meta-ext' }),
+        { mode: 'replace' },
+      )
+      expect(report.ok).toBe(true)
+
+      // 1. storage
+      const stored: unknown = await db.drugs.get('fixture-drug-1')
+      expect(stored).toBeDefined()
+      expectDrugExtensions(stored)
+
+      // 2. hydration (domain objects carry the loose parse result)
+      const loaded = await repo.getAllDrugs()
+      expect(loaded.quarantine).toEqual([])
+      expect(loaded.drugs).toHaveLength(1)
+      expectDrugExtensions(loaded.drugs[0])
+
+      // 3. library metadata extension (replace stores resolved metadata)
+      const metadata: unknown = await repo.getLibraryMetadata()
+      expect(fieldAt(metadata, 'customMetadataField')).toBe('meta-ext')
+      expect(fieldAt(metadata, 'name')).toBe('Synthetic fixture library')
+
+      // 4. export
+      const exported = await repo.exportLibrary()
+      expectDrugExtensions(exported.drugs[0])
+      expect(fieldAt(exported.metadata, 'customMetadataField')).toBe('meta-ext')
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('merge import of a new id preserves extensions and does not touch library metadata', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const metadataBefore: unknown = await repo.getLibraryMetadata()
+      const report = await repo.importLibrary(
+        extendedNpslText([EXTENSION_DRUG], { customMetadataField: 'file-meta' }),
+        { mode: 'merge' },
+      )
+      expect(report.ok).toBe(true)
+      if (report.ok) expect(report).toMatchObject({ created: 1, updated: 0 })
+
+      const stored: unknown = await db.drugs.get('fixture-drug-1')
+      expectDrugExtensions(stored)
+
+      // Merge keeps the current library metadata (established contract) —
+      // the file's metadata (known *and* extension fields) is not adopted.
+      const metadataAfter: unknown = await repo.getLibraryMetadata()
+      expect(metadataAfter).toEqual(metadataBefore)
+      expect(fieldAt(metadataAfter, 'customMetadataField')).toBeUndefined()
+
+      // The extensions also survive a storage→domain→export crossing.
+      const exported = await repo.exportLibrary()
+      expectDrugExtensions(exported.drugs[0])
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('merge of an existing id: incoming wins a key collision, stored-only extensions are kept', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      // A stored record that already carries extensions.
+      await db.drugs.put({
+        ...toRecord(syntheticDrug()),
+        futureField: 'stored',
+        onlyStored: 'keep-me',
+      } as never)
+      const incoming = {
+        ...EXTENSION_DRUG,
+        futureField: 'incoming',
+        onlyIncoming: 'added',
+        notes: 'updated by merge',
+      }
+      const report = await repo.importLibrary(extendedNpslText([incoming]), { mode: 'merge' })
+      expect(report.ok).toBe(true)
+      if (report.ok) expect(report).toMatchObject({ updated: 1, created: 0 })
+
+      const stored: unknown = await db.drugs.get('fixture-drug-1')
+      // Deterministic collision policy: the incoming file wins.
+      expect(fieldAt(stored, 'futureField')).toBe('incoming')
+      // Extensions the file never mentioned are not silently discarded.
+      expect(fieldAt(stored, 'onlyStored')).toBe('keep-me')
+      // Extensions only the file has are added.
+      expect(fieldAt(stored, 'onlyIncoming')).toBe('added')
+      // Known fields are governed by the file.
+      expect(fieldAt(stored, 'notes')).toBe('updated by merge')
+      // Every level of extension carried by the incoming file survives.
+      expectDrugExtensions(stored)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('editing an unrelated known field keeps extensions at every level', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const imported = await repo.importLibrary(extendedNpslText([EXTENSION_DRUG]), {
+        mode: 'replace',
+      })
+      expect(imported.ok).toBe(true)
+
+      const updated = await repo.updateDrug('fixture-drug-1', { notes: 'edited' })
+      expect(updated.notes).toBe('edited')
+      expectDrugExtensions(updated)
+
+      const stored: unknown = await db.drugs.get('fixture-drug-1')
+      expectDrugExtensions(stored)
+      expect(fieldAt(stored, 'notes')).toBe('edited')
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('export → re-import → export preserves accepted extensions', async () => {
+    const dbA = freshDb()
+    const dbB = freshDb()
+    try {
+      const repoA = new DexieDrugRepository(dbA)
+      const first = await repoA.importLibrary(
+        extendedNpslText([EXTENSION_DRUG], { customMetadataField: 'meta-ext' }),
+        { mode: 'replace' },
+      )
+      expect(first.ok).toBe(true)
+      const text1 = serializeNpslDocument(toNpslDocument(await repoA.exportLibrary()))
+
+      const repoB = new DexieDrugRepository(dbB)
+      const second = await repoB.importLibrary(text1, { mode: 'replace' })
+      expect(second.ok).toBe(true)
+      const export2 = await repoB.exportLibrary()
+      const text2 = serializeNpslDocument(toNpslDocument(export2))
+
+      // The re-imported library round-trips to an identical envelope —
+      // extensions at every level included.
+      expectDrugExtensions(export2.drugs[0])
+      expect(fieldAt(export2.metadata, 'customMetadataField')).toBe('meta-ext')
+      expect(JSON.parse(text2)).toEqual(JSON.parse(text1))
+    } finally {
+      await dbA.delete()
+      await dbB.delete()
+    }
+  })
+
+  it('a failed import leaves existing records and their extensions untouched', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const first = await repo.importLibrary(extendedNpslText([EXTENSION_DRUG]), {
+        mode: 'replace',
+      })
+      expect(first.ok).toBe(true)
+
+      // Duplicate id inside the file → blocking error → rollback.
+      const failed = await repo.importLibrary(
+        extendedNpslText([EXTENSION_DRUG, EXTENSION_DRUG]),
+        { mode: 'replace' },
+      )
+      expect(failed.ok).toBe(false)
+
+      const stored: unknown = await db.drugs.get('fixture-drug-1')
+      expectDrugExtensions(stored)
+      expect(await db.drugs.count()).toBe(1)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('reports unknown envelope fields as a non-blocking warning', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const report = await repo.importLibrary(
+        extendedNpslText([EXTENSION_DRUG], {}, { futureEnvelopeField: { x: 1 } }),
+        { mode: 'replace' },
+      )
+      expect(report.ok).toBe(true)
+      if (report.ok) {
+        const warning = report.warnings.find((w) => w.code === 'ENVELOPE_FIELDS_DROPPED')
+        expect(warning).toBeDefined()
+        expect(warning?.message).toContain('futureEnvelopeField')
+      }
+      // The warning never blocks: the record is committed as usual.
+      expect(await db.drugs.count()).toBe(1)
+      expectDrugExtensions(await db.drugs.get('fixture-drug-1'))
     } finally {
       await db.delete()
     }

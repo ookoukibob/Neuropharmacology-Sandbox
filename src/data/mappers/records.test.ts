@@ -4,6 +4,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import { FIXTURE_NOTE, syntheticDrug } from '../../tests/fixtures'
+import { fieldAt } from '../../tests/runtimeFields'
+import type { Drug } from '../../domain/drug/drug'
 import {
   PERSISTENCE_VERSION,
   fromRecord,
@@ -159,6 +161,52 @@ describe('toStoredRecord — unknown fields survive edits', () => {
     const existing = { ...toRecord(drug, 1) }
     expect(toStoredRecord(existing, drug).persistenceVersion).toBe(1)
     expect(toStoredRecord(undefined, drug).persistenceVersion).toBe(PERSISTENCE_VERSION)
+  })
+
+  it('keeps extensions carried by the incoming drug when no previous record exists (fresh import)', () => {
+    const drug = syntheticDrug()
+    const target = drug.targets[0]
+    if (target === undefined || target.kd === undefined) throw new Error('fixture needs kd')
+    const incoming = {
+      ...drug,
+      futureRoot: { nested: 1 },
+      identifiers: { ...drug.identifiers, futureIdentifier: 'id-ext' },
+      pharmacokinetics: { ...drug.pharmacokinetics, futurePk: 'pk-ext' },
+      targets: [
+        {
+          ...target,
+          futureTarget: 'target-ext',
+          kd: {
+            ...target.kd,
+            futureParam: 'param-ext',
+            provenance: { ...target.kd.provenance, futureProvenance: 'prov-ext' },
+          },
+        },
+        ...drug.targets.slice(1),
+      ],
+    } as Drug
+    const stored = toStoredRecord(undefined, incoming)
+    expect(fieldAt(stored, 'futureRoot')).toEqual({ nested: 1 })
+    expect(fieldAt(stored, 'identifiers', 'futureIdentifier')).toBe('id-ext')
+    expect(fieldAt(stored, 'targets', '0', 'futureTarget')).toBe('target-ext')
+    expect(fieldAt(stored, 'targets', '0', 'kd', 'futureParam')).toBe('param-ext')
+    expect(fieldAt(stored, 'targets', '0', 'kd', 'provenance', 'futureProvenance')).toBe('prov-ext')
+    expect(fieldAt(stored, 'pharmacokinetics', 'futurePk')).toBe('pk-ext')
+    // Known fields are governed by the domain value, not the extensions.
+    expect(stored.identifiers.name).toBe(drug.identifiers.name)
+    expect(fieldAt(stored, 'targets', '0', 'kd', 'value')).toBe(target.kd.value)
+  })
+
+  it('resolves extension collisions deterministically: incoming wins, stored-only is kept', () => {
+    const drug = syntheticDrug()
+    const existing = { ...toRecord(drug), sharedFuture: 'stored', storedOnly: 'keep' }
+    const incoming = { ...drug, sharedFuture: 'incoming', incomingOnly: 'new' } as Drug
+    const stored = toStoredRecord(existing, incoming)
+    expect(fieldAt(stored, 'sharedFuture')).toBe('incoming')
+    expect(fieldAt(stored, 'storedOnly')).toBe('keep')
+    expect(fieldAt(stored, 'incomingOnly')).toBe('new')
+    // An extension can never shadow a known field.
+    expect(stored.notes).toBe(drug.notes)
   })
 })
 

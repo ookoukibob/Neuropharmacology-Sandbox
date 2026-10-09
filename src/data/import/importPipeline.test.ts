@@ -11,6 +11,7 @@ import {
   syntheticNpslText,
   FIXTURE_NOTE,
 } from '../../tests/fixtures'
+import { fieldAt } from '../../tests/runtimeFields'
 import { NPSL_SCHEMA_VERSION } from '../schemas/npsl'
 import {
   parseNpsl,
@@ -187,6 +188,25 @@ describe('resolveLibraryMetadata', () => {
     expect(resolveLibraryMetadata(withoutId).id).toBe('local-library')
     expect(resolveLibraryMetadata(withoutId, 'other').id).toBe('other')
   })
+
+  it('carries unknown extension fields forward without letting them shadow known ones', () => {
+    const metadata = {
+      ...syntheticMetadata(),
+      customMetadataField: { nested: 'meta-ext' },
+    }
+    const resolved = resolveLibraryMetadata(metadata)
+    expect(fieldAt(resolved, 'customMetadataField')).toEqual({ nested: 'meta-ext' })
+    expect(resolved.id).toBe('fixture-library')
+    expect(resolved.name).toBe(syntheticMetadata().name)
+    expect(resolved.dataStatus).toBe(syntheticMetadata().dataStatus)
+
+    // Even an extension sitting on a *missing-id* input cannot take over
+    // `id`: the fallback still wins because known fields are rebuilt.
+    const { id: _noId, ...withoutId } = metadata
+    const filled = resolveLibraryMetadata(withoutId, 'local-library')
+    expect(fieldAt(filled, 'customMetadataField')).toEqual({ nested: 'meta-ext' })
+    expect(filled.id).toBe('local-library')
+  })
 })
 
 describe('previewNpslImport — preview step', () => {
@@ -226,6 +246,58 @@ describe('previewNpslImport — preview step', () => {
     expect(preview.ok).toBe(false)
     if (!preview.ok) {
       expect(preview.errors.map((e) => e.code)).toContain('SCHEMA')
+    }
+  })
+})
+
+describe('extension fields — preview and envelope reporting', () => {
+  it('carries unknown drug and metadata fields into the preview objects', () => {
+    const raw = JSON.parse(syntheticNpslText([syntheticDrug()])) as Record<string, unknown>
+    const metadata = raw['libraryMetadata'] as Record<string, unknown>
+    metadata['customMetadataField'] = 'meta-ext'
+    const drugs = raw['drugs'] as Record<string, unknown>[]
+    const drug = drugs[0]
+    if (drug === undefined) throw new Error('fixture needs a drug')
+    drug['rootExtension'] = 'root-ext'
+    ;(drug['identifiers'] as Record<string, unknown>)['identifierExtension'] = 'id-ext'
+    const targets = drug['targets'] as Record<string, unknown>[]
+    const target = targets[0]
+    if (target === undefined) throw new Error('fixture needs a target')
+    target['targetExtension'] = 'target-ext'
+    const kd = target['kd'] as Record<string, unknown>
+    kd['parameterExtension'] = 'param-ext'
+    ;(kd['provenance'] as Record<string, unknown>)['provenanceExtension'] = 'prov-ext'
+    ;(drug['pharmacokinetics'] as Record<string, unknown>)['pkExtension'] = 'pk-ext'
+
+    const preview = previewNpslImport(JSON.stringify(raw))
+    expect(preview.ok).toBe(true)
+    if (preview.ok) {
+      expect(fieldAt(preview.metadata, 'customMetadataField')).toBe('meta-ext')
+      expect(fieldAt(preview.drugs[0], 'rootExtension')).toBe('root-ext')
+      expect(fieldAt(preview.drugs[0], 'identifiers', 'identifierExtension')).toBe('id-ext')
+      expect(fieldAt(preview.drugs[0], 'targets', '0', 'targetExtension')).toBe('target-ext')
+      expect(fieldAt(preview.drugs[0], 'targets', '0', 'kd', 'parameterExtension')).toBe('param-ext')
+      expect(fieldAt(preview.drugs[0], 'targets', '0', 'kd', 'provenance', 'provenanceExtension')).toBe('prov-ext')
+      expect(fieldAt(preview.drugs[0], 'pharmacokinetics', 'pkExtension')).toBe('pk-ext')
+      // A clean envelope produces no envelope warning.
+      expect(preview.warnings.map((w) => w.code)).not.toContain('ENVELOPE_FIELDS_DROPPED')
+      // Known values still validate and preview normally.
+      expect(preview.drugs[0]?.targets[0]?.kd?.value).toBe(12.4)
+    }
+  })
+
+  it('warns about unknown top-level envelope fields without blocking the import', () => {
+    const raw = JSON.parse(syntheticNpslText([syntheticDrug()])) as Record<string, unknown>
+    raw['futureEnvelopeField'] = { x: 1 }
+    const preview = previewNpslImport(JSON.stringify(raw))
+    expect(preview.ok).toBe(true)
+    if (preview.ok) {
+      const warning = preview.warnings.find((w) => w.code === 'ENVELOPE_FIELDS_DROPPED')
+      expect(warning).toBeDefined()
+      expect(warning?.message).toContain('futureEnvelopeField')
+      // The warning is non-blocking: drugs still preview normally.
+      expect(preview.drugs).toHaveLength(1)
+      expect(preview.stats.total).toBe(1)
     }
   })
 })

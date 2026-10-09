@@ -9,7 +9,16 @@
  * Non-blocking warnings: duplicate drug names (names are labels, not
  * identities), unknown or unexpected units (data is imported as declared —
  * the application never rewrites a unit), legacy records without
- * bookkeeping timestamps (filled, per the domain contract).
+ * bookkeeping timestamps (filled, per the domain contract), and unknown
+ * top-level envelope fields (accepted by the loose schema but stored
+ * nowhere — reported instead of dropped silently).
+ *
+ * Extension (unknown-field) contract: unknown keys inside `libraryMetadata`
+ * and inside every level of `drugs` survive this validation and the
+ * repository write that follows (see `resolveLibraryMetadata` and
+ * `toStoredRecord` for the Merge collision policy). Only envelope-level
+ * extras cannot be preserved — the warning above is their deliberate,
+ * documented fate.
  *
  * No pharmacological content is ever invented, defaulted or dropped here.
  */
@@ -40,6 +49,7 @@ export type ImportWarningCode =
   | 'UNKNOWN_UNIT'
   | 'UNEXPECTED_DIMENSION'
   | 'TIMESTAMPS_FILLED'
+  | 'ENVELOPE_FIELDS_DROPPED'
 
 export interface ImportWarning {
   readonly code: ImportWarningCode
@@ -149,12 +159,45 @@ function unitChecksFor(drug: Drug): UnitCheck[] {
   return checks
 }
 
-/** Resolve a file's metadata against a fallback id (single metadata entry). */
+/** Metadata keys this build owns — extensions can never shadow them. */
+const KNOWN_METADATA_KEYS: ReadonlySet<string> = new Set([
+  'id',
+  'name',
+  'author',
+  'description',
+  'createdAt',
+  'updatedAt',
+  'dataStatus',
+])
+
+/** Top-level envelope keys of the NPSL file format. */
+const ENVELOPE_KEYS: ReadonlySet<string> = new Set([
+  'formatVersion',
+  'schemaVersion',
+  'libraryMetadata',
+  'drugs',
+])
+
+/**
+ * Resolve a file's metadata against a fallback id (single metadata entry).
+ * Extension fields (keys unknown to this build) found on the incoming
+ * metadata are carried into the result: known fields are rebuilt strictly
+ * from their validated values *after* spreading the extras, so an
+ * extension can never overwrite a known field — it is only preserved when
+ * this build does not own the key. This is what keeps unknown metadata
+ * fields alive through a replace import (replace stores the resolved
+ * metadata); merge does not touch library metadata at all.
+ */
 export function resolveLibraryMetadata(
   metadata: NpslLibraryMetadata | LibraryMetadata,
   fallbackId: string = DEFAULT_LIBRARY_ID,
 ): LibraryMetadata {
+  const extras: Record<string, unknown> = {}
+  for (const key of Object.keys(metadata)) {
+    if (!KNOWN_METADATA_KEYS.has(key)) extras[key] = Reflect.get(metadata, key)
+  }
   return {
+    ...extras,
     id: metadata.id ?? fallbackId,
     name: metadata.name,
     ...(metadata.author !== undefined ? { author: metadata.author } : {}),
@@ -188,6 +231,18 @@ export function validateNpslFile(file: unknown, now?: string): NpslValidation {
   const warnings: ImportWarning[] = []
   const errors: ImportIssue[] = []
   const drugs: Drug[] = []
+
+  // Unknown top-level envelope keys pass the loose schema but have nowhere
+  // to live in storage (one metadata entry + the drugs table) — report
+  // them instead of dropping them silently. Unknown keys *inside*
+  // libraryMetadata and drugs are preserved (see the module comment).
+  const envelopeExtras = Object.keys(parsed.data).filter((key) => !ENVELOPE_KEYS.has(key))
+  if (envelopeExtras.length > 0) {
+    warnings.push({
+      code: 'ENVELOPE_FIELDS_DROPPED',
+      message: `envelope carries unknown top-level field${envelopeExtras.length === 1 ? '' : 's'} ${envelopeExtras.map((key) => `"${key}"`).join(', ')} — not retained: the library stores only libraryMetadata and drugs, so the exported file will not contain them`,
+    })
+  }
 
   // Duplicate ids are identity conflicts — blocking; duplicate names are
   // labels — a warning only (two records may share a name legitimately).

@@ -15,9 +15,14 @@
  *   versions) are carried forward by `toStoredRecord` using the documented
  *   DTO key sets below: a key *in* the contract is governed by the domain
  *   value (clearing a field deletes it), a key *outside* the contract is
- *   copied from the previous record untouched. Schema migrations (the
- *   Dexie upgrade hook) only ever add bookkeeping keys — they never rewrite
- *   scientific or unknown fields.
+ *   copied forward from its source — the incoming domain drug first (a
+ *   freshly imported record carries its file's extensions), then the
+ *   previous record (storage-only extensions survive an edit or a merge
+ *   that never mentioned them). Because a source only fills keys the new
+ *   record does not already have, an incoming extension wins a key
+ *   collision deterministically — the documented Merge policy. Schema
+ *   migrations (the Dexie upgrade hook) only ever add bookkeeping keys —
+ *   they never rewrite scientific or unknown fields.
  * - Provenance triples ({ value, unit, provenance }) are stored whole and
  *   never flattened; provenance is never created, upgraded or rewritten by
  *   this layer.
@@ -157,21 +162,27 @@ function childLevel(level: Level, key: string): Level | null {
 }
 
 /**
- * Copy unknown (out-of-contract) fields from the previous record into the
- * rewritten one, level by level. Contract keys are never copied — the new
- * value governs, so a cleared field stays cleared. Nested objects recurse
- * through their level's key set; `targets` elements are matched by stable id
- * (not position), so re-ordering or removing rows cannot transplant unknown
- * fields onto the wrong target.
+ * Copy unknown (out-of-contract) fields from a source object into the
+ * rewritten record, level by level. Contract keys are never copied — the
+ * new value governs, so a cleared field stays cleared. Nested objects
+ * recurse through their level's key set; `targets` elements are matched by
+ * stable id (not position), so re-ordering or removing rows cannot
+ * transplant unknown fields onto the wrong target.
+ *
+ * `previous` is only ever read (any object source: the incoming drug or
+ * the stored record); `next` is written. A source fills a key only when
+ * `next` does not have it yet — callers therefore control priority by
+ * calling in order (see `toStoredRecord`).
  */
 export function preserveUnknownFields(
-  previous: Record<string, unknown>,
+  previous: object,
   next: Record<string, unknown>,
   level: Level = 'root',
 ): void {
+  const source = previous as Record<string, unknown>
   const known = keysOf(level)
-  for (const key of Object.keys(previous)) {
-    const prevValue = previous[key]
+  for (const key of Object.keys(source)) {
+    const prevValue = source[key]
     if (!known.has(key)) {
       // Unknown at this level: a future field the current build does not
       // understand — carry it forward untouched.
@@ -297,18 +308,26 @@ export function fromRecord(raw: unknown): DrugRecordValidation {
 
 /**
  * Full rewrite of a record from its new domain value: contract fields come
- * from the domain, unknown fields from the previous record (when there was
- * one), bookkeeping version from the record (or the current build for new
- * records).
+ * from the domain, unknown fields from their sources, bookkeeping version
+ * from the record (or the current build for new records).
+ *
+ * Extension sources, in priority order:
+ * 1. the incoming `drug` — a freshly imported record carries its file's
+ *    extensions (the loose schema lets them ride into the domain value), so
+ *    replace imports and first-time merge imports keep them;
+ * 2. the previous stored record — edits and merge updates keep storage
+ *    extensions the incoming value never mentioned.
+ *
+ * A source only fills keys the rewritten record does not already have, so
+ * when an incoming file and the stored record both define an unknown key,
+ * the file's value wins (documented Merge collision policy), and known
+ * domain fields are never touched by extension preservation.
  */
 export function toStoredRecord(existing: DrugRecord | undefined, drug: Drug): DrugRecord {
   const next = toRecord(drug, existing?.persistenceVersion ?? PERSISTENCE_VERSION)
+  preserveUnknownFields(drug, next, 'root')
   if (existing !== undefined) {
-    preserveUnknownFields(
-      existing as unknown as Record<string, unknown>,
-      next as unknown as Record<string, unknown>,
-      'root',
-    )
+    preserveUnknownFields(existing, next, 'root')
   }
   return next
 }

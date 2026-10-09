@@ -107,7 +107,10 @@ route-level lazy loading when charts land (see ADR-12).
 strict rejection of unknown keys breaks forward compatibility, silent
 acceptance hides typos.
 **Decision.** Known fields are strictly typed (wrong type = hard error);
-unknown keys are preserved through import/export (`z.looseObject`);
+unknown keys are preserved through import/export (`z.looseObject`) — at
+every supported nesting level of a drug record and in `libraryMetadata`;
+the envelope's top-level extras have no storage location and are reported
+(`ENVELOPE_FIELDS_DROPPED`), not silently kept or dropped;
 `formatVersion`/`schemaVersion` gate readability (major must match, minor
 must not exceed this build); `checkNpslVersions` implements the rule.
 **Consequences.** A typo'd *known* field is caught; a typo'd *unknown* key

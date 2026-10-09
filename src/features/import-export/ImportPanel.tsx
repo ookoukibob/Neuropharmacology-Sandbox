@@ -10,8 +10,14 @@
  *   a replace additionally requires the explicit acknowledgement checkbox;
  * - `busy` blocks duplicate submissions (file inputs, preview and confirm
  *   are disabled during an import);
- * - failure surfaces the real error and leaves the preview in place so
- *   the user can retry or cancel; the library itself is never touched.
+ * - a rejected import (`invalid`) and a genuine transaction failure
+ *   (`failed`) surface the real error and leave the preview in place so
+ *   the user can retry or cancel — the library itself is never touched;
+ * - a committed import clears the preview (no double-submit). That
+ *   includes `committed-refresh-failed`: the records are already written,
+ *   so the report says so, shows the refresh error, and offers a session
+ *   refresh retry — never "nothing was written" and never an automatic
+ *   re-run of the import.
  */
 import { useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -95,6 +101,8 @@ function WarningList({ warnings }: { readonly warnings: readonly ImportWarning[]
 }
 
 function ImportReportCard({ outcome }: { readonly outcome: LibraryImportOutcome }) {
+  const hydrate = useLibraryStore((s) => s.hydrate)
+
   if (outcome.status === 'ok') {
     const report = outcome.report
     return (
@@ -106,6 +114,39 @@ function ImportReportCard({ outcome }: { readonly outcome: LibraryImportOutcome 
             created, {report.updated} updated.
           </p>
           {report.warnings.length > 0 && <WarningList warnings={report.warnings} />}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+  if (outcome.status === 'committed-refresh-failed') {
+    // The transaction committed — only the session refresh failed. Never
+    // presented as a failed import: the records ARE in the database.
+    const report = outcome.report
+    return (
+      <Alert variant="destructive" data-testid="import-report">
+        <AlertTitle>Import committed — session refresh failed</AlertTitle>
+        <AlertDescription>
+          <p>
+            The database contains the imported records ({report.total} in the file:{' '}
+            {report.created} created, {report.updated} updated). Nothing was rolled back, but
+            re-reading them into this session failed, so the list on screen may be stale:
+          </p>
+          <p className="break-words" data-testid="refresh-error">
+            {outcome.message}
+          </p>
+          <p>
+            Retry the session refresh below (the import itself is not repeated), or reload the
+            page.
+          </p>
+          {report.warnings.length > 0 && <WarningList warnings={report.warnings} />}
+          <Button
+            type="button"
+            variant="outline"
+            data-testid="retry-refresh"
+            onClick={() => void hydrate()}
+          >
+            Retry session refresh
+          </Button>
         </AlertDescription>
       </Alert>
     )
@@ -226,7 +267,10 @@ export function ImportPanel() {
     try {
       const result = await importLibrary(active.text, mode)
       setOutcome(result)
-      if (result.status === 'ok') {
+      // Both committed outcomes clear the preview so the Confirm button
+      // cannot be pressed again for an import whose records are already
+      // written (even when the session refresh afterwards failed).
+      if (result.status === 'ok' || result.status === 'committed-refresh-failed') {
         setActive(null)
         setCsv(null)
         setMappingErrors([])
