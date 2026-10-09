@@ -64,7 +64,7 @@ Strict top-down dependencies. A layer may only import from layers below it.
                 │
 ┌───────────────▼──────────────────────────────────────────────────┐
 │  Serialization / file formats                                    │
-│  src/data/schemas/**  (Zod: NPSL file format; CSV mapping later) │
+│  src/data/schemas/**  (Zod: NPSL file format; CSV maps onto it)   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -132,12 +132,19 @@ src/
 │   └── charts/              # CurveData -> Plotly adapter + lazy chart component (phase 4)
 ├── features/                # one folder per feature
 │   ├── drug-library/        #   list/detail/form views (phase 3)
-│   └── calculator/          #   model adapter registry, input drafts, session store,
-│                            #   CalculatorView (phase 4)
-│       ├── schemas.ts       #   Zod structural validation of form drafts
-│       ├── store.ts         #   drafts, report, stale flags, curve settings
-│       └── components/      #   ParameterField, ResultPanel, CalculationTrace,
-│                            #   VisualizationPanel, ErrorPanel, ProvenanceBadge
+│   ├── calculator/          #   model adapter registry, input drafts, session store,
+│   │                        #   CalculatorView (phase 4)
+│   │   ├── schemas.ts       #   Zod structural validation of form drafts
+│   │   ├── store.ts         #   drafts, report, stale flags, curve settings
+│   │   └── components/      #   ParameterField, ResultPanel, CalculationTrace,
+│   │                        #   VisualizationPanel, ErrorPanel, ProvenanceBadge
+│   └── import-export/       #   import/export UI (phase 5)
+│       ├── csv/             #   RFC 4180 reader/writer, stable CSV schema,
+│       │                    #   explicit mapping -> versioned NPSL document
+│       ├── ImportPanel.tsx  #   file -> preview -> confirm -> report flow
+│       ├── CsvMappingCard.tsx #  explicit column mapping + fixed-unit policy
+│       ├── ExportPanel.tsx  #   whole-library .npsl/.json/.csv downloads
+│       └── fileIo.ts        #   readTextFile, downloadTextFile (object URLs)
 ├── domain/                  # pure domain types and guards
 │   ├── drug/                #   Drug, ReceptorTarget, Pharmacokinetics
 │   ├── pharmacology/        #   ScientificValue, units + unit catalog
@@ -157,7 +164,7 @@ src/
 │   ├── occupancy/           #   single-site binding model + curve generator
 │   └── dose-response/       #   Hill equation + curve generator
 ├── data/
-│   ├── schemas/             # Zod schemas (NPSL file format now; CSV later)
+│   ├── schemas/             # Zod schemas (NPSL file format; CSV builds an NPSL document first)
 │   ├── db/                  # single versioned Dexie module + upgrade hooks (phase 3)
 │   ├── mappers/             # persistence DTO <-> domain, NPSL export document
 │   ├── import/              # NPSL parse -> schema -> semantic -> preview pipeline
@@ -169,7 +176,7 @@ src/
 │   ├── fixtures.ts          # synthetic, explicitly-marked test fixtures
 │   └── fixtures/            # example NPSL library (marked example data)
 └── ...
-e2e/                         # Playwright specs: shell + calculator workflows
+e2e/                         # Playwright specs: shell, calculator, import/export workflows
 docs/                        # this documentation
 ```
 
@@ -239,24 +246,31 @@ display only (see ADR-16).
 
 ```
 file (.npsl / JSON / CSV)
-   → read & JSON/CSV parse
+   → read & JSON/CSV parse (CSV: RFC 4180, line-numbered errors)
+   → CSV only: explicit column mapping + declared unit policy → a
+               versioned NPSL document (no value is ever inferred)
    → version compatibility check
    → Zod schema validation           (src/data/schemas)
    → semantic validation             (units, duplicates, provenance rules)
-   → preview (counts, warnings, per-record status)
-   → user confirms
+   → preview (counts, warnings, per-record status; CSV declarations)
+   → user confirms   (replace additionally requires an acknowledgement)
    → single Dexie transaction writes the library
    → on any error: abort → existing library unchanged
 ```
 
+The UI (phase 5, `src/features/import-export/`) owns only presentation
+and confirmation: file selection and preview are read-only, and the
+single write path is the store's `importLibrary` → repository transaction
+(same pipeline, re-validated inside the transaction).
+
 ### 4.5 Export
 
 ```
-Zustand/repository data
+repository exportLibrary()
    → NPSL serializer (preserves provenance, metadata, versions)
    → file download          .npsl / .json  (lossless)
    → CSV projection         (lossy; provenance flattened to columns — see
-                             validation.md §5 and spec-review.md §6)
+                             validation.md §7 and spec-review.md §6)
 ```
 
 ### 4.6 Calculator state (session-only)
@@ -298,8 +312,9 @@ out of date with respect to its inputs.
 | `*` | Not found | 1 (done) |
 
 Every route has a page in `src/app/pages/` so routing, layout and
-navigation are wired and tested; `/import-export` and `/settings` gain
-their real content in a later phase.
+navigation are wired and tested; `/import-export` delegates to the
+phase-5 import/export feature, `/settings` gains its real content in a
+later phase.
 
 ---
 
@@ -311,12 +326,13 @@ their real content in a later phase.
 | 2 | Calculation engine models (PK, occupancy, Hill) + unit catalog + full unit tests + hardening (log y-axis validation, consistent numerical-loss policy, invariant coverage, CI) | 1 | done |
 | 3 | Drug library: Dexie repository, IndexedDB schema + migrations, startup hydration, transactional NPSL import, minimal library UI | 1, 2 | done |
 | 4 | Calculator + scientific visualization: model selector, explicit parameter inputs with provenance-aware library loading, results with calculation traces, CurveData → Plotly chart adapter, linear/log controls, log-Y representability handling, curve settings state — plus the hardening pass (PK mode union fix, stale-state semantics, curve readiness separation) and the critical calculator E2E workflows | 2, 3 | done |
-| 5 | Import/export UI (.npsl, JSON, CSV with field mapping) + round-trip tests | 3 | next |
-| 6 | Accessibility polish, keyboard workflows, expanded E2E coverage | all | pending |
+| 5 | Import/export UI (.npsl, JSON, CSV with field mapping) + round-trip tests | 3 | done |
+| 6 | Accessibility polish, keyboard workflows, expanded E2E coverage | all | next |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
-commit) ships with phase 3 at the repository level; phase 5 adds the full
-import/export UI (field mapping, CSV).
+commit) ships with phase 3 at the repository level; phase 5 added the full
+import/export UI (explicit CSV column mapping, preview/confirm flows,
+whole-library downloads).
 
 Out of scope for the MVP (explicitly): backend, accounts, LLM features,
 dose → effect models, occupancy → subjective effect models, any parameter not

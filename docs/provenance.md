@@ -54,7 +54,7 @@ Additional fields on every variant: optional `notes`; `recordedAt` /
   value, not a parallel field that can drift.
 - **Files**: nested object per parameter in `.npsl`; preserved verbatim on
   import/export (round-trip tested). CSV export flattens it to columns —
-  see [validation.md](validation.md) §5 for exactly what survives.
+  see [validation.md](validation.md) §7 for exactly what survives.
 - **Calculator**: echoed per input in `CalculationInput.provenance`, so the
   report distinguishes literature-backed parameters from typed-in ones.
 - **Charts**: `CurveSeries.provenance` + `seriesType: 'model' | 'observed'`

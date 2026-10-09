@@ -74,7 +74,7 @@ source of truth for "valid".
 
 ---
 
-## 4. Semantic layer (import: phase 3; calculator inputs: phase 4)
+## 4. Semantic layer (import: phase 3; calculator inputs: phase 4; CSV mapping: phase 5)
 
 Structurally valid data can still be scientifically wrong. The import
 checks are implemented as pure functions in
@@ -86,13 +86,13 @@ rendered field-by-field by the calculator (phase 4).
 | --- | --- | --- |
 | Unit known | every `unit` exists in the unit catalog | warning `UNKNOWN_UNIT` — imported exactly as declared; a calculation that *uses* it fails with the engine's `UNIT_UNKNOWN` |
 | Unit dimension | `halfLife` is time, `kd`/`ki`/`ec50`/`ic50` are molar- or mass-concentration, `bioavailability` is dimensionless | warning `UNEXPECTED_DIMENSION` — never rewritten |
-| Cross-parameter consistency | one target may not carry both `kd` and `ki` **for the same measurement** with conflicting literature sources | warning (phase 5 mapping UI) |
+| Cross-parameter consistency | one target may not carry both `kd` and `ki` **for the same measurement** with conflicting literature sources | non-blocking warning in the CSV mapping UI (`mapping-warnings`: the two stay separate values, never substituted) — the import never resolves it silently |
 | Duplicate ids | unique `Drug.id`, unique `targets[].id` per drug | error `DUPLICATE_ID` — blocking |
 | Duplicate names | same `identifiers.name` twice in one file | warning `DUPLICATE_NAME` — names are labels, not identities |
 | Ranges | fraction-like values in range, non-negative where required | error (form) / engine-side (calculator) |
-| Provenance completeness | `literature` with no citation/doi/url beyond `source` | warning (encourage full citation) |
-| Demo marking | `origin: 'built-in-demo'` drugs must be in a library with `dataStatus: 'example'` | warning |
-| Kd/Ki separation | importers may never map a column named ambiguously (`"Kd/Ki"`) without explicit user mapping choice | blocks until resolved in mapping UI |
+| Provenance completeness | `literature` with no citation/doi/url beyond `source` | accepted — `source` alone satisfies the schema; a fuller citation is encouraged by documentation, not enforced by an import warning |
+| Demo marking | `origin: 'built-in-demo'` drugs belong to demo/example data | accepted at import — demo data is identified in the UI by the origin badge (`Demo example`) and the library `dataStatus` badge, not by an import warning |
+| Kd/Ki separation | importers may never map a column named ambiguously (`"Kd/Ki"`) without explicit user mapping choice | never auto-mapped — the column stays unmapped (listed as *not imported* in the preview) until the user assigns it |
 
 ---
 
@@ -106,8 +106,8 @@ File selected
   → semantic validation
   → PREVIEW: file info, counts, per-record status, full error/warning list,
              field mapping UI for CSV, conflict resolution (merge/replace)
-             (preview data functions ship in phase 3 — `previewNpslImport`;
-             the wizard UI with CSV field mapping is phase 5)
+             (`previewNpslImport` ships in phase 3; the import/export UI
+             with explicit CSV column mapping ships in phase 5)
   → user confirms
   → single Dexie transaction: metadata + drugs written atomically
   → success summary
@@ -164,15 +164,58 @@ it needs a molecular weight the engine will never invent.
 
 CSV is structurally weaker than JSON:
 
-- **Import**: header detection → **field mapping UI** (spec requires mapping
-  where necessary) → type/unit coercion per mapped column → then layers 2–5
-  as usual. Ambiguous headers (`"Kd/Ki"`, `"conc."`) must be resolved by the
-  user, never guessed.
-- **Export**: provenance is flattened into companion columns
-  (`kd`, `kd_unit`, `kd_provenance_type`, `kd_provenance_source`, ...);
-  nested provenance beyond that is serialized as a JSON string in the cell.
-  The UI must warn that CSV is a lossy projection and recommend `.npsl` for
-  backup (see `spec-review.md` §6).
+- **Import**: RFC 4180 parse (quoted fields, escaped quotes, embedded
+  newlines, BOM tolerated; structural problems — unterminated quote, quote
+  in an unquoted field, row wider than the header, duplicate column names —
+  fail with the line number) → **explicit column mapping UI** → then layers
+  2–5 as usual. Ambiguous headers (`"Kd/Ki"`, `"conc."`, `"affinity"`,
+  `"potency"`) are never inferred: every mapping select starts as "Ignore
+  (not imported)" and the user assigns each column; unmapped columns are
+  listed in the preview as *not imported*. Mapping rules, each blocking the
+  preview with a visible, actionable message:
+  - `drug.name` must be mapped; two columns may not claim the same meaning;
+  - every mapped value column needs a unit source — its own unit column
+    *or* a visibly declared fixed unit, never both. Fixed units are picked
+    from the unit catalog where the parameter has a dimension (molar/mass
+    concentration for Kd/Ki/EC50/IC50, time for t½, dimensionless for
+    bioavailability) and declared as free text where the catalog has no
+    units (clearance, volume of distribution). Units are stored verbatim —
+    never converted, defaulted or guessed;
+  - provenance columns require a provenance type column; literature
+    provenance requires a source; a source column is rejected for
+    non-literature types; provenance JSON must parse to a JSON object;
+  - target-scoped columns require the target name column;
+  - row-level problems (missing drug name, non-finite value, empty unit
+    cell, unit/provenance without a value, unknown target action) block the
+    **whole** import with per-row messages — the repository import is
+    all-or-nothing, so a partial write cannot be expressed.
+
+  Rows are grouped into one record only through an explicit drug id column
+  (identical drug-level fields required; a repeated target id inside one
+  group is rejected). Without an id column every row becomes its own record
+  with a generated id — equal names never merge records. Generated ids are
+  identity bookkeeping only. Imported records carry storage
+  `origin: "imported"` (distinct from provenance), and values without
+  provenance columns are stamped `{ "type": "user" }` — provenance is never
+  invented or upgraded. The mapped rows are assembled into a normal
+  versioned NPSL document that then passes through the *same*
+  `previewNpslImport` → repository transaction pipeline — CSV never gets a
+  second, weaker validation path.
+- **Export**: the header schema is stable and derived from one parameter
+  table (57 columns): identity/bookkeeping (`drug_id`, `origin`, `name`,
+  `synonyms`, `description`, `cas_number`, `tags`, `notes`, `created_at`,
+  `updated_at`), target fields (`target_id` … `target_notes`), four
+  target-scope parameters (`kd`, `ki`, `ec50`, `ic50`) and four PK
+  parameters (`half_life`, `clearance`, `volume_of_distribution`,
+  `bioavailability`) each as `value` / `unit` / `provenance_type` /
+  `provenance_source` / `provenance_json`, plus `pk_notes` between the
+  blocks. One row per target (a drug without targets yields one row with
+  empty target columns); drug-level columns repeat on every row of that
+  drug and are tied together by `drug_id`. Nested provenance beyond
+  type+source is serialized as a JSON string in the `_provenance_json`
+  cell; storage `origin` stays its own column, distinct from provenance.
+  The UI shows an always-visible warning that CSV is a lossy projection
+  and recommends `.npsl` for backup (see `spec-review.md` §6).
 
 ---
 

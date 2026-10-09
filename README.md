@@ -31,6 +31,7 @@ and unverified data. It never invents pharmacological parameters.
 **Phase 3 — drug library + local persistence (complete).**
 **Phase 4 — calculator + scientific visualization (complete, after a
 hardening and closure pass).**
+**Phase 5 — import/export workflows (complete).**
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -38,8 +39,8 @@ hardening and closure pass).**
 | 2 | Calculation engine: first-order PK, single-site occupancy, Hill response, chart-agnostic curves, unit catalog, Decimal.js numerics, calculation traces, provenance propagation — plus the hardening pass (log y-axis validation, consistent numerical-loss reporting, invariant coverage, GitHub Actions CI) | done |
 | 3 | Drug library: Dexie/IndexedDB persistence behind a repository abstraction, versioned schema with in-place migration, startup hydration with quarantine reporting, transactional NPSL import (preview → all-or-nothing commit), minimal library UI (list/select/create/edit/delete with provenance display), export → import round trip | done |
 | 4 | Calculator + visualization: model selector, explicit parameter inputs, provenance-aware library loading (explicit selection only), calculation results with structured traces, CurveData → Plotly chart adapter, linear/log controls, log-Y representability handling, curve settings state — plus the hardening pass (PK mode union fix, stale-state semantics, curve readiness separation) and the critical calculator E2E workflows | done |
-| 5 | Import/export UI (.npsl, JSON, CSV with field mapping) | next |
-| 6 | Accessibility polish, keyboard workflows, expanded E2E coverage | pending |
+| 5 | Import/export UI: `.npsl`/`.json` import with preview → confirm (merge/replace with explicit destructive acknowledgement), explicit CSV column mapping (nothing inferred from column names, declared unit policy, CSV → versioned NPSL document → same validation pipeline), whole-library export to `.npsl`/`.json` (lossless) and CSV (lossy, with a visible warning), component + CSV unit tests and six E2E workflows | done |
+| 6 | Accessibility polish, keyboard workflows, expanded E2E coverage | next |
 
 ### What works today
 
@@ -58,6 +59,11 @@ hardening and closure pass).**
 - Provenance preserved end to end: a library-loaded value keeps its
   provenance badge in the input and in the report's inputs used; typed
   values are labelled as making no source claim.
+- Import/export in the browser: `.npsl`/`.json` files preview before
+  anything is written (replace needs an explicit acknowledgement), CSV
+  imports go through a visible column-mapping step with declared units,
+  and the whole library exports to a lossless `.npsl`/`.json` or a
+  lossy-but-convenient CSV that always warns it is not a backup format.
 - Fully static: no backend, no accounts, no cloud sync.
 
 All quality gates run locally and in CI (`.github/workflows/ci.yml`):

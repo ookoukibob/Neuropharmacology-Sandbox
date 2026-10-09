@@ -11,14 +11,34 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import type { Drug, DrugId } from '../../domain/drug/drug'
 import type { LibraryMetadata } from '../../domain/library/library'
+import type { ImportIssue, ImportWarning } from '../../data/import/importPipeline'
 import type {
   DrugChanges,
   DrugInput,
   DrugRepository,
+  ImportMode,
+  ImportReport,
   QuarantinedRecord,
 } from '../../data/repositories/repository'
 
 export type LibraryStatus = 'idle' | 'loading' | 'ready' | 'error'
+
+/**
+ * Result of an import attempt, normalized for UI feedback:
+ * - `ok` — committed by the repository (report carries created/updated counts);
+ * - `invalid` — rejected by validation; nothing was written, so the session
+ *   state still mirrors storage and no refresh happens;
+ * - `failed` — the storage layer threw (I/O, quota); the transaction aborted
+ *   and the store surfaces the message like every other mutation failure.
+ */
+export type LibraryImportOutcome =
+  | { readonly status: 'ok'; readonly report: Extract<ImportReport, { readonly ok: true }> }
+  | {
+      readonly status: 'invalid'
+      readonly errors: readonly ImportIssue[]
+      readonly warnings: readonly ImportWarning[]
+    }
+  | { readonly status: 'failed'; readonly message: string }
 
 export interface LibraryState {
   readonly status: LibraryStatus
@@ -37,6 +57,8 @@ export interface LibraryState {
   createDrug(input: DrugInput): Promise<Drug | null>
   updateDrug(id: DrugId, changes: DrugChanges): Promise<Drug | null>
   deleteDrug(id: DrugId): Promise<boolean>
+  /** Transactional NPSL import; refreshes the session only on success. */
+  importLibrary(text: string, mode: ImportMode): Promise<LibraryImportOutcome>
 }
 
 function messageOf(error: unknown): string {
@@ -119,6 +141,23 @@ export function createLibraryStore(
       } catch (error) {
         set({ error: messageOf(error) })
         return false
+      }
+    },
+
+    async importLibrary(text, mode) {
+      try {
+        const report = await repo.importLibrary(text, { mode })
+        if (!report.ok) {
+          // Rejected inside the repository's transaction: nothing was
+          // written, so storage still matches the session — no refresh.
+          return { status: 'invalid', errors: report.errors, warnings: report.warnings }
+        }
+        await refresh(set)
+        return { status: 'ok', report }
+      } catch (error) {
+        const message = messageOf(error)
+        set({ error: message })
+        return { status: 'failed', message }
       }
     },
   }))

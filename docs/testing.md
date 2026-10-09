@@ -75,8 +75,11 @@ rendering, provenance labels, absence of emoji as UI.
 
 What we do **not** assert: pixel styling, class strings of shadcn internals.
 
-Current example: `src/app/layout/AppLayout.test.tsx` (navigation landmarks,
-skip link, active-route semantics, no-emoji rule).
+Current examples: `src/app/layout/AppLayout.test.tsx` (navigation landmarks,
+skip link, active-route semantics, no-emoji rule) and
+`src/features/import-export/ImportExportView.test.tsx` (preview-before-
+write, replace acknowledgement, explicit CSV mapping, export contents —
+against the real repository with fake-indexeddb).
 
 ---
 
@@ -101,10 +104,26 @@ Critical workflows only (each one is a spec-level guarantee):
    shows provenance → reload → still present (persistence) — covered by
    component + repository tests today; a dedicated e2e joins the
    expanded coverage of phase 6.
-4. Import: import invalid file → error listed, library unchanged; import valid
-   file → records appear with provenance intact (phase 5, with the wizard UI).
-5. Export: export `.npsl` → re-import → data equal (round trip through UI;
-   phase 5).
+4. Import/export (`e2e/importExport.spec.ts`, implemented — synthetic
+   in-memory buffers, six workflows):
+   - valid NPSL → preview shows counts and records, **nothing is written
+     before the confirmation**, the committed report shows real counts and
+     the record (with provenance badge) appears in the library;
+   - invalid NPSL → visible parse error with its code, no confirm control,
+     library unchanged;
+   - replace → blocked (record count unchanged) until the explicit
+     acknowledgement is checked, then the whole library is replaced;
+   - export `.npsl` + `.json` → byte-identical envelopes, parse round trip
+     asserting metadata, values, units and provenance survive;
+   - CSV mapping → every select starts unmapped (a `Kd/Ki` header is never
+     inferred), missing drug-name and missing unit-source are blocked with
+     visible reasons, the explicit Kd choice lands as Kd with its unit and
+     no Ki, storage origin shows `Imported`;
+   - CSV export → stable 57-column header, one row per target, and the
+     always-visible lossiness warning.
+5. Export round trip at the repository level (export → import → deep
+   equality) is covered by repository tests; the E2E layer asserts the
+   exported file's content parses back with provenance intact.
 
 Config: `playwright.config.ts` (chromium; dev server auto-started).
 
@@ -136,8 +155,11 @@ Test procedure:
 Additional round-trip: domain → NPSL → domain (validating the mapper in both
 directions), and a JSON ↔ NPSL identity check (`.npsl` is JSON).
 
-CSV round-trip is **not** claimed to be lossless; a test documents exactly
-which fields survive (`docs/validation.md` §7).
+CSV round-trip is **not** claimed to be lossless; the CSV tests document
+exactly which fields survive: value/unit/provenance columns round trip
+through writer + reader (`csvExport.test.ts`, `writeCsv.test.ts`), while
+a CSV import re-stamps storage `origin` and bookkeeping timestamps — the
+lossy edges are listed in `docs/validation.md` §7.
 
 ---
 
@@ -170,8 +192,11 @@ which fields survive (`docs/validation.md` §7).
 | Schema migration tests | done — v1→v2 upgrade: bookkeeping only, scientific + unknown fields survive |
 | Repository tests | done — CRUD, metadata stamping, quarantine, atomic replace/import rollback, NPSL round trip, reload |
 | Import pipeline tests | done — parse/schema/semantic/preview classification |
-| Store + library UI tests | done — hydration guard, quarantine report, form safeguards |
+| Store + library UI tests | done — hydration guard, quarantine report, form safeguards, transactional `importLibrary` outcome (ok / invalid / failed) |
 | Calculator tests (adapters, store, schemas, components) | done — drafts, stale semantics, curve settings, PK mode union |
-| Test suite total | 441 unit tests (28 files) |
+| CSV tests (parse, write, export, mapping, conversion) | done — quoting/escaping/BOM/errors, stable header, provenance columns, ambiguity + unit rules, CSV → NPSL document, grouping, row errors |
+| Import/export UI tests | done — preview-before-write, replace gate, cancel, CSV mapping flow, export contents + object-URL lifecycle |
+| Test suite total | 535 unit tests (34 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
-| Library reload / import / export e2e | pending — import wizard e2e with phase 5, expanded coverage (incl. library reload) with phase 6; library covered today by component + repository tests |
+| Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
+| Library reload e2e | pending — expanded coverage with phase 6; library covered today by component + repository tests |

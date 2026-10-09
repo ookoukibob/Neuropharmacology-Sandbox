@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { SandboxDatabase } from '../../data/db/database'
 import { DexieDrugRepository } from '../../data/repositories/dexieDrugRepository'
 import type { DrugRepository } from '../../data/repositories/repository'
-import { syntheticDrug } from '../../tests/fixtures'
+import { syntheticDrug, syntheticNpslText } from '../../tests/fixtures'
 import { createLibraryStore } from './store'
 
 let sequence = 0
@@ -220,6 +220,98 @@ describe('createLibraryStore — session-only state', () => {
       expect(store.getState().selectedDrugId).toBe('some-id')
       store.getState().selectDrug(null)
       expect(store.getState().selectedDrugId).toBeNull()
+    } finally {
+      await db.delete()
+    }
+  })
+})
+
+describe('createLibraryStore — importLibrary', () => {
+  it('commits a valid NPSL import and refreshes the session from storage', async () => {
+    const { db, repo, store } = await makeStore()
+    try {
+      await store.getState().hydrate()
+      expect(store.getState().drugs).toEqual([])
+
+      const outcome = await store
+        .getState()
+        .importLibrary(syntheticNpslText([syntheticDrug()]), 'merge')
+      expect(outcome.status).toBe('ok')
+      if (outcome.status !== 'ok') throw new Error('expected a committed import')
+      expect(outcome.report.mode).toBe('merge')
+      expect(outcome.report.created).toBe(1)
+      expect(outcome.report.updated).toBe(0)
+
+      // session mirrors the database (the repository re-read happened)
+      expect(store.getState().drugs).toHaveLength(1)
+      const stored = await repo.getAllDrugs()
+      expect(stored.drugs).toHaveLength(1)
+      expect(stored.drugs[0]?.targets[0]?.kd?.provenance).toEqual({
+        type: 'literature',
+        source: 'Synthetic fixture source',
+        citation: 'Invented for tests, 2026',
+      })
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('reports malformed input as invalid without writing anything', async () => {
+    const { db, repo, store } = await makeStore()
+    try {
+      await store.getState().hydrate()
+      const outcome = await store.getState().importLibrary('{broken', 'merge')
+      expect(outcome.status).toBe('invalid')
+      if (outcome.status !== 'invalid') throw new Error('expected a rejected import')
+      expect(outcome.errors[0]?.code).toBe('PARSE')
+
+      const stored = await repo.getAllDrugs()
+      expect(stored.drugs).toEqual([])
+      expect(store.getState().drugs).toEqual([])
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('rejects duplicate ids inside the file and leaves the library unchanged', async () => {
+    const { db, repo, store } = await makeStore()
+    try {
+      await store.getState().hydrate()
+      await store.getState().importLibrary(syntheticNpslText([syntheticDrug()]), 'merge')
+
+      const duplicate = syntheticNpslText([
+        syntheticDrug(),
+        syntheticDrug({ identifiers: { name: 'Synthetic duplicate', synonyms: [] } }),
+      ])
+      const outcome = await store.getState().importLibrary(duplicate, 'merge')
+      expect(outcome.status).toBe('invalid')
+      if (outcome.status !== 'invalid') throw new Error('expected a rejected import')
+      expect(outcome.errors.some((e) => e.code === 'DUPLICATE_ID')).toBe(true)
+
+      const stored = await repo.getAllDrugs()
+      expect(stored.drugs).toHaveLength(1)
+      expect(stored.drugs[0]?.identifiers.name).toBe('Fixture Compound A')
+      expect(store.getState().drugs).toHaveLength(1)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('surfaces a storage failure as failed and keeps the session intact', async () => {
+    const { db, repo, store } = await makeStore()
+    try {
+      await store.getState().hydrate()
+      repo.importLibrary = async () => {
+        throw new Error('storage failure')
+      }
+
+      const outcome = await store.getState().importLibrary(
+        syntheticNpslText([syntheticDrug()]),
+        'merge',
+      )
+      expect(outcome).toEqual({ status: 'failed', message: 'storage failure' })
+      expect(store.getState().error).toBe('storage failure')
+      expect(store.getState().drugs).toEqual([])
     } finally {
       await db.delete()
     }
