@@ -96,6 +96,7 @@ npm install            # install dependencies
 npm run dev            # start the dev server (Vite)
 npm test               # run unit + schema tests (Vitest)
 npm run typecheck      # strict TypeScript check (tsc -b)
+npm run typecheck:e2e  # strict TypeScript check for the Playwright specs
 npm run lint           # oxlint
 npm run build          # production build to dist/ (static hosting ready)
 npm run test:e2e       # Playwright end-to-end tests (needs: npx playwright install chromium)

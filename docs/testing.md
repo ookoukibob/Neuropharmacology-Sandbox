@@ -159,6 +159,13 @@ Critical workflows only (each one is a spec-level guarantee):
 
 Config: `playwright.config.ts` (chromium; dev server auto-started).
 
+The specs themselves are held to the same strictness as the application:
+`npm run typecheck:e2e` runs `tsc --noEmit -p tsconfig.e2e.json` over every
+`e2e/**/*.ts` file (strict, `noUncheckedIndexedAccess`,
+`exactOptionalPropertyTypes`, unused locals/parameters), separately from
+`npm run typecheck` so a spec-only error is reported against the specs. CI
+runs it in the quality-gates job as a mandatory step.
+
 ---
 
 ## 5. Round-trip testing (NPSL)
@@ -214,7 +221,8 @@ lossy edges are listed in `docs/validation.md` §7.
   (`NUMERICAL_ERROR`, `MODEL_NOT_APPLICABLE`) are documented as reserved in
   [calculation-engine.md](calculation-engine.md) §3 and gain a producing
   test the moment a producer exists.
-- `npm run typecheck` (strict), `npm run lint`, `npm test` and `npm run build`
+- `npm run typecheck` (strict), `npm run typecheck:e2e` (strict, every
+  Playwright spec), `npm run lint`, `npm test` and `npm run build`
   must all pass before merging a change. CI additionally requires
   `npm audit --omit=dev` (production dependency advisories) to pass, and
   reports the full-tree `npm audit` as a non-blocking step because of the

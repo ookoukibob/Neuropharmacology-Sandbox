@@ -1,4 +1,8 @@
-import AxeBuilder from '@axe-core/playwright'
+// Named import — the form @axe-core/playwright documents. Its single
+// shared .d.ts has no `"type": "module"`, so under `module: nodenext` a
+// default import resolves to the module namespace (unconstructable) even
+// though the runtime ESM build does export a default.
+import { AxeBuilder } from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 
 /**

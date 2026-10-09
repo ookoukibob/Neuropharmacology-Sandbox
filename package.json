@@ -10,6 +10,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b",
+    "typecheck:e2e": "tsc --noEmit -p tsconfig.e2e.json",
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",

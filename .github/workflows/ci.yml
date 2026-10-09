@@ -35,6 +35,8 @@ jobs:
         run: npm audit
         continue-on-error: true
       - run: npm run typecheck
+      - name: Typecheck E2E tests
+        run: npm run typecheck:e2e
       - run: npm run lint
       - run: npm test
       - run: npm run build
