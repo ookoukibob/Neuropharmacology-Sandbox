@@ -90,8 +90,13 @@ describe('serializeNpslDocument — negative-zero preservation (audit DI-04)', (
     // scientific values, while the positive zero stays `0`.
     expect(text.match(/"value": -0/g) ?? []).toHaveLength(2)
     expect(text).toContain('"value": 0,\n')
-    // The collision-proof placeholder never leaks into any output.
-    expect(text).not.toContain('\u0000')
+    // The internal marker text never leaks into an ordinary fixture's
+    // output. (A raw-NUL check would be meaningless: JSON escaping means
+    // a leaked placeholder appears as the escaped text `\u0000…`, never
+    // as a literal NUL character. This fixture legitimately contains no
+    // marker-like data, so the marker's distinctive text must be absent —
+    // the collision test below covers fixtures that DO contain it.)
+    expect(text).not.toContain('npsl-negative-zero')
   })
 
   it('parses back to exact negative zero (JSON.parse + Object.is)', () => {
@@ -155,6 +160,63 @@ describe('serializeNpslDocument — negative-zero preservation (audit DI-04)', (
     const text = serializeNpslDocument(negZeroDocument())
     expect(text).not.toContain('NaN')
     expect(text).not.toContain('Infinity')
+  })
+
+  it('survives placeholder collisions: source data containing the marker itself', () => {
+    // The implementation's private initial marker (a NUL-delimited string),
+    // rebuilt here from character codes so the test drives only the PUBLIC
+    // serializer. The source data contains BOTH the initial marker (as an
+    // extension value and as an extension property key) AND the first
+    // extended candidate ('<marker>-extended'), forcing the collision loop
+    // to advance twice before serialization.
+    const NUL = String.fromCharCode(0)
+    const marker = `${NUL}npsl-negative-zero${NUL}`
+    const firstExtended = `${marker}-extended`
+    const document = {
+      formatVersion: '1.0.0',
+      schemaVersion: '1.0.0',
+      libraryMetadata: syntheticMetadata(),
+      drugs: [
+        {
+          ...syntheticDrug({
+            targets: [
+              {
+                id: 'collision-target-1',
+                name: 'CL-R',
+                kd: { value: -0, unit: 'nM', provenance: USER_PROVENANCE },
+              },
+            ],
+          }),
+          futureField: {
+            // Marker-like extension key AND marker-like values.
+            [marker]: 'marker-key value kept',
+            markerValue: marker,
+            firstExtendedValue: firstExtended,
+            offset: -0,
+            note: 'unrelated',
+          },
+        },
+      ],
+    }
+    const text = serializeNpslDocument(document)
+    const parsed = JSON.parse(text) as NpslDocument
+
+    // Negative zero is still exact despite the collisions.
+    expect(Object.is(fieldAt(parsed, 'drugs', '0', 'targets', '0', 'kd', 'value'), -0)).toBe(true)
+    expect(Object.is(fieldAt(parsed, 'drugs', '0', 'futureField', 'offset'), -0)).toBe(true)
+    // Every marker-like source string survives byte-identical: if the
+    // loop had stopped at the initial marker (or after a single
+    // extension), the replacement would have rewritten these positions
+    // to the `-0` token instead.
+    const extension = fieldAt(parsed, 'drugs', '0', 'futureField')
+    expect(fieldAt(extension, 'markerValue')).toBe(marker)
+    expect(fieldAt(extension, 'firstExtendedValue')).toBe(firstExtended)
+    // The marker-like property key survives as a key.
+    expect(fieldAt(extension, marker)).toBe('marker-key value kept')
+    // Unrelated fields and recognized fields are not corrupted.
+    expect(fieldAt(extension, 'note')).toBe('unrelated')
+    expect(parsed.drugs[0]?.identifiers.name).toBe('Fixture Compound A')
+    expect(parsed.drugs[0]?.targets[0]?.name).toBe('CL-R')
   })
 })
 

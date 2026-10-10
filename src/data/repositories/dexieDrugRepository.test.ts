@@ -930,3 +930,178 @@ describe('DexieDrugRepository — negative-zero NPSL preservation (audit DI-04)'
     }
   })
 })
+
+/**
+ * GAP-1 fixture: a drug whose two targets carry *distinct* unknown
+ * extension fields (nested object + array), distinct provenance-level
+ * extensions and a record-level extension — assembled untyped (mirroring
+ * `EXTENSION_DRUG`) so the unknown keys can ride in through the loose NPSL
+ * schema. Synthetic data only.
+ */
+const GAP1_DRUG = {
+  id: 'gap1-drug-1',
+  origin: 'imported',
+  identifiers: { name: 'Synthetic Gap1 Fixture', synonyms: ['Synthetic'] },
+  tags: ['fixture'],
+  rootExtension: { note: 'gap1 root extension' },
+  targets: [
+    {
+      id: 'gap1-target-a',
+      name: 'GAP1-A',
+      gene: 'GAP1A',
+      kd: {
+        value: 3.2,
+        unit: 'nM',
+        provenance: {
+          type: 'literature',
+          source: 'Synthetic fixture source',
+          provenanceExtension: { family: 'ext-a', markers: ['x', 'y'] },
+        },
+      },
+      futureTargetA: { nested: { list: ['keep', 'me'], count: 2 }, flag: true },
+    },
+    {
+      id: 'gap1-target-b',
+      name: 'GAP1-B',
+      ic50: {
+        value: 7.5,
+        unit: 'nM',
+        provenance: {
+          type: 'user',
+          recordedAt: '2026-01-01T00:00:00.000Z',
+          provenanceExtension: 'prov-b',
+        },
+      },
+      futureTargetB: ['array', 'extension'],
+    },
+  ],
+  notes: 'Synthetic fixture — not pharmacological information.',
+}
+
+describe('GAP-1 — unknown target extensions under a targets-replacing update (audit)', () => {
+  const TS = '2026-01-01T00:00:00.000Z'
+
+  it('reattaches unknown target fields by stable id after a reordered targets replacement', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const report = await repo.importLibrary(extendedNpslText([GAP1_DRUG]), { mode: 'replace' })
+      expect(report.ok).toBe(true)
+
+      // Baseline: the unknown fields really made it into the raw row.
+      const before: unknown = await db.drugs.get('gap1-drug-1')
+      expect(fieldAt(before, 'targets', '0', 'futureTargetA', 'nested', 'list')).toEqual([
+        'keep',
+        'me',
+      ])
+
+      // A targets-REPLACING update (the form path always supplies
+      // `targets`): same stable ids, positions swapped, one recognized
+      // name changed, plus an unrelated drug-level edit.
+      await repo.updateDrug('gap1-drug-1', {
+        targets: [
+          {
+            id: 'gap1-target-b',
+            name: 'GAP1-B Renamed',
+            ic50: { value: 7.5, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
+          },
+          {
+            id: 'gap1-target-a',
+            name: 'GAP1-A',
+            gene: 'GAP1A',
+            kd: { value: 3.2, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
+          },
+        ],
+        notes: 'gap1 unrelated edit',
+      })
+
+      const raw: unknown = await db.drugs.get('gap1-drug-1')
+      // The replacement governs the array: new order, stable ids.
+      expect(fieldAt(raw, 'targets', '0', 'id')).toBe('gap1-target-b')
+      expect(fieldAt(raw, 'targets', '1', 'id')).toBe('gap1-target-a')
+      // Position 0 (once target A) now carries B's own extension — not A's.
+      expect(fieldAt(raw, 'targets', '0', 'futureTargetB')).toEqual(['array', 'extension'])
+      expect(fieldAt(raw, 'targets', '0', 'futureTargetA')).toBeUndefined()
+      // Position 1 (once target B) now carries A's nested extension byte-exact.
+      expect(fieldAt(raw, 'targets', '1', 'futureTargetA')).toEqual({
+        nested: { list: ['keep', 'me'], count: 2 },
+        flag: true,
+      })
+      expect(fieldAt(raw, 'targets', '1', 'futureTargetB')).toBeUndefined()
+      // Provenance-level extensions reattach under their own parameter even
+      // though the replacement supplied fresh contract provenance.
+      expect(fieldAt(raw, 'targets', '1', 'kd', 'provenance', 'provenanceExtension')).toEqual({
+        family: 'ext-a',
+        markers: ['x', 'y'],
+      })
+      expect(fieldAt(raw, 'targets', '0', 'ic50', 'provenance', 'provenanceExtension')).toBe(
+        'prov-b',
+      )
+      // Record-level extension and the unrelated edit both applied.
+      expect(fieldAt(raw, 'rootExtension')).toEqual({ note: 'gap1 root extension' })
+      expect(fieldAt(raw, 'notes')).toBe('gap1 unrelated edit')
+      // Known fields are governed by the replacement, not the old row.
+      expect(fieldAt(raw, 'targets', '0', 'name')).toBe('GAP1-B Renamed')
+
+      // A fresh repository read returns the same preserved extensions.
+      const reloaded = await repo.getDrug('gap1-drug-1')
+      expect(fieldAt(reloaded, 'targets', '0', 'futureTargetB')).toEqual([
+        'array',
+        'extension',
+      ])
+      expect(fieldAt(reloaded, 'targets', '1', 'futureTargetA', 'nested', 'count')).toBe(2)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('does not transplant removed-target extensions onto survivors or a new target id', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const report = await repo.importLibrary(extendedNpslText([GAP1_DRUG]), { mode: 'replace' })
+      expect(report.ok).toBe(true)
+
+      // Remove target A entirely; keep B (moved to position 0); add a
+      // brand-new stable id C.
+      await repo.updateDrug('gap1-drug-1', {
+        targets: [
+          {
+            id: 'gap1-target-b',
+            name: 'GAP1-B',
+            ic50: { value: 7.5, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
+          },
+          {
+            id: 'gap1-target-c',
+            name: 'GAP1-C',
+            kd: { value: 1.6, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
+          },
+        ],
+        notes: 'removed target a',
+      })
+
+      const raw: unknown = await db.drugs.get('gap1-drug-1')
+      expect(fieldAt(raw, 'targets')).toHaveLength(2)
+      expect(fieldAt(raw, 'targets', '0', 'id')).toBe('gap1-target-b')
+      expect(fieldAt(raw, 'targets', '1', 'id')).toBe('gap1-target-c')
+      // The survivor keeps its OWN extension at its new position.
+      expect(fieldAt(raw, 'targets', '0', 'futureTargetB')).toEqual(['array', 'extension'])
+      expect(fieldAt(raw, 'targets', '0', 'futureTargetA')).toBeUndefined()
+      // The new id inherits nothing from the removed target or the survivor.
+      expect(fieldAt(raw, 'targets', '1', 'futureTargetA')).toBeUndefined()
+      expect(fieldAt(raw, 'targets', '1', 'futureTargetB')).toBeUndefined()
+      expect(fieldAt(raw, 'targets', '1', 'kd', 'provenance', 'provenanceExtension')).toBeUndefined()
+      // The removed target's unknown data exists nowhere in the raw row.
+      const text = JSON.stringify(raw)
+      expect(text).not.toContain('futureTargetA')
+      expect(text).not.toContain('ext-a')
+      // The unrelated edit was applied; the survivor's provenance stands.
+      expect(fieldAt(raw, 'notes')).toBe('removed target a')
+      expect(fieldAt(raw, 'targets', '0', 'ic50', 'provenance', 'provenanceExtension')).toBe(
+        'prov-b',
+      )
+    } finally {
+      await db.delete()
+    }
+  })
+})

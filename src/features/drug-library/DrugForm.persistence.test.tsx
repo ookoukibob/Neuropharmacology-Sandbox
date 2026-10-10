@@ -24,6 +24,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { libraryRepository, useLibraryStore } from '@/app/libraryStore'
 import { SandboxDatabase } from '@/data/db/database'
 import { FIXTURE_NOTE, FIXTURE_TIMESTAMP } from '../../tests/fixtures'
+import { fieldAt } from '../../tests/runtimeFields'
 import { DrugDetailView } from './DrugDetailView'
 
 /** Complete synthetic literature provenance incl. an unknown extension key. */
@@ -476,5 +477,196 @@ describe('DrugForm — negative-zero and notes-presence persistence (audit DI-04
     expect(raw?.notes).toBe('')
     const reloaded = await libraryRepository.getDrug(created.id)
     expect(reloaded?.notes).toBe('')
+  })
+})
+
+/**
+ * GAP-1 / GAP-2 follow-up (data-integrity audit): the form ALWAYS submits
+ * a replacement `targets` array and NEVER submits `pharmacokinetics`.
+ * These tests drive the real detail → form → store → repository chain and
+ * then inspect the raw stored row, so they protect the actual production
+ * update path rather than a helper in isolation. Synthetic fixtures only.
+ */
+describe('DrugForm — extensions and pharmacokinetics through an unrelated edit (audit GAP-1/GAP-2)', () => {
+  /**
+   * NPSL document with unknown fields at record, target and provenance
+   * level on two different targets (nested object + array included).
+   * Built as a template literal so the unknown keys ride through the real
+   * import pipeline — never through `JSON.stringify` of a typed fixture.
+   */
+  const GAP1_FORM_NPSL_TEXT = `{
+  "formatVersion": "1.0.0",
+  "schemaVersion": "1.0.0",
+  "libraryMetadata": {
+    "id": "fixture-library",
+    "name": "Synthetic gap fixture library",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-01T00:00:00.000Z",
+    "dataStatus": "example"
+  },
+  "drugs": [
+    {
+      "id": "gap1-form-drug-1",
+      "origin": "user",
+      "identifiers": {
+        "name": "Synthetic Gap1 Form Fixture",
+        "synonyms": ["Synthetic"]
+      },
+      "tags": ["fixture"],
+      "rootExtension": { "note": "gap-form root extension" },
+      "targets": [
+        {
+          "id": "gap1-form-target-a",
+          "name": "GAP1-FORM-A",
+          "gene": "GFA",
+          "kd": {
+            "value": 3.2,
+            "unit": "nM",
+            "provenance": {
+              "type": "literature",
+              "source": "Synthetic fixture source",
+              "provenanceExtension": { "family": "form-a", "markers": ["x", "y"] }
+            }
+          },
+          "futureTargetFormA": { "nested": { "list": ["keep", "a"], "count": 7 }, "flag": true }
+        },
+        {
+          "id": "gap1-form-target-b",
+          "name": "GAP1-FORM-B",
+          "ic50": {
+            "value": 7.5,
+            "unit": "nM",
+            "provenance": {
+              "type": "user",
+              "recordedAt": "2026-01-01T00:00:00.000Z",
+              "provenanceExtension": "prov-form-b"
+            }
+          },
+          "futureTargetFormB": ["array", "extension"]
+        }
+      ],
+      "notes": "Synthetic fixture — not pharmacological information."
+    }
+  ]
+}`
+
+  it('GAP-1: unknown target extensions survive the form targets-replacing save', async () => {
+    const report = await libraryRepository.importLibrary(GAP1_FORM_NPSL_TEXT, { mode: 'merge' })
+    expect(report.ok).toBe(true)
+    await useLibraryStore.getState().hydrate()
+
+    // Baseline: the import itself must already store each target's own
+    // unknown fields in position (guards the import write, not only the
+    // later edit).
+    const imported = await storedRecord('gap1-form-drug-1')
+    expect(fieldAt(imported, 'targets', '0', 'futureTargetFormA')).toEqual({
+      nested: { list: ['keep', 'a'], count: 7 },
+      flag: true,
+    })
+    expect(fieldAt(imported, 'targets', '1', 'futureTargetFormB')).toEqual(['array', 'extension'])
+
+    renderDetail('gap1-form-drug-1')
+
+    // Unrelated edit: rename the drug; no target is touched in the UI.
+    fireEvent.click(screen.getByTestId('edit-drug'))
+    fireEvent.change(screen.getByTestId('drug-name'), {
+      target: { value: 'Synthetic Gap1 Form Fixture Renamed' },
+    })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await waitFor(() => expect(screen.queryByTestId('drug-form')).not.toBeInTheDocument())
+
+    // The form submitted a REPLACEMENT targets array; the raw row still
+    // carries each target's unknown fields under its stable id.
+    const raw = await storedRecord('gap1-form-drug-1')
+    expect(raw?.targets).toHaveLength(2)
+    expect(fieldAt(raw, 'targets', '0', 'id')).toBe('gap1-form-target-a')
+    expect(fieldAt(raw, 'targets', '0', 'futureTargetFormA')).toEqual({
+      nested: { list: ['keep', 'a'], count: 7 },
+      flag: true,
+    })
+    expect(fieldAt(raw, 'targets', '1', 'futureTargetFormB')).toEqual(['array', 'extension'])
+    expect(fieldAt(raw, 'targets', '0', 'futureTargetFormB')).toBeUndefined()
+    expect(fieldAt(raw, 'targets', '1', 'futureTargetFormA')).toBeUndefined()
+    // Provenance-level and record-level extensions ride along untouched.
+    expect(fieldAt(raw, 'targets', '0', 'kd', 'provenance', 'provenanceExtension')).toEqual({
+      family: 'form-a',
+      markers: ['x', 'y'],
+    })
+    expect(fieldAt(raw, 'targets', '1', 'ic50', 'provenance', 'provenanceExtension')).toBe(
+      'prov-form-b',
+    )
+    expect(fieldAt(raw, 'rootExtension')).toEqual({ note: 'gap-form root extension' })
+    // The unrelated edit was applied; recognized target fields stand.
+    expect(raw?.identifiers.name).toBe('Synthetic Gap1 Form Fixture Renamed')
+    expect(raw?.targets[0]?.name).toBe('GAP1-FORM-A')
+
+    // A fresh repository read reconstructs the same extensions.
+    const reloaded = await libraryRepository.getDrug('gap1-form-drug-1')
+    expect(fieldAt(reloaded, 'targets', '0', 'futureTargetFormA', 'nested', 'list')).toEqual([
+      'keep',
+      'a',
+    ])
+    expect(fieldAt(reloaded, 'rootExtension')).toEqual({ note: 'gap-form root extension' })
+  })
+
+  /**
+   * Complete synthetic literature provenance incl. an unknown extension
+   * key, plus user provenance for the remaining PK parameters — the whole
+   * object an unrelated edit must leave byte-identical.
+   */
+  const PK_PROVENANCE = {
+    type: 'literature' as const,
+    source: 'Synthetic fixture source',
+    citation: 'Invented for tests, 2026',
+    doi: '10.5555/synthetic-fixture',
+    url: 'https://example.invalid/synthetic-fixture',
+    accessedAt: FIXTURE_TIMESTAMP,
+    notes: FIXTURE_NOTE,
+    syntheticExtension: 'pk-prov-ext',
+  }
+  const PK_USER_PROVENANCE = { type: 'user' as const, recordedAt: FIXTURE_TIMESTAMP }
+
+  const EXPECTED_PHARMACOKINETICS = {
+    halfLife: { value: 8, unit: 'h', provenance: PK_PROVENANCE },
+    clearance: { value: 2.5, unit: 'mL/min', provenance: PK_USER_PROVENANCE },
+    volumeOfDistribution: { value: 42, unit: 'L', provenance: PK_USER_PROVENANCE },
+    bioavailability: { value: 65, unit: '%', provenance: PK_USER_PROVENANCE },
+  }
+
+  it('GAP-2: pharmacokinetics values, units and provenance survive an unrelated edit', async () => {
+    const created = await libraryRepository.createDrug({
+      identifiers: { name: 'Synthetic PK Fixture', synonyms: [] },
+      targets: [],
+      pharmacokinetics: {
+        halfLife: { value: 8, unit: 'h', provenance: PK_PROVENANCE },
+        clearance: { value: 2.5, unit: 'mL/min', provenance: PK_USER_PROVENANCE },
+        volumeOfDistribution: { value: 42, unit: 'L', provenance: PK_USER_PROVENANCE },
+        bioavailability: { value: 65, unit: '%', provenance: PK_USER_PROVENANCE },
+      },
+    })
+    await useLibraryStore.getState().hydrate()
+    renderDetail(created.id)
+
+    // Unrelated edit: rename the drug; the form never edits pharmacokinetics
+    // (the form does not even submit the key).
+    fireEvent.click(screen.getByTestId('edit-drug'))
+    fireEvent.change(screen.getByTestId('drug-name'), {
+      target: { value: 'Synthetic PK Fixture Renamed' },
+    })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await waitFor(() => expect(screen.queryByTestId('drug-form')).not.toBeInTheDocument())
+
+    // Raw stored row: the WHOLE pharmacokinetics object is unchanged.
+    // Deep equality fails if any value, unit or provenance field — the
+    // extension key included — is dropped, rebuilt or normalized.
+    const raw = await storedRecord(created.id)
+    expect(raw).toBeDefined()
+    expect(Object.prototype.hasOwnProperty.call(raw ?? {}, 'pharmacokinetics')).toBe(true)
+    expect(raw?.pharmacokinetics).toEqual(EXPECTED_PHARMACOKINETICS)
+    expect(raw?.identifiers.name).toBe('Synthetic PK Fixture Renamed')
+
+    // A fresh repository read reconstructs the same data.
+    const reloaded = await libraryRepository.getDrug(created.id)
+    expect(reloaded?.pharmacokinetics).toEqual(EXPECTED_PHARMACOKINETICS)
   })
 })
