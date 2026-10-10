@@ -126,6 +126,7 @@ src/
 │   ├── libraryStore.ts      # composition root: Dexie repository + Zustand store
 │   ├── calculatorStore.ts   # composition root: calculator session store
 │   ├── preferencesStore.ts  # composition root: preferences ↔ calculator wiring (phase 9B)
+│   ├── dataSourcesStore.ts  # composition root: source-data repo (shared DB) + adapters (phase 18)
 │   ├── layout/              # AppLayout, PageHeader
 │   └── pages/               # route-level views (thin; delegate to features)
 ├── components/
@@ -139,17 +140,23 @@ src/
 │   │   ├── store.ts         #   drafts, report, stale flags, curve settings
 │   │   └── components/      #   ParameterField, ResultPanel, CalculationTrace,
 │   │                        #   VisualizationPanel, ErrorPanel, ProvenanceBadge
-│   └── import-export/       #   import/export UI (phase 5)
-│       ├── csv/             #   RFC 4180 reader/writer, stable CSV schema,
-│       │                    #   explicit mapping -> versioned NPSL document
-│       ├── ImportPanel.tsx  #   file -> preview -> confirm -> report flow
-│       ├── CsvMappingCard.tsx #  explicit column mapping + fixed-unit policy
-│       ├── ExportPanel.tsx  #   whole-library .npsl/.json/.csv downloads
-│       └── fileIo.ts        #   readTextFile, downloadTextFile (object URLs)
+│   ├── import-export/       #   import/export UI (phase 5)
+│   │   ├── csv/             #   RFC 4180 reader/writer, stable CSV schema,
+│   │   │                    #   explicit mapping -> versioned NPSL document
+│   │   ├── ImportPanel.tsx  #   file -> preview -> confirm -> report flow
+│   │   ├── CsvMappingCard.tsx #  explicit column mapping + fixed-unit policy
+│   │   ├── ExportPanel.tsx  #   whole-library .npsl/.json/.csv downloads
+│   │   └── fileIo.ts        #   readTextFile, downloadTextFile (object URLs)
+│   └── data-sources/        #   on-demand retrieval UI (phase 18)
+│       ├── store.ts         #   session store: search/fetch/cancel/import/apply
+│       ├── DataSourcesView.tsx #  picker → results → measurements → confirm import
+│       ├── StoredDataPanel.tsx #  offline stored records + Layer C apply form
+│       └── ObservationSummary.tsx # shared measurement row (value + qualifier + provenance)
 ├── domain/                  # pure domain types and guards
 │   ├── drug/                #   Drug, ReceptorTarget, Pharmacokinetics
 │   ├── pharmacology/        #   ScientificValue, units + unit catalog
 │   ├── provenance/          #   Provenance union + guards
+│   ├── sources/             #   Layer A compound + Layer B observation (phase 18)
 │   └── library/             #   DrugLibrary, LibraryMetadata
 ├── engine/                  # pure calculation engine (all 3 MVP models implemented, phase 2)
 │   ├── types.ts             #   CalculationReport, trace, CurveData contracts
@@ -166,16 +173,21 @@ src/
 │   └── dose-response/       #   Hill equation + curve generator
 ├── data/
 │   ├── schemas/             # Zod schemas (NPSL file format; CSV builds an NPSL document first)
-│   ├── db/                  # single versioned Dexie module + upgrade hooks (phase 3)
+│   │                        # sources.ts: loose record schemas for imported source data (phase 18)
+│   ├── db/                  # single versioned Dexie module + upgrade hooks (phase 3; v3 adds
+│   │                        # `compounds` + `observations` stores, phase 18)
 │   ├── mappers/             # persistence DTO <-> domain, NPSL export document
 │   ├── import/              # NPSL parse -> schema -> semantic -> preview pipeline
+│   ├── sources/             # HTTP transport, PubChem/ChEMBL adapters, registry (phase 18)
 │   ├── id.ts                # stable id helpers
-│   └── repositories/        # repository interface + Dexie implementation (phase 3)
+│   └── repositories/        # repository interfaces + Dexie implementations (phase 3;
+│                            # sourceDataRepository phase 18)
 ├── tests/
 │   ├── setup.ts             # Vitest setup (jest-dom matchers)
 │   ├── report.ts            # shared report assertion helpers
 │   ├── fixtures.ts          # synthetic, explicitly-marked test fixtures
 │   └── fixtures/            # example NPSL library (marked example data)
+│       └── sources/         # checked-in PubChem/ChEMBL response fixtures (phase 18)
 └── ...
 e2e/                         # Playwright specs: shell, calculator, import/export,
                              # library persistence, keyboard workflows, accessibility scans
@@ -403,6 +415,33 @@ in the engine's 2–5000 bounds), and a fully entered range must satisfy
 the engine's cross-field rules before it is stored — invalid text stays
 visible next to its message and is never persisted.
 
+### 4.8 On-demand source retrieval (phase 18)
+
+```
+user searches a source (explicit query + scope)
+   → adapter builds one bounded request (10 s timeout, one retry on
+     network/5xx) → response validated with Zod at the network edge
+   → normalized Layer A (compound) / Layer B (observation) records
+   → session store (transient; stale/cancel guards via monotonic seq +
+     AbortController)
+   → user selects individual records → preview (advisory counts)
+   → explicit confirm → sourceDataRepository.importSourceRecords:
+     one Dexie rw transaction — validate every record again at the
+     repository boundary, write only rows whose deterministic id
+     (`source:recordId`) does not exist (existing records win, skips are
+     reported), reject the whole batch if any record fails
+   → hydrateStored refreshes the offline panel
+```
+
+Applying a stored observation onto a drug parameter (Layer C) is a
+separate one-way path: `applyObservation` checks endpoint→slot mapping,
+exact qualifier, a molar-concentration unit and an explicit overwrite
+for occupied slots, then `drugRepository.updateDrug` writes the drug with
+a `literature` provenance carrying `observationId` — the parameter stays
+traceable back to the source record. Mounting the page performs zero
+network requests; nothing is ever downloaded, synced or seeded
+automatically (see `docs/data-sources.md`).
+
 ---
 
 ## 5. Routes
@@ -414,6 +453,7 @@ visible next to its message and is never persisted.
 | `/library/new` | New Drug Record (create form, explicit units) | 3 (done) |
 | `/library/:drugId` | Drug Detail (targets, read-only PK, provenance, edit/delete, Calculate link) | 3 (done) |
 | `/calculator` | Calculator — **implemented**: model selector, input forms, results, calculation trace, curve controls + charts | 4 (done) |
+| `/data-sources` | Data Sources — **implemented**: PubChem/ChEMBL search, measurements fetch, preview → confirm import, stored records, Layer C apply | 18 (done) |
 | `/import-export` | Import / Export — placeholder (header only) | 5 |
 | `/settings` | Settings — **implemented**: theme, per-model curve display defaults, data-management links, About, scoped preference reset | 9 (done) |
 | `*` | Not found | 1 (done) |
@@ -446,6 +486,7 @@ device-local presentation preferences — see §4.7.
 | 15 | Data integrity: preserve negative zero across NPSL round trips and unrelated edits — DI-04 remediation by **exact preservation** (the shared JSON serializer emits the numeric token `-0` via a collision-proof placeholder; the form's draft-text identity rule keeps untouched `-0` values and their complete provenance); serializer, repository, form and raw-row regression tests; contract documented in `npsl-format.md`; no sidecar, version bump, schema or format change | 11 | done |
 | 16 | Data integrity: close audit coverage gaps GAP-1 and GAP-2 with committed regression tests — unknown target extensions under targets-replacing updates (stable-identity reattachment plus removal/new-id non-transfer boundaries, repository and real form path), pharmacokinetics values/units/provenance under unrelated edits (raw-row + fresh-read deep equality), and the DI-04 placeholder collision-branch test; test-only, no production change | 11 | done |
 | 17 | Data integrity: a Merge import never overwrites a quarantined raw record — audit GAP-3 remediation with the policy decision "protection wins": the merge pre-scan classifies the colliding stored row with the authoritative hydration validator (`fromRecord`) inside the import transaction and rejects the whole document with blocking `QUARANTINE_CONFLICT` before any write; the preview surfaces a quarantined-id advisory while the transaction stays the authoritative boundary; policy documented in `validation.md`, `npsl-format.md`, ADR-15 and `repository.ts`; repository + UI regression tests; no schema or format change | 11 | done |
+| 18 | On-demand external data sources: a three-layer model (A compound identity, B experimental observations, C drug-record parameters) with PubChem/ChEMBL adapters behind a source registry; user-initiated search → validate → preview → explicit select → atomic local import into two new Dexie stores (deterministic `source:recordId` ids, existing records win, provenance + license per record); ChEMBL observations with endpoint/qualifier/unit fidelity and server-side endpoint-scope filtering; explicit Layer C promotion of one observation onto one Kd/Ki/IC50/EC50 slot with a provenance `observationId` link (no auto-promotion, no endpoint substitution, explicit overwrite); no bundled database, no startup download; mocked-fixture unit/view/E2E suites incl. startup-no-seed; `data-sources.md` contract | 3 | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full

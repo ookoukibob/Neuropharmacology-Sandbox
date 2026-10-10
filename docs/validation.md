@@ -272,3 +272,41 @@ CSV is structurally weaker than JSON:
 - Whether a value "makes pharmacological sense" beyond hard domain bounds;
   plausibility warnings must be evidence-based, not vibes-based.
 - Anything that would require inventing a value to pass validation.
+
+---
+
+## 9. Source-data validation (phase 18)
+
+Retrieved PubChem/ChEMBL records pass **two** validation boundaries, and
+only the second one can write:
+
+1. **Network edge** (`src/data/sources/*.ts` + `src/data/schemas/sources.ts`).
+   Every remote JSON body is parsed with strict-response schemas (loose
+   objects for round-tripping, typed fields for what the adapter reads):
+   a malformed body, a non-JSON answer or a transport failure produces a
+   typed `SourceRequestError` (`network` · `timeout` · `http` ·
+   `invalid-response` · `aborted`) — never a partially mapped record.
+   Rows missing a numeric value, endpoint or compound identity are
+   counted in `omitted` and reported in the UI; unknown relations (e.g.
+   ChEMBL `>>`) are preserved as `rawRelation`, not guessed. HTTP 4xx is
+   never retried; 5xx and network failures are retried once.
+
+2. **Repository boundary** (`dexieSourceDataRepository.importSourceRecords`).
+   The preview shown in the UI is advisory only: inside one Dexie `rw`
+   transaction every record is re-validated with the same schemas
+   (unknown fields round-trip untouched), deterministic ids are
+   `source:sourceId` (compound) / `source:activityId` (observation),
+   observations whose compound is neither in the batch nor already stored
+   are rejected as orphans, and **existing rows win** — a re-import
+   reports the row as `skipped`, it never overwrites. Any invalid record
+   rejects the whole batch (`INVALID_RECORD` with the failing index) and
+   nothing is written. Stored rows that fail validation on a later read
+   are quarantined, reported and kept byte-identical — the established
+   repository rule.
+
+Layer C (`applyObservation`) validates again before touching a drug
+record: known observation, `parameterKind` mapped to the same named
+slot, exact qualifier (`=` or absent), a present molar-concentration
+unit, an existing drug (and target when attaching to one), and an
+explicit `overwrite` for an occupied slot. A refusal states its reason;
+it never partially applies.

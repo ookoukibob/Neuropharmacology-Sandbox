@@ -44,6 +44,8 @@ persistence (complete).**
 **Phase 15 — negative-zero preservation in NPSL round trips (complete).**
 **Phase 16 — GAP-1/GAP-2 regression coverage and -0 collision coverage (complete).**
 **Phase 17 — GAP-3 quarantine-vs-merge import collision protection (complete).**
+**Phase 18 — on-demand external data sources, PubChem/ChEMBL with a
+three-layer model (compound / measurements / parameters) (complete).**
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -65,6 +67,7 @@ a visible warning) and CSV (lossy, with a visible warning), component + CSV unit
 | 15 | Data integrity: negative zero now survives every supported NPSL interchange path and unrelated edit (audit DI-04) — the shared JSON serializer emits the numeric `-0` token (collision-proof placeholder, byte-identical output for `-0`-free documents) and a parameter draft still showing the source's own text submits the stored number verbatim, keeping an untouched `-0` *and* its complete provenance; verified by serializer, repository (literal-token import/export/re-import), form and raw-IndexedDB tests; contract documented in `npsl-format.md`; no sidecar, version bump, schema or format change | done |
 | 16 | Data integrity: committed regression coverage closes audit gaps GAP-1 and GAP-2 — test-only, no production change: unknown target extensions survive targets-replacing updates by stable id (import baseline, reordered same-id replacement, removal/new-id non-transfer boundaries, repository and real form path), pharmacokinetics values, units and provenance (incl. an unknown extension key) survive unrelated edits (raw-row and fresh-read deep equality), and the `-0` serializer's placeholder collision branch is exercised with marker-like source data (marker value, marker-like extension key and the first extended candidate) | done |
 | 17 | Data integrity: a Merge import never overwrites a quarantined raw record (audit GAP-3) — the merge pre-scan classifies the colliding stored row with the authoritative hydration validator (`fromRecord`) inside the import transaction and rejects the whole document with blocking `QUARANTINE_CONFLICT` before any write (quarantined row byte-identical and still reported), the import preview surfaces an advisory naming the colliding ids while the transaction remains the authoritative boundary (a stale preview cannot bypass it); policy documented in `validation.md`, `npsl-format.md` and ADR-15; repository + UI regression tests; no schema or format change | done |
+| 18 | On-demand data sources: a dedicated Data Sources page searches PubChem (compound identity) and ChEMBL (identity, targets, measurements) only on explicit user request — validate → preview → explicit select → atomic local import into two new Dexie stores with deterministic `source:recordId` ids (existing records win, never overwritten), per-record provenance + license/attribution (ChEMBL CC BY-SA 3.0, PubChem aggregation notice with links), endpoint/qualifier/unit fidelity (`<`/`>` preserved, missing stays missing, no endpoint substitution), cancellation and stale-answer guards, offline usable stored panel, and an explicit "Use as parameter…" promotion of one measurement onto one Kd/Ki/IC50/EC50 slot with an `observationId` provenance link; no bundled database, no startup download or seeding, mocked-fixture unit/view/E2E suites incl. a zero-requests-on-load guarantee; contract in `docs/data-sources.md` | done |
 
 ### What works today
 
@@ -94,6 +97,17 @@ a visible warning) and CSV (lossy, with a visible warning), component + CSV unit
   warning) — or to a lossy-but-convenient CSV that always warns it is
   not a backup format (its text cells are guarded against spreadsheet
   formula injection).
+- On-demand data sources (PubChem, ChEMBL): a dedicated page searches
+  an external database only when you ask, shows every record with its
+  source link, retrieval date and license before anything is written,
+  and imports your explicit selection atomically — existing records
+  are never overwritten. ChEMBL measurements keep their exact
+  endpoint, unit and qualifier (`<`, `>`), stored records are usable
+  offline, and a measurement becomes a drug-record parameter only
+  through an explicit "Use as parameter…" action that preserves the
+  provenance link back to the source record. Nothing is downloaded at
+  startup, in the background or in bulk — the app bundles no default
+  database (see [docs/data-sources.md](docs/data-sources.md)).
 - Recovery backup (`.npsb`, separate from interchange): the Recovery tab
   exports a complete snapshot of both object stores — quarantined and
   unknown-field rows included — with exact counts and a stated
@@ -151,6 +165,7 @@ Pages, GitHub Pages or any equivalent static host. There is no backend.
 | [docs/provenance.md](docs/provenance.md) | The five provenance states and their rules |
 | [docs/npsl-format.md](docs/npsl-format.md) | `.npsl` file format, fields, versioning policy |
 | [docs/validation.md](docs/validation.md) | Layered validation and the import pipeline |
+| [docs/data-sources.md](docs/data-sources.md) | On-demand PubChem/ChEMBL retrieval: three-layer model, provenance/licensing, explicit selection and import rules |
 | [docs/testing.md](docs/testing.md) | Test strategy, required test matrix, round-trip testing |
 | [docs/decisions.md](docs/decisions.md) | Architecture decision records (ADR) with rationale |
 | [docs/spec-review.md](docs/spec-review.md) | Weaknesses in the specification and proposed corrections |

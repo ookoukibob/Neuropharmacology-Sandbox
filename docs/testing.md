@@ -130,7 +130,17 @@ per-model curve display defaults with field- and engine-level
 validation, invalid text refused and never saved, the Import / Export
 link, and the acknowledged reset whose scientific-data scope is asserted
 with repository spies and an untouched calculator draft — initialized
-exactly like `main.tsx`).
+exactly like `main.tsx`), and
+`src/features/data-sources/DataSourcesView.test.tsx` (the whole
+on-demand chain against the real Dexie repositories with `fetch`
+stubbed from checked-in fixtures: picker contents, **zero network
+requests on mount**, PubChem search → selection → preview → confirmed
+import landing in IndexedDB with provenance, code-specific network
+failure with nothing written, honest empty state, and the Layer C rules
+at the UI level — new-target promotion with an `observationId`
+provenance link, no substitution for an unmappable endpoint, the bound
+(`<`) qualifier keeping Apply disabled, the explicit overwrite gate for
+an occupied slot, and identity-only library addition with attribution).
 
 ---
 
@@ -172,12 +182,15 @@ Critical workflows only (each one is a spec-level guarantee):
    navigation and core forms stay operable without horizontal overflow.
 5. Accessibility scans (`e2e/a11y.spec.ts`, implemented): axe-core
    (`@axe-core/playwright`) over the WCAG 2.0/2.1 A and AA rule tags on
-   18 stable states across six tests — library, create form, detail +
+   22 stable states across seven tests — library, create form, detail +
    edit form, calculator (initial, PK parameterization, with result),
    empty import/export, CSV mapping, import preview, replace
    acknowledgement, export, the recovery states (initial empty
    library, rejected archive, preview + acknowledgement, restore
-   outcome) and the settings states (defaults, reset confirmation). No
+   outcome), the settings states (defaults, reset confirmation) and the
+   data-sources states (idle with nothing fetched — proving the page
+   needs no network —, target results + fetched measurements, import
+   report, apply card). No
    rule is disabled and no violation is
    suppressed: a violation fails the spec.
 6. Import/export (`e2e/importExport.spec.ts`, implemented — synthetic
@@ -225,6 +238,27 @@ Critical workflows only (each one is a spec-level guarantee):
 9. Export round trip at the repository level (export → import → deep
    equality) is covered by repository tests; the E2E layer asserts the
    exported file's content parses back with provenance intact.
+10. Data sources (`e2e/dataSources.spec.ts`, implemented — all HTTP
+    intercepted with `page.route` from checked-in fixture payloads in
+    `e2e/sourceMocks.ts`, isolated context per test, five workflows):
+    - **startup honesty**: loading `/data-sources` performs **zero
+      external requests** and leaves the stored panel empty (no bundled
+      database, no download, no seeding);
+    - PubChem search → selection → advisory preview → confirmed import
+      landing in the stored panel, with the identity-only source not
+      misrepresented as an activity source;
+    - ChEMBL target flow: measurements keep their qualifiers (`<`, `>`,
+      preserved raw relations), the valueless row is counted as omitted,
+      unmappable endpoints are labelled, and the imported observation's
+      compound identity is resolved through the batch lookup;
+    - Layer C: an imported measurement supplies a parameter on a drug
+      record created through the real form, with the provenance badge
+      showing its ChEMBL source;
+    - a failed search explains itself (`Network error`) and writes
+      nothing.
+
+   Shared route mocks live in `e2e/sourceMocks.ts`; they are also used by
+   the accessibility scans.
 
 Config: `playwright.config.ts` (chromium; dev server auto-started).
 
@@ -332,13 +366,19 @@ lossy edges are listed in `docs/validation.md` §7.
 | Preferences tests (schema, storage, store) | done — defaults on first run, save/restore round trip with verbatim string forms, malformed JSON and non-object payloads, unsupported schema versions, invalid theme/scale/value types, engine cross-field range rules (min < max, log-safe min, points bounds), live system-mode theme behavior, manual-theme precedence over OS changes, write-failure degradation (`loadStatus: 'unavailable'`), scoped reset, persisted-key shape (no scientific state) |
 | Calculator presentation-settings tests | done — `applyPresentationSettings` replaces display defaults without touching drafts/report/curve, marks the curve stale when a report exists; `defaultCalculatorSettings` returns fresh independent copies |
 | Settings UI tests | done — four sections with accessible headings, theme applied + persisted per model blocks, invalid range text refused with `aria-invalid`/description, cross-field enforcement, restore-defaults keeps the theme, data-management link, About metadata, acknowledged reset (Escape, focus, scope) with repository mutation spies and an untouched scientific draft, invalid/unavailable-storage notes |
+| Source adapter tests | done — PubChem name/CAS/InChIKey resolution, ChEMBL compound/target/activity/endpoint filtering, fixtures-only HTTP (`src/data/sources/*.test.ts`) |
+| Source-data repository tests | done — atomic import (validation failure rolls back, nothing written), deterministic ids, existing-records-win skip reporting, orphan-observation rejection, quarantine on invalid stored rows, hydrate with provenance and license survival (`dexieSourceDataRepository.test.ts`) |
+| Database schema tests | done — verno 3 with `compounds` + `observations` stores, fresh-install table creation, v1→v2→v3 migration chain, drug rows byte-identical through the v2→v3 upgrade (`database.test.ts`) |
+| Data-sources store tests | done — startup-no-seed with real adapters (zero fetch), search lifecycle (stale/cancel/source- and scope-switch), observation retrieval (merge paging, page-source snapshot, stale guard), import (identity resolution, whole-batch failure, no-op, advisory preview), Layer C apply rules (endpoint mapping, qualifiers, units, occupied-slot overwrite, unknown ids) (`src/features/data-sources/store.test.ts`) |
+| Data-sources UI tests | done — full chain against real repositories with fixture-stubbed `fetch`: picker, zero network on mount, search → preview → confirmed import, network-failure honesty, Layer C UI gates, identity-only library addition (`DataSourcesView.test.tsx`) |
 | Drug-form persistence integration tests | done — real detail → form → store → Dexie chain: whole provenance of unchanged parameters in the raw stored row, user stamp only on the changed parameter, supported target metadata (`gene` / `action` / `species` / `notes`) intact after an unrelated edit, no metadata migration after removal + same-name recreation, stored-only identifier metadata (`description` / `casNumber`) preserved byte-identical in the raw row after an unrelated edit (raw row + fresh repository read), untouched list/text fields (`synonyms` / `tags` / name / top-level notes) preserved byte-identical in the raw row after an unrelated edit (audit DI-03), a negative-zero parameter kept exact (`Object.is`) with its complete provenance in the raw row after an unrelated edit, and top-level `notes` absent/empty proven by raw-row own-property checks (audit DI-04 + DI-03 follow-up), unknown target extension fields surviving the form's targets-replacing save with a post-import baseline (record, target and provenance level, stable-id + non-transfer asserts — audit GAP-1), and the whole pharmacokinetics object (half-life, clearance, Vd, bioavailability: values, units, complete provenance incl. an unknown extension key) deep-equal in the raw row and a fresh read after an unrelated rename (audit GAP-2) |
-| Test suite total | 779 unit tests (46 files) |
+| Test suite total | 868 unit tests (52 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
 | Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
 | Library reload e2e | done — 2 workflows (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload; and target metadata: import user-origin record with `gene`/`action`/`species`/`notes` → unrelated edit → fields still shown → reload → persisted |
 | Keyboard e2e | done — 6 workflows (`e2e/keyboard.spec.ts`): skip link, navigation, drug form recovery, calculator, import/export confirmation, narrow-viewport operability |
 | Recovery e2e | done — 4 workflows (`e2e/recovery.spec.ts`): quarantine-preserving export → replace → restore round trip with reload persistence, malformed rejection, mutual `.npsb`/`.npsl` rejection, export failure honesty with a bounded no-download wait |
 | Settings e2e | done — 2 workflows (`e2e/settings.spec.ts`): theme + calculator display defaults persist across reloads and the scoped reset restores only preferences; system-mode follows live OS color-scheme changes with manual precedence |
-| Accessibility e2e | done — 6 scans (`e2e/a11y.spec.ts`) covering 18 stable states (incl. four Recovery and two Settings states) with axe-core WCAG A/AA tags; no rules disabled, no violations suppressed (0 violations) |
+| Data-sources e2e | done — 5 workflows (`e2e/dataSources.spec.ts`, fixture-mocked HTTP via `e2e/sourceMocks.ts`): zero external requests on page load, PubChem search → explicit selection → confirmed import, ChEMBL measurement fidelity (qualifiers, omitted row counting, unresolved-identity resolution), Layer C promotion with provenance badge, network-failure honesty with nothing written |
+| Accessibility e2e | done — 7 scans (`e2e/a11y.spec.ts`) covering 22 stable states (incl. four Recovery, two Settings and four Data Sources states) with axe-core WCAG A/AA tags; no rules disabled, no violations suppressed (0 violations) |
 | Dependency security gate | done — `npm audit --omit=dev`: 0 production vulnerabilities (blocking in CI); full tree: 7 high, all dev-only, from one advisory with no fixed release (`braces` ≤ 3.0.3, GHSA-vfj7-8cjw-p6xm), reported non-blocking |

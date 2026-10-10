@@ -12,6 +12,9 @@ Source files:
 - `src/domain/pharmacology/units.ts`
 - `src/domain/drug/drug.ts`
 - `src/domain/library/library.ts`
+- `src/domain/sources/attribution.ts` (phase 18)
+- `src/domain/sources/compound.ts` (phase 18)
+- `src/domain/sources/observation.ts` (phase 18)
 
 ---
 
@@ -172,3 +175,42 @@ Calculated values that are written back to the library (e.g. a derived
 elimination constant) get provenance
 `{ type: 'calculated', model }` or `{ type: 'derived', method, from }`, never
 `literature`.
+
+---
+
+## 7. Source data — the three-layer model (phase 18)
+
+External data fetched on demand from PubChem/ChEMBL is modelled in three
+strictly separated layers (contract: [data-sources.md](data-sources.md)):
+
+```
+Layer A  Compound (identity)      src/domain/sources/compound.ts
+Layer B  Observation (one measurement)  src/domain/sources/observation.ts
+Layer C  Drug-record parameters   (existing Drug/ReceptorTarget fields)
+```
+
+**Layer A — `Compound`.** Identifiers (PubChem CID, ChEMBL ID, CAS,
+InChIKey, SMILES/InChI), names + synonyms, formula and molecular weight
+(all optional — missing stays missing), plus `SourceAttribution`. Identity
+is `${source}:${sourceId}` from the authoritative record id — **never the
+compound name**, which is absent or ambiguous for many records.
+
+**Layer B — `ExperimentalObservation`.** One record per *measurement*, not
+per compound: endpoint exactly as reported (`Ki`, `IC50`, `"Log K'"`, …),
+numeric `value`, reported `unit?` and `qualifier?` (`<`, `>`, `<=`, `>=`,
+`=`, `~`), target/species/assay context as supplied, and
+`provenance: SourceAttribution` with the source record URL and retrieval
+time. `parameterKind?` (`kd|ki|ec50|ic50`) is set **only** when the
+endpoint is canonically one of the four named kinds; absent means "no
+honest mapping exists". Disagreeing measurements of the same compound are
+kept side by side — never averaged or collapsed.
+
+**Layer C — drug-record parameters.** Importing Layers A/B writes nothing
+to the drug library. A parameter slot is filled only by an explicit user
+action (`applyObservation`) that maps the observation's `parameterKind`
+onto the same named slot, requires an exact qualifier (`=` or absent) and
+a molar-concentration unit, and requires an explicit acknowledgement to
+overwrite an occupied slot. The written `ScientificValue` keeps a
+`literature` provenance whose `observationId` links back to the Layer B
+record. Kd ≠ Ki ≠ EC50 ≠ IC50 is enforced in both directions: no silent
+substitution in, and no relabelling of what was stored.
