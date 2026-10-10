@@ -669,9 +669,9 @@ Summarized contract (normative text lives in §4.1 and §8.6):
 ## 10. Error, warning and outcome taxonomy
 
 Ordinary import codes (`PARSE`, `VERSION`, `SCHEMA`, `DUPLICATE_ID`,
-`ENVELOPE_FIELDS_DROPPED`, … — `importPipeline.ts`) are untouched and
-disjoint from these. Proposed code sets (8B may refine payloads, not the
-codes):
+`QUARANTINE_CONFLICT`, `ENVELOPE_FIELDS_DROPPED`, … — `importPipeline.ts`)
+are untouched and disjoint from these. Proposed code sets (8B may refine
+payloads, not the codes):
 
 **Export (`BACKUP_*` — any occurrence means: no file is produced):**
 

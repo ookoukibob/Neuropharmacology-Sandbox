@@ -79,7 +79,12 @@ export interface DrugChanges {
 }
 
 export type ImportMode =
-  /** Incoming records win per id; the rest of the library is untouched. */
+  /**
+   * Incoming records win per id; the rest of the library is untouched.
+   * Exception (audit GAP-3): an id whose stored row is quarantined never
+   * overwrites that row — the whole document is rejected with
+   * `QUARANTINE_CONFLICT` before any write.
+   */
   | 'merge'
   /** The file replaces the whole library (drugs and metadata). */
   | 'replace'

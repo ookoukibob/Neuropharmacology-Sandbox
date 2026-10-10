@@ -98,6 +98,7 @@ rendered field-by-field by the calculator (phase 4).
 | Unit dimension | `halfLife` is time, `kd`/`ki`/`ec50`/`ic50` are molar- or mass-concentration, `bioavailability` is dimensionless | warning `UNEXPECTED_DIMENSION` — never rewritten |
 | Cross-parameter consistency | one target may not carry both `kd` and `ki` **for the same measurement** with conflicting literature sources | non-blocking warning in the CSV mapping UI (`mapping-warnings`: the two stay separate values, never substituted) — the import never resolves it silently |
 | Duplicate ids | unique `Drug.id` (file-wide), unique `targets[].id` per drug — compared as exact strings, never normalized; the same target id in a *different* drug is legal | error `DUPLICATE_ID` — blocking, enforced on both the NPSL path (`validateNpslFile`, at preview and again inside the import transaction before any write) and the CSV path |
+| Merge vs quarantined row | a merge import id matches a stored raw row that fails schema validation (quarantined by hydration) | error `QUARANTINE_CONFLICT` — blocking: the whole document is rejected inside the import transaction before any write; the quarantined row stays byte-identical and keeps appearing in the quarantine report (audit GAP-3, Phase 17). Enforced by the authoritative hydration classifier (`fromRecord`), not by the preview's cached quarantine list |
 | Duplicate names | same `identifiers.name` twice in one file | warning `DUPLICATE_NAME` — names are labels, not identities |
 | Ranges | fraction-like values in range, non-negative where required | error (form) / engine-side (calculator) |
 | Edit-time list/text normalization | a synonyms/tags/name/notes draft the user actually **changed** is parsed (comma-split, trimmed, de-duplicated) / trimmed; a draft left exactly as initialized submits the stored value **verbatim** (audit DI-03, remediated in Phase 14) | never applied to untouched fields — embedded commas, duplicate entries and edge whitespace in stored values survive an unrelated edit exactly. Limitation: the comma-delimited form input cannot represent an individual list entry containing a comma for *editing* — such an entry survives untouched, but editing that list re-splits it |
@@ -131,6 +132,13 @@ Guarantees:
   existing library is unchanged — this is asserted by tests.
 - **No silent drops.** Records that fail validation are listed individually
   with reasons; the user chooses to fix the file or skip them explicitly.
+- **Quarantined rows are protected from Merge.** A Merge import never
+  overwrites a stored row that fails schema validation: the id collision is
+  a blocking `QUARANTINE_CONFLICT` raised inside the transaction before any
+  write (the preview shows an advisory naming the colliding ids, but the
+  transaction check is the integrity boundary — a stale preview cannot
+  bypass it). Replace mode still clears quarantine by design, disclosed in
+  its acknowledgement (see the table in §4).
 - **No provenance upgrades** during import (see
   [provenance.md](provenance.md) §2).
 - **Extension fields preserved; Merge collisions deterministic.** Unknown

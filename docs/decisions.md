@@ -219,6 +219,10 @@ readable records while quarantined rows stay in storage.
 **Consequences.** An empty library always means "there is no data", never
 "data was dropped". Repair tooling can be added later (records are
 preserved), and repository/store tests can assert the report directly.
+A Merge import also never overwrites a quarantined row: a colliding
+incoming id is a blocking `QUARANTINE_CONFLICT` raised inside the import
+transaction before any write (audit GAP-3), so "reported, not repaired"
+cannot be undone by an ordinary import.
 
 ---
 

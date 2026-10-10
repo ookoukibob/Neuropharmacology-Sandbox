@@ -8,8 +8,9 @@
  *   corrupt record);
  * - multi-record operations (`replaceLibrary`, `importLibrary`, single
  *   CRUD + metadata stamp) run inside one Dexie transaction — all-or-
- *   nothing; duplicate ids and schema failures reject inside the
- *   transaction and leave the previous library untouched;
+ *   nothing; duplicate ids, schema failures and merge-vs-quarantine id
+ *   collisions reject inside the transaction and leave the previous
+ *   library untouched;
  * - hydration reports invalid records as quarantine instead of deleting or
  *   skipping them silently;
  * - library `updatedAt` is stamped by CRUD mutations only — an import
@@ -28,6 +29,7 @@ import {
   parseNpsl,
   resolveLibraryMetadata,
   validateNpslFile,
+  type ImportIssue,
 } from '../import/importPipeline'
 import { newId } from '../id'
 import {
@@ -287,8 +289,34 @@ export class DexieDrugRepository implements DrugRepository {
         )
         created = validation.drugs.length
       } else {
-        for (const drug of validation.drugs) {
+        // Merge vs quarantine (audit GAP-3): a stored row that fails the
+        // authoritative hydration classifier (`fromRecord`, the exact logic
+        // `getAllDrugs` uses to build the quarantine report) must never be
+        // overwritten by a valid incoming record. The pre-scan runs inside
+        // this same transaction BEFORE the first write, so the rows cannot
+        // change between detection and commit, and a rejection can never
+        // partially apply: the whole document is refused while every raw
+        // row — quarantined, valid-new, valid-update — stays byte-identical.
+        // Returning normally here commits nothing (reads only so far).
+        const existingById = new Map<DrugId, DrugRecord>()
+        const conflicts: ImportIssue[] = []
+        for (const [index, drug] of validation.drugs.entries()) {
           const existing: DrugRecord | undefined = await this.db.drugs.get(drug.id)
+          if (existing === undefined) continue
+          existingById.set(drug.id, existing)
+          if (!fromRecord(existing).ok) {
+            conflicts.push({
+              code: 'QUARANTINE_CONFLICT',
+              path: `drugs.${index}`,
+              message: `stored record "${drug.id}" fails schema validation and is quarantined; the merge import was rejected and the quarantined record was preserved unchanged, with nothing from this file written. Resolve the quarantine conflict for "${drug.id}" before importing this id.`,
+            })
+          }
+        }
+        if (conflicts.length > 0) {
+          return { ok: false, errors: conflicts, warnings: validation.warnings }
+        }
+        for (const drug of validation.drugs) {
+          const existing = existingById.get(drug.id)
           await this.db.drugs.put(toStoredRecord(existing, drug))
           if (existing !== undefined) updated += 1
           else created += 1

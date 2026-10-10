@@ -445,6 +445,7 @@ device-local presentation preferences — see §4.7.
 | 14 | Data integrity: preserve untouched list/text fields through drug edits — DI-03 remediation (mount-time baseline in `DrugForm`; a draft still at its baseline submits the stored value verbatim, only actually-changed fields are parsed/trimmed); form-level and real-repository/raw-row regression tests; comma-delimited edit limitation documented; no widget, schema or format change | 11 | done |
 | 15 | Data integrity: preserve negative zero across NPSL round trips and unrelated edits — DI-04 remediation by **exact preservation** (the shared JSON serializer emits the numeric token `-0` via a collision-proof placeholder; the form's draft-text identity rule keeps untouched `-0` values and their complete provenance); serializer, repository, form and raw-row regression tests; contract documented in `npsl-format.md`; no sidecar, version bump, schema or format change | 11 | done |
 | 16 | Data integrity: close audit coverage gaps GAP-1 and GAP-2 with committed regression tests — unknown target extensions under targets-replacing updates (stable-identity reattachment plus removal/new-id non-transfer boundaries, repository and real form path), pharmacokinetics values/units/provenance under unrelated edits (raw-row + fresh-read deep equality), and the DI-04 placeholder collision-branch test; test-only, no production change | 11 | done |
+| 17 | Data integrity: a Merge import never overwrites a quarantined raw record — audit GAP-3 remediation with the policy decision "protection wins": the merge pre-scan classifies the colliding stored row with the authoritative hydration validator (`fromRecord`) inside the import transaction and rejects the whole document with blocking `QUARANTINE_CONFLICT` before any write; the preview surfaces a quarantined-id advisory while the transaction stays the authoritative boundary; policy documented in `validation.md`, `npsl-format.md`, ADR-15 and `repository.ts`; repository + UI regression tests; no schema or format change | 11 | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full
@@ -553,6 +554,17 @@ supplied by data.
       fresh read after an unrelated edit; the `-0` placeholder's
       collision branch exercised with marker-like source data — all
       test-only, no production change.
+- [x] GAP-3 quarantine-vs-merge collision protection (phase 17, audit
+      S6): policy decided — protection wins. A Merge id colliding with a
+      row the hydration classifier quarantines is a blocking
+      `QUARANTINE_CONFLICT` raised by a pre-scan inside the import
+      transaction before any write (whole document rejected, quarantined
+      row byte-identical and still reported, valid same-id merges
+      unaffected); the preview names the colliding ids as an advisory
+      while the transaction remains the authoritative boundary; contract
+      ambiguity resolved and documented in `validation.md` §4/§5,
+      `npsl-format.md` §6, ADR-15 and `repository.ts`; repository + UI
+      regression tests committed.
 - [x] No invented pharmacological data: fixtures are synthetic and labeled
       as such; the first run is empty.
 - [x] Extensive tests (mapper, migration, import pipeline, repository,

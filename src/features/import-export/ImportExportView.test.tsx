@@ -244,6 +244,83 @@ describe('ImportExportView — NPSL import', () => {
       ),
     )
   })
+
+  it('blocks a merge colliding with a quarantined id, explains why, and writes nothing — audit GAP-3', async () => {
+    // Seed a raw row that fails hydration (authoritative quarantine) and
+    // re-hydrate so the session — and the preview advisory — sees it.
+    const db = new SandboxDatabase()
+    const rawRow = { id: 'gap3-raw-1', origin: 'bogus', unknownFutureField: { keep: ['me'] } }
+    await db.drugs.put(rawRow as never)
+    await useLibraryStore.getState().hydrate()
+    const rawBefore = structuredClone(await db.drugs.get('gap3-raw-1'))
+
+    render(<ImportExportView />)
+    const text = syntheticNpslText([
+      syntheticDrug({
+        id: 'gap3-raw-1',
+        identifiers: { name: 'Synthetic Gap3 Incoming', synonyms: [] },
+      }),
+    ])
+    fireEvent.change(screen.getByTestId('npsl-file-input'), {
+      target: { files: [file(text, 'gap3.npsl', 'application/json')] },
+    })
+    await screen.findByTestId('import-preview')
+
+    // Preview names the conflicting id before anything is confirmed.
+    const advisory = await screen.findByTestId('preview-quarantine-conflicts')
+    expect(advisory).toHaveTextContent('gap3-raw-1')
+
+    fireEvent.click(screen.getByTestId('confirm-import'))
+    const report = await screen.findByTestId('import-report')
+    // A distinct, explained rejection — not a generic failure, not success.
+    expect(report).toHaveTextContent('Import rejected — nothing was written')
+    expect(report).toHaveTextContent('QUARANTINE_CONFLICT')
+    expect(report).toHaveTextContent('gap3-raw-1')
+    expect(report).toHaveTextContent('preserved unchanged')
+    expect(report).not.toHaveTextContent('Import complete')
+
+    // The quarantined row is byte-identical, still quarantined, and the
+    // incoming valid drug never appears as a valid record.
+    expect(await db.drugs.get('gap3-raw-1')).toEqual(rawBefore)
+    const stored = await libraryRepository.getAllDrugs()
+    expect(stored.quarantine.map((q) => q.id)).toContain('gap3-raw-1')
+    expect(stored.drugs.map((d) => d.id)).not.toContain('gap3-raw-1')
+  })
+
+  it('rejects a stale preview too — the repository transaction, not the cached quarantine list, is the boundary', async () => {
+    render(<ImportExportView />)
+    // The quarantined row appears AFTER hydration: the store's quarantine
+    // list (and any preview derived from it) is stale and shows no advisory.
+    const db = new SandboxDatabase()
+    const rawRow = { id: 'gap3-stale-1', origin: 'bogus' }
+    await db.drugs.put(rawRow as never)
+    const rawBefore = structuredClone(await db.drugs.get('gap3-stale-1'))
+
+    const text = syntheticNpslText([
+      syntheticDrug({
+        id: 'gap3-stale-1',
+        identifiers: { name: 'Synthetic Gap3 Stale', synonyms: [] },
+      }),
+    ])
+    fireEvent.change(screen.getByTestId('npsl-file-input'), {
+      target: { files: [file(text, 'gap3-stale.npsl', 'application/json')] },
+    })
+    await screen.findByTestId('import-preview')
+    // The stale cached list is blind to the conflict — preview is advisory.
+    expect(screen.queryByTestId('preview-quarantine-conflicts')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('confirm-import'))
+    const report = await screen.findByTestId('import-report')
+    expect(report).toHaveTextContent('Import rejected — nothing was written')
+    expect(report).toHaveTextContent('QUARANTINE_CONFLICT')
+    expect(report).toHaveTextContent('gap3-stale-1')
+
+    // Authoritative rejection despite the stale preview: row untouched.
+    expect(await db.drugs.get('gap3-stale-1')).toEqual(rawBefore)
+    const stored = await libraryRepository.getAllDrugs()
+    expect(stored.quarantine.map((q) => q.id)).toContain('gap3-stale-1')
+    expect(stored.drugs).toEqual([])
+  })
 })
 
 describe('ImportExportView — CSV mapping', () => {

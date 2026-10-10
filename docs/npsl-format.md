@@ -208,6 +208,12 @@ structure. (A real example file lives at
   the repository round-trip tests (`dexieDrugRepository.test.ts`,
   "extension fields"), the mapper tests (`records.test.ts`) and the
   preview tests (`importPipeline.test.ts`).
+- **Merge never overwrites a quarantined row.** One Merge case is refused
+  outright: an incoming id that matches a stored row the schema considers
+  invalid (quarantined on hydration) is a blocking `QUARANTINE_CONFLICT` —
+  the whole document is rejected inside the import transaction before any
+  write and the quarantined row stays byte-identical (audit GAP-3,
+  `validation.md` §4).
 - **Version gates decide readability** (§1). Newer-minor files are refused
   with guidance rather than half-imported.
 - **Normalization is explicit and documented**: omitted collections default

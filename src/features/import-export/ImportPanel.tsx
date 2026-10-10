@@ -13,6 +13,10 @@
  * - a rejected import (`invalid`) and a genuine transaction failure
  *   (`failed`) surface the real error and leave the preview in place so
  *   the user can retry or cancel — the library itself is never touched;
+ * - a merge id that collides with a quarantined raw record is a blocking
+ *   conflict (audit GAP-3): the preview shows an advisory naming the
+ *   ids, and the authoritative check runs inside the repository's
+ *   transaction — a stale preview cannot bypass it;
  * - a committed import clears the preview (no double-submit). That
  *   includes `committed-refresh-failed`: the records are already written,
  *   so the report says so, shows the refresh error, and offers a session
@@ -173,6 +177,7 @@ function ImportReportCard({ outcome }: { readonly outcome: LibraryImportOutcome 
 export function ImportPanel() {
   const drugs = useLibraryStore((s) => s.drugs)
   const metadata = useLibraryStore((s) => s.metadata)
+  const quarantine = useLibraryStore((s) => s.quarantine)
   const importLibrary = useLibraryStore((s) => s.importLibrary)
 
   const [active, setActive] = useState<ActivePreview | null>(null)
@@ -185,6 +190,16 @@ export function ImportPanel() {
   const [readError, setReadError] = useState<string | null>(null)
 
   const existingIds = drugs.map((drug) => drug.id)
+
+  // Merge advisory (audit GAP-3): incoming ids that collide with rows the
+  // hydration classifier quarantined. Advisory only — the authoritative
+  // check runs inside the repository transaction, so this cached list is
+  // never the integrity boundary (staleness cannot let a blocked merge in).
+  const quarantineIds = new Set(quarantine.map((record) => record.id))
+  const quarantinedIdConflicts =
+    active !== null && active.preview.ok && mode === 'merge'
+      ? active.preview.drugs.filter((drug) => quarantineIds.has(drug.id)).map((drug) => drug.id)
+      : []
 
   function resetForNewFile(): void {
     setOutcome(null)
@@ -381,6 +396,26 @@ export function ImportPanel() {
                   {active.preview.stats.conflictingIds} conflicting id
                   {active.preview.stats.conflictingIds === 1 ? '' : 's'} with the current library.
                 </p>
+                {quarantinedIdConflicts.length > 0 && (
+                  <Alert variant="destructive" data-testid="preview-quarantine-conflicts">
+                    <AlertTitle>
+                      Quarantined id conflict — this merge import will be blocked
+                    </AlertTitle>
+                    <AlertDescription>
+                      <p>
+                        {quarantinedIdConflicts.join(', ')}{' '}
+                        {quarantinedIdConflicts.length === 1 ? 'matches' : 'match'} a stored
+                        record{quarantinedIdConflicts.length === 1 ? '' : 's'} that failed
+                        validation and {quarantinedIdConflicts.length === 1 ? 'is' : 'are'}{' '}
+                        quarantined in storage. Confirming this merge will be rejected: the
+                        quarantined record{quarantinedIdConflicts.length === 1 ? ' is' : 's are'}{' '}
+                        preserved unchanged and nothing from this file is written. Resolve the
+                        quarantine conflict first — see the quarantine report on the Drug Library
+                        page.
+                      </p>
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <ul className="space-y-1 text-sm" data-testid="preview-records">
                   {active.preview.drugs.slice(0, 5).map((drug) => {
                     const summary = describeDrug(drug)

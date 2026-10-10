@@ -59,8 +59,11 @@ below names the evidence actually examined.
 Of these, **4 are remediated (DI-01 in Phase 12, DI-02 in Phase 13, DI-03 in Phase 14, DI-04 in Phase 15)**;
 **none remain open**.
 **Coverage gaps: 4** (behavior plausibly correct, evidence inadequate) —
-**2 closed**: GAP-1 and GAP-2 gained committed regression coverage in
-Phase 16 (no production change was needed); **2 remain**: GAP-3, GAP-4.
+**3 closed**: GAP-1 and GAP-2 gained committed regression coverage in
+Phase 16 (no production change was needed); GAP-3 was closed in Phase 17
+with the documented policy that a Merge never overwrites a quarantined
+row (blocking `QUARANTINE_CONFLICT` + preview advisory); **1 remains**:
+GAP-4.
 **Not verified: 3** (environment/asset blockers).
 
 | ID | Severity | Confidence | One-line summary |
@@ -166,7 +169,7 @@ code/reproduction evidence; **Not verified** = blocker stated.
 | D5 | Duplicate `targets[].id` per drug | **Remediated (Phase 13)** | `validation.md:97` promises blocking `DUPLICATE_ID`; `importPipeline` `seenIds` was drug-level only (repro `R2`: `report.ok === true`); CSV path *does* check (`csvImport.ts:649`); fix adds the per-drug check to `validateNpslFile` (commit `db3c75e`), CSV behavior unchanged |
 | D6 | Merge/replace semantics; mid-write failure rollback | Pass | Atomic transaction (`:270-308`); `store.test.ts:309,331`; merge metadata untouched (`:296-297`) |
 | D7 | Replace import vs quarantined rows | Pass (documented loss) | `drugs.clear()` (`:279`) removes quarantine; replace acknowledgement `ImportPanel.tsx:451-467` ("permanently overwrites every existing record"); recovery story tested `docs/testing.md:195` + E2E `recovery.spec.ts` |
-| D8 | Preview conflict disclosure | Pass with GAP-3 | Conflict count from hydrated valid drugs only (`ImportPanel.tsx:187,207`); quarantined ids invisible → see GAP-3 |
+| D8 | Preview conflict disclosure | Pass (GAP-3 resolved, Phase 17) | Conflict count from hydrated valid drugs only (`ImportPanel.tsx:187,207`); quarantined-id collisions are now surfaced by the preview advisory `preview-quarantine-conflicts` (`ImportPanel.tsx`) while the authoritative block runs inside the repository transaction — a stale preview cannot bypass it (`ImportExportView.test.tsx` GAP-3 tests) |
 | D9 | Quarantined rows excluded from export, visibly warned | Pass | `exportLibrary` comment `:314`; `ExportPanel.tsx:82-90` ("not a complete backup"); UI test `docs/testing.md:311` |
 | D10 | `.npsl`/`.npsb` mutual rejection | Pass | `docs/testing.md:324` (E2E), `recovery-backup.md:902`, `importLibrary` on `.npsb` → `SCHEMA`/`PARSE`, zero writes |
 
@@ -201,7 +204,7 @@ code/reproduction evidence; **Not verified** = blocker stated.
 | G2 | Hydration failure ≠ empty library | Pass | `store.test.ts:88` ("surfaces repository failures as an error state"); error path sets `status:'error'` |
 | G3 | Valid records unaffected by an invalid sibling | Pass | Loop continues past invalid rows; `store.test.ts:42` |
 | G4 | Repeated load/refresh/import/retry | Pass | In-flight hydrate guard `store.test.ts:60`; invalid/duplicate imports leave library unchanged `:268,285`; committed-refresh-failed retry semantics `:331,474` |
-| G5 | Merge import vs a colliding quarantined row | **Gap GAP-3** | Code: `get(id)` finds the raw quarantined row and `put` overwrites it (`:291-292`); local experiment `R7` recorded the behavior (quarantine list loses the id); disclosure impossible (D8); contract ambiguous between "incoming wins per id" (`repository.ts:83`) and quarantine-preservation intent (`records.ts:12-13`); no test either way |
+| G5 | Merge import vs a colliding quarantined row | **Resolved (Phase 17)** | Policy decided: protection wins — a merge id colliding with a row the hydration classifier quarantines is a blocking `QUARANTINE_CONFLICT` raised inside the import transaction before any write (`dexieDrugRepository.ts` merge pre-scan via `fromRecord`); quarantined row stays byte-identical and in the quarantine report; preview advisory names the ids but the transaction is the integrity boundary; contract ambiguity resolved (`repository.ts` `ImportMode` docs, `validation.md` §4/§5, `npsl-format.md` §6, ADR-15); committed tests in `dexieDrugRepository.test.ts` + `ImportExportView.test.tsx` |
 | G6 | v1→v2 migration information preservation | Pass (fixture-based) | See A6; no real-world corpus available → limitation |
 
 ### H. Calculator and application preferences
@@ -429,7 +432,7 @@ A missing test alone is not a defect; each gap below states what the code
 | --- | --- | --- | --- | --- |
 | **GAP-1** | Unknown extension fields under a **targets-replacing** update (`records.ts:177` + `applyChanges:101`) | `toStoredRecord(existing, next)` re-attaches unknown keys from the raw row, targets matched by stable id | **Resolved (Phase 16)** — was: the committed "editing an unrelated known field" test only sent `{notes}`, so the wholesale-replacement path had no committed extension test | `R5` passed locally; now committed: `dexieDrugRepository.test.ts` describe `GAP-1 — unknown target extensions under a targets-replacing update (audit)` (import baseline → reordered same-id replacement + unrelated edit → per-position raw-row asserts; removal + new-id non-transfer boundary with the removed target's fields asserted absent from the whole row) plus the form-path test in `DrugForm.persistence.test.tsx` (real detail → edit → save where the form always submits a replacement `targets` array). Both fail when the stable-id match in `preserveUnknownFields` is deliberately broken |
 | **GAP-2** | `pharmacokinetics` values under unrelated edits (`applyChanges:102`) | Key absent from form input → PK never replaced | **Resolved (Phase 16)** — was: no committed assertion on PK *values* (only the PK extension via `expectDrugExtensions`) | `R6` passed locally; now committed: `DrugForm.persistence.test.tsx` GAP-2 test seeds all four PK parameters (half-life, clearance, Vd, bioavailability) with units and complete provenance incl. an unknown extension key, performs an unrelated rename through the real form, then deep-equals the whole stored `pharmacokinetics` object against the fixture in the raw IndexedDB row and in a fresh repository read; fails if `applyChanges` drops or rebuilds PK |
-| **GAP-3** | Merge import over a colliding **quarantined** row (`dexieDrugRepository.ts:291-292`) | `get(id)` returns the raw quarantined row; `put` overwrites it with the valid incoming record; the row silently leaves the quarantine report | Undisclosed (preview conflict count comes from hydrated valid drugs only, `ImportPanel.tsx:187`), untested, and contract-ambiguous: "incoming wins per id" (`repository.ts:83`) vs the quarantine-preservation intent (`records.ts:12-13`). Not labeled a defect because the documented quarantine contract covers hydration, export, and `.npsb` — this path was never ruled in or out | `R7` **recorded actual behavior**: quarantine list loses the id; valid list gains it; import reports `ok` |
+| **GAP-3** | Merge import over a colliding **quarantined** row (`dexieDrugRepository.ts:291-292`) | `get(id)` returns the raw quarantined row; `put` overwrote it with the valid incoming record; the row silently left the quarantine report | **Resolved (Phase 17)** — was: undisclosed (preview conflict count comes from hydrated valid drugs only, `ImportPanel.tsx:187`), untested, and contract-ambiguous: "incoming wins per id" (`repository.ts:83`) vs the quarantine-preservation intent (`records.ts:12-13`); not labeled a defect because the documented quarantine contract covered hydration, export, and `.npsb` only — this path had never been ruled in or out. Decision: **protection wins**; documented in `validation.md` §4/§5, `npsl-format.md` §6, `decisions.md` ADR-15, `repository.ts` `ImportMode` | `R7` **recorded the pre-fix behavior**: quarantine list lost the id; valid list gained it; import reported `ok`. Now committed: `dexieDrugRepository.test.ts` describe `DexieDrugRepository — merge import vs a quarantined row (audit GAP-3)` (rejection with `QUARANTINE_CONFLICT`, raw row byte-identical incl. unknown extension, whole-document no-write with metadata untouched, valid same-id merge still succeeds) and describe `... quarantine collision uses the authoritative classifier (audit GAP-3)` (enum + structure failure classes); `ImportExportView.test.tsx` (preview advisory names the id; a stale cached quarantine list cannot bypass the transaction) |
 | **GAP-4** | Multi-tab concurrent writes to the same record | `updateDrug` re-reads inside the transaction and merges only provided changes (`:181-202`), so *different-field* concurrent saves compose; same-field and `targets`-replacing saves are last-writer-wins with no conflict detection | No multi-tab tests; no documented concurrency guarantee; loss scenario plausible but unproven | Not attempted (would require two browsing contexts; jsdom cannot model it credibly) |
 
 **Not verified (blocker stated):**
@@ -490,7 +493,7 @@ item is scoped to be implementable and testable in one focused phase.
 | 3 | **S3 — Phase 14 (done)** | DI-03 | Round-trip-safe list/text handling in `DrugForm` (preserve untouched arrays verbatim; explicit trim policy for edited fields) | Product decision on delimiter/UX; touches only form code — decision taken: keep the comma-delimited widget unchanged for edited lists and document the embedded-comma limitation; untouched fields bypass the widget round trip entirely |
 | 4 | **S4 — Phase 15 (done)** | DI-04 | Document (and optionally normalize-or-reject) `-0` in the NPSL contract, aligning with the NPSB sidecar story | Decision taken during the phase: **exact preservation** instead of the sketched normalize-or-reject — the serializer emits the numeric `-0` token (collision-proof placeholder) and the form's draft-text identity rule keeps untouched `-0` parameters; no sidecar, no version bump, no user-visible value policy change |
 | 5 | **S5 — Phase 16 (done)** | GAP-1, GAP-2 | Two committed regression tests only (targets-replacing + extensions; PK values under unrelated edit). No production change | Done exactly as scoped: two repository GAP-1 tests (stable-identity reattachment; removal/new-id non-transfer boundary), one form-path GAP-1 test, one GAP-2 PK round-trip test, plus the DI-04 collision-branch test; **no production code changed** |
-| 6 | **S6** | GAP-3 | Decide and document the quarantine-vs-import-collision policy; if protection wins, surface quarantined-id collisions in the preview | Policy decision first; implementation depends on it |
+| 6 | **S6 — Phase 17 (done)** | GAP-3 | Decide and document the quarantine-vs-import-collision policy; if protection wins, surface quarantined-id collisions in the preview | Done: decision taken — **protection wins**. A merge id colliding with a row the hydration classifier quarantines is a blocking `QUARANTINE_CONFLICT` raised inside the import transaction before any write (whole document rejected, quarantined row byte-identical, still reported); the preview surfaces an advisory naming the ids while the repository transaction remains the authoritative boundary (a stale preview cannot bypass it); policy documented in `validation.md`, `npsl-format.md` §6, ADR-15 and `repository.ts`; repository + UI regression tests committed; no schema or format change |
 | 7 | **S7** | GAP-4 | Document multi-tab expectations (field-merge behavior; last-writer-wins for same-field/targets saves) and pin current behavior with a test | Documentation-first; no locking proposed |
 
 **All four confirmed findings are remediated: S1 (DI-01, Phase 12), S2
@@ -504,9 +507,12 @@ undocumented `-0` round-trip loss (value sign, then provenance restamp),
 closed by exact preservation — the serializer's numeric `-0` token plus the
 form's draft-text identity rule. **S5 (GAP-1/GAP-2 regression tests) is
 done — Phase 16 — closing both coverage gaps with committed tests and no
-production change.** The highest-priority open items are now S6 (GAP-3
-policy decision) and S7 (GAP-4 documentation), then the unverified paths
-NV-1..3.
+production change. S6 (GAP-3) is done — Phase 17 — with the decision that
+quarantine protection wins over Merge: a colliding id is a blocking
+`QUARANTINE_CONFLICT` inside the transaction, surfaced as a preview
+advisory, with the policy documented across `validation.md`,
+`npsl-format.md`, ADR-15 and `repository.ts`.** The highest-priority open
+item is now S7 (GAP-4 documentation), then the unverified paths NV-1..3.
 
 **No finding in this audit warrants emergency remediation ahead of the normal
 sequence:** every loss requires a specific trigger (records carrying

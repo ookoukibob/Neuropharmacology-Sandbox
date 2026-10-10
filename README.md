@@ -43,6 +43,7 @@ persistence (complete).**
 **Phase 14 — untouched list/text preservation on drug edits (complete).**
 **Phase 15 — negative-zero preservation in NPSL round trips (complete).**
 **Phase 16 — GAP-1/GAP-2 regression coverage and -0 collision coverage (complete).**
+**Phase 17 — GAP-3 quarantine-vs-merge import collision protection (complete).**
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -63,6 +64,7 @@ a visible warning) and CSV (lossy, with a visible warning), component + CSV unit
 | 14 | Data integrity: an edit no longer normalizes fields the user never touched (audit DI-03) — synonyms, tags, name and top-level notes are submitted from the stored record verbatim when their draft text is unchanged (embedded commas, duplicate entries, edge whitespace and the `notes` present/absent distinction survive), only actually-changed fields are parsed/trimmed, verified by form-level tests and a real-repository/raw-IndexedDB test; the comma-delimited edit limitation is documented; no widget, schema or format change | done |
 | 15 | Data integrity: negative zero now survives every supported NPSL interchange path and unrelated edit (audit DI-04) — the shared JSON serializer emits the numeric `-0` token (collision-proof placeholder, byte-identical output for `-0`-free documents) and a parameter draft still showing the source's own text submits the stored number verbatim, keeping an untouched `-0` *and* its complete provenance; verified by serializer, repository (literal-token import/export/re-import), form and raw-IndexedDB tests; contract documented in `npsl-format.md`; no sidecar, version bump, schema or format change | done |
 | 16 | Data integrity: committed regression coverage closes audit gaps GAP-1 and GAP-2 — test-only, no production change: unknown target extensions survive targets-replacing updates by stable id (import baseline, reordered same-id replacement, removal/new-id non-transfer boundaries, repository and real form path), pharmacokinetics values, units and provenance (incl. an unknown extension key) survive unrelated edits (raw-row and fresh-read deep equality), and the `-0` serializer's placeholder collision branch is exercised with marker-like source data (marker value, marker-like extension key and the first extended candidate) | done |
+| 17 | Data integrity: a Merge import never overwrites a quarantined raw record (audit GAP-3) — the merge pre-scan classifies the colliding stored row with the authoritative hydration validator (`fromRecord`) inside the import transaction and rejects the whole document with blocking `QUARANTINE_CONFLICT` before any write (quarantined row byte-identical and still reported), the import preview surfaces an advisory naming the colliding ids while the transaction remains the authoritative boundary (a stale preview cannot bypass it); policy documented in `validation.md`, `npsl-format.md` and ADR-15; repository + UI regression tests; no schema or format change | done |
 
 ### What works today
 

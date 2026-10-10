@@ -18,6 +18,7 @@ import {
 } from '../../tests/fixtures'
 import { fieldAt } from '../../tests/runtimeFields'
 import { SandboxDatabase } from '../db/database'
+import { previewNpslImport } from '../import/importPipeline'
 import { serializeNpslDocument, toNpslDocument } from '../mappers/npslDocument'
 import { toRecord } from '../mappers/records'
 import { DexieDrugRepository } from './dexieDrugRepository'
@@ -1103,5 +1104,204 @@ describe('GAP-1 — unknown target extensions under a targets-replacing update (
     } finally {
       await db.delete()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GAP-3 (audit): merge import vs a colliding quarantined raw row. The
+// fail-safe contract — a merge id matching a stored row the authoritative
+// hydration classifier (`fromRecord` inside `getAllDrugs`) quarantines is a
+// blocking conflict: the whole document is rejected inside the transaction
+// before any write, the quarantined raw row stays byte-identical, and the
+// id remains in the quarantine report. Synthetic test data only.
+// ---------------------------------------------------------------------------
+
+/** Raw row that fails hydration (invalid `origin` enum) — the GAP-3 class. */
+const GAP3_QUARANTINED_ROW = {
+  id: 'gap3-raw-1',
+  origin: 'bogus',
+  identifiers: { name: 'Synthetic Gap3 Quarantined Fixture' },
+  unknownFutureField: { keep: ['me'], nested: { flag: true } },
+}
+
+/** A valid incoming drug claiming the given (here: quarantined) id. */
+function gap3IncomingText(id: string): string {
+  return syntheticNpslText([
+    syntheticDrug({ id, identifiers: { name: 'Synthetic Gap3 Incoming', synonyms: [] } }),
+  ])
+}
+
+describe('DexieDrugRepository — merge import vs a quarantined row (audit GAP-3)', () => {
+  it('rejects the collision and preserves the raw quarantined row byte-identical', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      await db.drugs.put(GAP3_QUARANTINED_ROW as never)
+
+      // Baseline through the authoritative hydration path: the id IS
+      // reported as quarantined (derived from schema classification — no
+      // test-only quarantine flag exists in storage).
+      const baseline = await repo.getAllDrugs()
+      expect(baseline.drugs).toEqual([])
+      expect(baseline.quarantine.map((q) => q.id)).toEqual(['gap3-raw-1'])
+      expect(baseline.quarantine[0]?.errors.length).toBeGreaterThan(0)
+
+      // Deep copy of the entire raw representation — malformed field and
+      // unknown extension included.
+      const rawBefore = structuredClone(await db.drugs.get('gap3-raw-1'))
+      expect(rawBefore).toBeDefined()
+
+      // The preview is pure (no storage access): it cannot see this
+      // conflict — proving preview is NOT the integrity boundary.
+      expect(previewNpslImport(gap3IncomingText('gap3-raw-1'), []).ok).toBe(true)
+
+      const report = await repo.importLibrary(gap3IncomingText('gap3-raw-1'), { mode: 'merge' })
+      expect(report.ok).toBe(false)
+      if (!report.ok) {
+        expect(report.errors.map((e) => e.code)).toEqual(['QUARANTINE_CONFLICT'])
+        expect(report.errors[0]?.message).toContain('gap3-raw-1')
+        expect(report.errors[0]?.message).toContain('preserved unchanged')
+      }
+
+      // The raw row deep-equals the pre-import snapshot: malformed field
+      // and unknown extension untouched — no repair, no strip, no delete.
+      const rawAfter = await db.drugs.get('gap3-raw-1')
+      expect(rawAfter).toEqual(rawBefore)
+      expect(fieldAt(rawAfter, 'unknownFutureField')).toEqual({
+        keep: ['me'],
+        nested: { flag: true },
+      })
+
+      // Fresh hydration: still quarantined; the incoming valid drug never
+      // appears as a valid record and no row was added.
+      const after = await repo.getAllDrugs()
+      expect(after.quarantine.map((q) => q.id)).toEqual(['gap3-raw-1'])
+      expect(after.drugs).toEqual([])
+      expect(await db.drugs.count()).toBe(1)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('rejects the WHOLE merge document — no partial writes, metadata untouched', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      // Library: one valid record, one quarantined raw row, stamped metadata.
+      await db.drugs.put(toRecord(syntheticDrug()))
+      await db.drugs.put(GAP3_QUARANTINED_ROW as never)
+      await db.meta.put({
+        id: 'local-library',
+        name: 'Original',
+        createdAt: '2020-01-01T00:00:00.000Z',
+        updatedAt: '2020-01-01T00:00:00.000Z',
+        dataStatus: 'unspecified',
+      })
+
+      const rowsBefore = structuredClone(await db.drugs.toArray())
+      const metaBefore = structuredClone((await db.meta.toArray())[0])
+
+      // One document: a new drug, an update to the valid drug, and a
+      // collision with the quarantined id.
+      const report = await repo.importLibrary(
+        syntheticNpslText([
+          syntheticDrugB(),
+          syntheticDrug({ notes: 'updated by merge' }),
+          syntheticDrug({
+            id: 'gap3-raw-1',
+            identifiers: { name: 'Synthetic Gap3 Incoming', synonyms: [] },
+          }),
+        ]),
+        { mode: 'merge' },
+      )
+      expect(report.ok).toBe(false)
+      if (!report.ok) expect(report.errors.map((e) => e.code)).toEqual(['QUARANTINE_CONFLICT'])
+
+      // Whole-library snapshot: the new drug was not inserted, the valid
+      // drug was not partially updated, the quarantined row is unchanged,
+      // and library metadata is byte-identical.
+      expect(await db.drugs.toArray()).toEqual(rowsBefore)
+      expect((await db.meta.toArray())[0]).toEqual(metaBefore)
+      expect(await db.drugs.get('fixture-drug-2')).toBeUndefined()
+      expect((await db.drugs.get('fixture-drug-1'))?.identifiers.name).toBe('Fixture Compound A')
+      expect((await db.drugs.get('fixture-drug-1'))?.notes).toBe(FIXTURE_NOTE)
+      expect(await db.drugs.count()).toBe(2)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('still merges a VALID existing record with the same id — only quarantined collisions block', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      await db.drugs.put(toRecord(syntheticDrug()))
+      const report = await repo.importLibrary(
+        syntheticNpslText([syntheticDrug({ notes: 'updated past the guard' })]),
+        { mode: 'merge' },
+      )
+      expect(report.ok).toBe(true)
+      if (report.ok) expect(report).toMatchObject({ total: 1, created: 0, updated: 1 })
+      expect((await repo.getDrug('fixture-drug-1'))?.notes).toBe('updated past the guard')
+      expect((await repo.getAllDrugs()).quarantine).toEqual([])
+      expect(await db.drugs.count()).toBe(1)
+    } finally {
+      await db.delete()
+    }
+  })
+})
+
+/**
+ * GAP-3 detection must use the ONE authority that classifies storage rows:
+ * `fromRecord` schema validation during hydration (there is no quarantine
+ * table, flag or cached list — `getAllDrugs` derives the report from the
+ * same parse on every read). The helper proves the merge is blocked if and
+ * only if that classifier quarantines the row, for each schema-failure
+ * class below. The archive-side classifier (`classifyArchiveDrugs`) governs
+ * `.npsb` imports only and is deliberately out of scope here.
+ */
+async function expectBlockedByAuthoritativeClassifier(
+  raw: Record<string, unknown>,
+): Promise<void> {
+  const db = freshDb()
+  try {
+    const repo = new DexieDrugRepository(db)
+    await db.drugs.put(raw as never)
+    const id = String(raw['id'])
+
+    const baseline = await repo.getAllDrugs()
+    expect(baseline.quarantine.map((q) => q.id)).toContain(id)
+    const classified = baseline.quarantine.find((q) => q.id === id)
+    expect(classified?.errors.length).toBeGreaterThan(0)
+    const snapshot = structuredClone(await db.drugs.get(id))
+
+    const report = await repo.importLibrary(gap3IncomingText(id), { mode: 'merge' })
+    expect(report.ok).toBe(false)
+    if (!report.ok) {
+      expect(report.errors.map((e) => e.code)).toContain('QUARANTINE_CONFLICT')
+      expect(report.errors[0]?.message).toContain(id)
+    }
+    expect(await db.drugs.get(id)).toEqual(snapshot)
+    expect((await repo.getAllDrugs()).quarantine.map((q) => q.id)).toContain(id)
+  } finally {
+    await db.delete()
+  }
+}
+
+describe('DexieDrugRepository — quarantine collision uses the authoritative classifier (audit GAP-3)', () => {
+  it('blocks the schema-enum failure class (invalid origin) — the GAP-3 reproduction class', async () => {
+    await expectBlockedByAuthoritativeClassifier({
+      id: 'gap3-class-enum',
+      origin: 'bogus',
+      futureField: { keep: true },
+    })
+  })
+
+  it('blocks the schema-structure failure class (malformed targets)', async () => {
+    await expectBlockedByAuthoritativeClassifier({
+      id: 'gap3-class-structure',
+      origin: 'user',
+      targets: 'not-an-array',
+    })
   })
 })

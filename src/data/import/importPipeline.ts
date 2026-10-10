@@ -37,7 +37,13 @@ import {
   type NpslLibraryMetadata,
 } from '../schemas/npsl'
 
-export type ImportErrorCode = 'PARSE' | 'VERSION' | 'SCHEMA' | 'DUPLICATE_ID'
+export type ImportErrorCode =
+  | 'PARSE'
+  | 'VERSION'
+  | 'SCHEMA'
+  | 'DUPLICATE_ID'
+  /** Merge id collides with a stored row that hydration quarantines (GAP-3). */
+  | 'QUARANTINE_CONFLICT'
 
 export interface ImportIssue {
   readonly code: ImportErrorCode
