@@ -91,7 +91,12 @@ preservation across edits: the supported target-level fields
 (`gene`, `action`, `species`, `notes`) survive unrelated drug edits,
 target renames, parameter changes, row removal with position shifts and
 recreated-target name collisions, are never inherited by new rows, and
-absent fields stay absent with no explicit `undefined` keys) and
+absent fields stay absent with no explicit `undefined` keys, plus
+untouched list/text preservation across edits — synonyms/tags/name/notes
+whose draft is still at its mount-time baseline are submitted verbatim,
+embedded commas, duplicate entries and edge whitespace included, while
+only actually-changed fields are parsed or trimmed and a reverted draft
+counts as unchanged (audit DI-03)) and
 `src/features/calculator/CalculatorView.test.tsx` (heading hierarchy, the
 URL ⇄ store deep-link convergence regression, the roving PK
 parameterization radio group, and schema errors surfacing on the fields
@@ -112,9 +117,12 @@ parameter provenance whole — citation/DOI/unknown keys included — in the
 actual stored record, stamps only the parameter that changed, keeps
 every surviving target's `gene` / `action` / `species` / `notes` in the
 raw IndexedDB row — with no metadata migrating onto survivors or
-recreated targets — proven by a fresh repository read, and keeps the
+recreated targets — proven by a fresh repository read, keeps the
 stored-only identifier metadata `description` / `casNumber` byte-identical
-in the raw row after an unrelated edit (audit DI-01); same
+in the raw row after an unrelated edit (audit DI-01), and keeps the
+untouched list/text fields `synonyms` / `tags` / name / top-level notes
+byte-identical in the raw row after an unrelated edit — embedded commas,
+duplicates and edge whitespace included (audit DI-03); same
 real-repository setup) and
 `src/app/pages/SettingsPage.test.tsx` (the settings controls against the
 real app stores: theme applied to the document root and persisted,
@@ -317,8 +325,8 @@ lossy edges are listed in `docs/validation.md` §7.
 | Preferences tests (schema, storage, store) | done — defaults on first run, save/restore round trip with verbatim string forms, malformed JSON and non-object payloads, unsupported schema versions, invalid theme/scale/value types, engine cross-field range rules (min < max, log-safe min, points bounds), live system-mode theme behavior, manual-theme precedence over OS changes, write-failure degradation (`loadStatus: 'unavailable'`), scoped reset, persisted-key shape (no scientific state) |
 | Calculator presentation-settings tests | done — `applyPresentationSettings` replaces display defaults without touching drafts/report/curve, marks the curve stale when a report exists; `defaultCalculatorSettings` returns fresh independent copies |
 | Settings UI tests | done — four sections with accessible headings, theme applied + persisted per model blocks, invalid range text refused with `aria-invalid`/description, cross-field enforcement, restore-defaults keeps the theme, data-management link, About metadata, acknowledged reset (Escape, focus, scope) with repository mutation spies and an untouched scientific draft, invalid/unavailable-storage notes |
-| Drug-form persistence integration tests | done — real detail → form → store → Dexie chain: whole provenance of unchanged parameters in the raw stored row, user stamp only on the changed parameter, supported target metadata (`gene` / `action` / `species` / `notes`) intact after an unrelated edit, no metadata migration after removal + same-name recreation, and stored-only identifier metadata (`description` / `casNumber`) preserved byte-identical in the raw row after an unrelated edit (raw row + fresh repository read) |
-| Test suite total | 744 unit tests (45 files) |
+| Drug-form persistence integration tests | done — real detail → form → store → Dexie chain: whole provenance of unchanged parameters in the raw stored row, user stamp only on the changed parameter, supported target metadata (`gene` / `action` / `species` / `notes`) intact after an unrelated edit, no metadata migration after removal + same-name recreation, stored-only identifier metadata (`description` / `casNumber`) preserved byte-identical in the raw row after an unrelated edit (raw row + fresh repository read), and untouched list/text fields (`synonyms` / `tags` / name / top-level notes) preserved byte-identical in the raw row after an unrelated edit (audit DI-03) |
+| Test suite total | 753 unit tests (45 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
 | Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
 | Library reload e2e | done — 2 workflows (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload; and target metadata: import user-origin record with `gene`/`action`/`species`/`notes` → unrelated edit → fields still shown → reload → persisted |

@@ -40,6 +40,7 @@ persistence (complete).**
 **Phase 11 — repository data integrity audit (complete).**
 **Phase 12 — identifier-metadata preservation on drug edits (complete).**
 **Phase 13 — duplicate-target-id rejection in NPSL imports (complete).**
+**Phase 14 — untouched list/text preservation on drug edits (complete).**
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -57,6 +58,7 @@ a visible warning) and CSV (lossy, with a visible warning), component + CSV unit
 | 11 | Repository data integrity audit: evidence-driven coverage matrix over reconstruction, serialization, import/export, persistence, identity and recovery boundaries — confirmed findings DI-01…DI-04, coverage gaps and a prioritized remediation backlog in `docs/data-integrity-audit.md` (audit-only commit) | done |
 | 12 | Data integrity: stored-only identifier metadata (`description`, `casNumber`) now survives edits to existing drug records (audit DI-01) — reattached from the stored record in the form's submit path while editable fields stay form-driven, verified by form-level tests and a real-repository/raw-IndexedDB test; no new editing controls, schema or format change | done |
 | 13 | Data integrity: NPSL import now blocks documents carrying duplicate `targets[].id` inside one drug (audit DI-02) — per-drug uniqueness enforced with blocking `DUPLICATE_ID` at the existing validation boundary, rejection proven to write nothing to storage, CSV behavior unchanged; no schema or format change | done |
+| 14 | Data integrity: an edit no longer normalizes fields the user never touched (audit DI-03) — synonyms, tags, name and top-level notes are submitted from the stored record verbatim when their draft text is unchanged (embedded commas, duplicate entries, edge whitespace and the `notes` present/absent distinction survive), only actually-changed fields are parsed/trimmed, verified by form-level tests and a real-repository/raw-IndexedDB test; the comma-delimited edit limitation is documented; no widget, schema or format change | done |
 
 ### What works today
 

@@ -219,7 +219,17 @@ submitted target list is built, and the stored-only recognized identifier
 fields (`description`, `casNumber`) are reattached from the record itself,
 so an unrelated edit never silently deletes either group, a removed
 target's metadata leaves with it, and fields a record never had stay
-absent. The submitted `targets` array still replaces the stored list
+absent. The four directly edited fields — name, synonyms, tags and
+top-level notes — submit their stored values verbatim whenever their
+draft text is still at its mount-time baseline (audit DI-03): embedded
+commas, duplicate entries and edge whitespace inside a field the user
+never touched survive an edit exactly, including the `notes`
+present/absent distinction. Only a field the user actually changed is
+parsed (comma-split, trimmed, de-duplicated) or trimmed; the
+comma-delimited input still cannot represent an individual list entry
+containing a comma *while that list is edited* — a documented
+limitation, with no escaping syntax or new widget. The submitted
+`targets` array still replaces the stored list
 wholesale and `identifiers` still carries the form's `name`/`synonyms`
 (the repository contract is unchanged), and this adds no editing controls,
 no schema field and no interchange format change.
@@ -425,6 +435,7 @@ device-local presentation preferences — see §4.7.
 | 11 | Repository data integrity audit (audit-only): evidence-driven review of reconstruction, serialization, import/export, persistence, identity and recovery boundaries — coverage matrix, confirmed findings DI-01…DI-04, coverage gaps and a prioritized remediation backlog in `data-integrity-audit.md`; no production changes | all | done |
 | 12 | Data integrity: preserve stored-only identifier metadata (`description`, `casNumber`) through the drug edit workflow — DI-01 remediation (reattach from the stored record at submit, absent stays absent) with form-level and real-repository/raw-row regression coverage; no new editing UI, schema or format change | 10, 11 | done |
 | 13 | Data integrity: NPSL import rejects duplicate `targets[].id` within one drug — DI-02 remediation (per-drug blocking `DUPLICATE_ID` at the existing semantic-validation boundary, re-run inside the import transaction so a rejected document writes nothing); rejection, scope, schema-authority and no-write regression tests; no schema, format or CSV change | 11 | done |
+| 14 | Data integrity: preserve untouched list/text fields through drug edits — DI-03 remediation (mount-time baseline in `DrugForm`; a draft still at its baseline submits the stored value verbatim, only actually-changed fields are parsed/trimmed); form-level and real-repository/raw-row regression tests; comma-delimited edit limitation documented; no widget, schema or format change | 11 | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full
@@ -507,6 +518,14 @@ supplied by data.
       explicit `undefined`), nothing is synthesized, and create mode is
       unchanged. Verified against the raw stored row through the real
       repository chain.
+- [x] Untouched list/text preservation (phase 14 fix, audit DI-03): an
+      edit submits the stored synonyms/tags/name/notes verbatim whenever
+      their draft text is still the mount-time baseline — array order,
+      duplicate entries, embedded commas and edge whitespace included,
+      and the `notes` present/absent distinction kept — while only
+      actually-changed fields follow the established parse/trim policy
+      (comma-delimited edit limitation documented); create mode and the
+      phase 9A/10/12 preservation rules verified unchanged.
 - [x] No invented pharmacological data: fixtures are synthetic and labeled
       as such; the first run is empty.
 - [x] Extensive tests (mapper, migration, import pipeline, repository,

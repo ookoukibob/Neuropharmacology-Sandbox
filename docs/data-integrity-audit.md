@@ -56,8 +56,8 @@ below names the evidence actually examined.
 ## 2. Executive summary
 
 **Confirmed findings: 4** — 0 Critical · **2 High** · **1 Medium** · **1 Low**.
-Of these, **2 are remediated (DI-01 in Phase 12, DI-02 in Phase 13)**;
-**2 remain open** (DI-03, DI-04).
+Of these, **3 are remediated (DI-01 in Phase 12, DI-02 in Phase 13, DI-03 in Phase 14)**;
+**1 remains open** (DI-04).
 **Coverage gaps: 4** (behavior plausibly correct, evidence inadequate).
 **Not verified: 3** (environment/asset blockers).
 
@@ -65,7 +65,7 @@ Of these, **2 are remediated (DI-01 in Phase 12, DI-02 in Phase 13)**;
 | --- | --- | --- | --- |
 | **DI-01** | High | confirmed | Every `DrugForm` edit silently drops `identifiers.description` and `identifiers.casNumber` (partial `identifiers` replacement). Repro `R1`. **Remediated in Phase 12** — status details in §5. |
 | **DI-02** | High | confirmed | NPSL import does not implement the documented blocking duplicate-`targets[].id` check; accepted files later cause silent provenance/metadata misattribution on ordinary edits. Repros `R2`, `R3`. **Remediated in Phase 13** — status details in §5. |
-| **DI-03** | Medium | confirmed | The edit form silently normalizes *untouched* list/text fields: synonyms/tags are re-split at commas, trimmed and de-duplicated; names/notes are trimmed. Repro `R4`. |
+| **DI-03** | Medium | confirmed | The edit form silently normalizes *untouched* list/text fields: synonyms/tags are re-split at commas, trimmed and de-duplicated; names/notes are trimmed. Repro `R4`. **Remediated in Phase 14** — status details in §5. |
 | **DI-04** | Low | confirmed | NPSL JSON round-trip cannot represent `-0` (stringifies to `0`), silently flipping value semantics and (second-order) restamping provenance of an untouched `-0` parameter; `.npsb` has a documented sidecar, `.npsl` has neither documentation nor handling. Node probe. |
 
 No Critical finding: recovery atomicity, import atomicity, and the quarantine
@@ -92,7 +92,7 @@ claims. Verdict references point to §4 (matrix), §5 (findings), §6 (gaps).
 | --- | --- | --- | --- | --- |
 | 1 | Zod parse → domain: `records.ts` `fromRecord` (`records.ts:287`) over `npsl.ts` schemas | Stored raw row → `Drug`; all schemas are `z.looseObject` (`npsl.ts:14-31`) | Unknown keys kept at every level; invalid → quarantine, never repair | Pass (A2, G1) |
 | 2 | Domain → stored row: `toRecord` (`records.ts:238`) + `toStoredRecord` (`records.ts:326`) + `preserveUnknownFields` (`records.ts:177`) | Recognized fields from domain; unknown fields copied from incoming drug + existing raw row (targets matched by stable id) | "A key in the contract is governed by the domain value; a key outside the contract is copied forward" (`records.ts:14-18`) | Pass at mapper level (A1); **Gap** for targets-replacing updates (GAP-1); **Finding** at the form boundary for contract keys (DI-01, remediated in Phase 12) |
-| 3 | `DrugForm.buildInput` → `DrugChanges` (`DrugForm.tsx:246-306`, submit arg `DrugForm.tsx:407`) | name/synonyms/tags/notes/params/provenance/metadata → partial update object | 9A rule (`provenance.md:48-54`); Phase-10 metadata rule (`DrugForm.tsx:283-292`) | Pass (C1, B3); **Finding DI-01** (identifier fields) — **remediated in Phase 12**; **Finding DI-03** (list normalization, open) |
+| 3 | `DrugForm.buildInput` → `DrugChanges` (`DrugForm.tsx:246-306`, submit arg `DrugForm.tsx:407`) | name/synonyms/tags/notes/params/provenance/metadata → partial update object | 9A rule (`provenance.md:48-54`); Phase-10 metadata rule (`DrugForm.tsx:283-292`) | Pass (C1, B3); **Finding DI-01** (identifier fields) — **remediated in Phase 12**; **Finding DI-03** (list/text normalization) — **remediated in Phase 14** (mount-time baseline; untouched drafts submit source values verbatim) |
 | 4 | `applyChanges` (`dexieDrugRepository.ts:93-106`) | Partial update over re-read current row inside transaction | Documented: "absent keys keep their value; structures replaced wholesale when present" (`repository.ts:67-72`) | Pass as a repository contract; only production caller is `DrugDetailView.tsx:109` |
 | 5 | NPSL file → validated drugs: `parseNpsl` + `validateNpslFile` (`importPipeline.ts:247-310`) | Envelope, schema, semantic checks, warnings | `validation.md` §3–§4: duplicate drug ids AND duplicate `targets[].id` per drug are blocking | **Finding DI-02 → remediated (Phase 13)**: per-drug target-id check added to `validateNpslFile` |
 | 6 | Import commit: `importLibrary` (`dexieDrugRepository.ts:258-309`) | `replace` = clear + write; `merge` = `get(id)` + `toStoredRecord(existing, file)` | Atomic in one transaction; invalid file → zero writes; merge does not touch metadata | Pass (D4, D6) |
@@ -132,7 +132,7 @@ code/reproduction evidence; **Not verified** = blocker stated.
 | Row | Path | Verdict | Evidence examined |
 | --- | --- | --- | --- |
 | B1 | Create flow | Pass | `views.test.tsx:231` safeguards describe; `store.test.ts:130`; invalid creation leaves state untouched `:147` |
-| B2 | Edit: name, synonyms, tags, notes, description, CAS | **DI-01 remediated (Phase 12); DI-03 open** | `R1`, `R4`; detail view displays description/CAS at `DrugDetailView.tsx:141-145` (loss was user-visible after save; now preserved per A3 regression tests) |
+| B2 | Edit: name, synonyms, tags, notes, description, CAS | **DI-01 remediated (Phase 12); DI-03 remediated (Phase 14)** | `R1`, `R4`; detail view displays description/CAS at `DrugDetailView.tsx:141-145` (loss was user-visible after save; now preserved per A3 regression tests); untouched list/text values now survive verbatim (§5 DI-03 status) |
 | B3 | Target add/remove/rename, stable identity, ID assignment | Pass | Phase 10 suite `views.test.tsx:636-` (8 tests), `DrugForm.persistence.test.tsx` (2), E2E `e2e/library.spec.ts:197`; removal/position-shift and remove-recreate covered |
 | B4 | Parameter add/remove, unit change, kind change | Pass | `views.test.tsx:231` (unit/dimension guards), `:394` (9A provenance describe); kind-substitution impossible by construction (separate named fields, `drug.ts:39-58`) |
 | B5 | Read-only/origin gating | Pass | `DrugDetailView.tsx:116,226`; only `origin === 'user'` editable; `updateDrug` has exactly one production caller (traced) |
@@ -289,6 +289,40 @@ code/reproduction evidence; **Not verified** = blocker stated.
 
 ### DI-03 — Untouched list/text fields silently normalized on every save
 
+> **Status: remediated — Phase 14** (commit `5283799`,
+> `fix: preserve untouched drug list and text fields`).
+> Fix boundary: `DrugForm` only. A mount-time baseline captures the stored
+> source values (`identifiers.name`, `identifiers.synonyms`, `tags`, top-level
+> `notes`) plus each field's initial draft text; at submit a draft still equal
+> to that baseline — compared as *text*, never re-parsed — submits the source
+> value **verbatim**: array order, duplicate entries, embedded commas, and
+> leading/trailing whitespace inside entries and inside name/notes all survive,
+> and the `notes` present/absent distinction is kept (an explicitly empty string
+> stays present, an absent field stays absent). Only a field the user actually
+> changed follows the established policy: lists are comma-split, trimmed and
+> de-duplicated (`splitList`), name and notes are trimmed; a draft edited and
+> reverted to its exact initial text counts as unchanged. Create mode is
+> untouched (no baseline exists; the existing normalization applies).
+> **Known limitation:** the comma-delimited inputs cannot represent an individual
+> list entry containing a comma *while that list is being edited* — such an
+> entry survives untouched, but editing the list re-splits it; no escaping
+> syntax or new widget was added (documented in `validation.md` §4 and the
+> `DrugForm` module comment). **Regression evidence:**
+> `src/features/drug-library/views.test.tsx` (describe
+> `DrugForm — untouched list/text preservation on edit`: comma/duplicate round
+> trip, padded name/notes byte-for-byte, unrelated edit, edited-field
+> parse/trim policy, revert-to-baseline, absent/empty notes — six of the eight
+> verified to fail against the pre-fix code with the `R4` signature; the other
+> two are contract guards) and `DrugForm.persistence.test.tsx` (“keeps untouched
+> list and text fields byte-identical in the raw row after an unrelated edit”:
+> raw-row and fresh-read assertions alongside the DI-01/Phase-10/9A checks —
+> also verified to fail pre-fix). The original defect description and
+> reproduction `R4` below are retained unchanged as the audit trail.
+> **Out of scope (unchanged):** target-name trimming inside `validate` (identity
+> for duplicate-name checking; not part of `R4`); the comma-delimited list
+> widget itself; target-level `notes` remain governed by the Phase-10 metadata
+> rule, untouched here.
+
 | Field | Value |
 | --- | --- |
 | Severity | **Medium** (partial loss under a narrower condition — entries containing commas/duplicates or edge whitespace — with an avoidable trigger) |
@@ -388,19 +422,21 @@ item is scoped to be implementable and testable in one focused phase.
 | --- | --- | --- | --- | --- |
 | 1 | **S1 — Phase 12 (done)** | DI-01 | Reattach `description`/`casNumber` from the stored record in `DrugForm.buildInput` (Phase-10 conditional-spread pattern); add form + persistence regression tests | Must keep absent-stays-absent; no new UI; verify no other partial-contract field was missed in `DrugChanges` (audit found none) |
 | 2 | **S2 — Phase 13 (done)** | DI-02 | Add per-drug target-id uniqueness to `validateNpslFile` (blocking `DUPLICATE_ID`, zero writes) + rejection and no-misattribution tests | Previously-accepted violating files become un-importable; stored ambiguous libraries are out of scope |
-| 3 | **S3 — Phase 14** | DI-03 | Round-trip-safe list/text handling in `DrugForm` (preserve untouched arrays verbatim; explicit trim policy for edited fields) | Product decision on delimiter/UX; touches only form code |
+| 3 | **S3 — Phase 14 (done)** | DI-03 | Round-trip-safe list/text handling in `DrugForm` (preserve untouched arrays verbatim; explicit trim policy for edited fields) | Product decision on delimiter/UX; touches only form code — decision taken: keep the comma-delimited widget unchanged for edited lists and document the embedded-comma limitation; untouched fields bypass the widget round trip entirely |
 | 4 | **S4 — Phase 15** | DI-04 | Document (and optionally normalize-or-reject) `-0` in the NPSL contract, aligning with the NPSB sidecar story | Normalization changes stored values — needs an import warning |
 | 5 | **S5** | GAP-1, GAP-2 | Two committed regression tests only (targets-replacing + extensions; PK values under unrelated edit). No production change | None |
 | 6 | **S6** | GAP-3 | Decide and document the quarantine-vs-import-collision policy; if protection wins, surface quarantined-id collisions in the preview | Policy decision first; implementation depends on it |
 | 7 | **S7** | GAP-4 | Document multi-tab expectations (field-merge behavior; last-writer-wins for same-field/targets saves) and pin current behavior with a test | Documentation-first; no locking proposed |
 
 **Highest-priority follow-ups: S1 (DI-01) — completed in Phase 12 — and S2
-(DI-02) — completed in Phase 13.** S1 was silent field loss through the
-*most common* supported workflow (any edit of an imported/restored
-user-origin record); S2 was provenance corruption through import-then-edit,
-closed by blocking the colliding file before any write. **The highest-priority
-open item is now S3 (DI-03)**, the remaining silent normalization defect,
-followed by S4 (DI-04).
+(DI-02) — completed in Phase 13 — and S3 (DI-03) — completed in Phase 14.**
+S1 was silent field loss through the *most common* supported workflow (any edit
+of an imported/restored user-origin record); S2 was provenance corruption
+through import-then-edit, closed by blocking the colliding file before any
+write; S3 was silent normalization of untouched list/text metadata on every
+save, closed by submitting stored source values verbatim for unchanged drafts.
+**The highest-priority open item is now S4 (DI-04)**, the undocumented `-0`
+round-trip loss, followed by S5 (GAP-1/GAP-2 test gaps).
 
 **No finding in this audit warrants emergency remediation ahead of the normal
 sequence:** every loss requires a specific trigger (records carrying
