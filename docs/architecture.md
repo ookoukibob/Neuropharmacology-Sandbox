@@ -228,7 +228,14 @@ present/absent distinction. Only a field the user actually changed is
 parsed (comma-split, trimmed, de-duplicated) or trimmed; the
 comma-delimited input still cannot represent an individual list entry
 containing a comma *while that list is edited* — a documented
-limitation, with no escaping syntax or new widget. The submitted
+limitation, with no escaping syntax or new widget. Parameter values are
+likewise resolved by source identity: a value draft still reading the
+source's own textual representation submits the stored number verbatim,
+so a negative-zero value (`-0`, displayed as `"0"`) keeps both its sign
+and its complete provenance through an unrelated edit (audit DI-04) —
+and the shared NPSL serializer emits the numeric JSON token `-0`
+(collision-proof placeholder) so the sign survives export → import; no
+global ±0 equivalence is introduced. The submitted
 `targets` array still replaces the stored list
 wholesale and `identifiers` still carries the form's `name`/`synonyms`
 (the repository contract is unchanged), and this adds no editing controls,
@@ -436,6 +443,7 @@ device-local presentation preferences — see §4.7.
 | 12 | Data integrity: preserve stored-only identifier metadata (`description`, `casNumber`) through the drug edit workflow — DI-01 remediation (reattach from the stored record at submit, absent stays absent) with form-level and real-repository/raw-row regression coverage; no new editing UI, schema or format change | 10, 11 | done |
 | 13 | Data integrity: NPSL import rejects duplicate `targets[].id` within one drug — DI-02 remediation (per-drug blocking `DUPLICATE_ID` at the existing semantic-validation boundary, re-run inside the import transaction so a rejected document writes nothing); rejection, scope, schema-authority and no-write regression tests; no schema, format or CSV change | 11 | done |
 | 14 | Data integrity: preserve untouched list/text fields through drug edits — DI-03 remediation (mount-time baseline in `DrugForm`; a draft still at its baseline submits the stored value verbatim, only actually-changed fields are parsed/trimmed); form-level and real-repository/raw-row regression tests; comma-delimited edit limitation documented; no widget, schema or format change | 11 | done |
+| 15 | Data integrity: preserve negative zero across NPSL round trips and unrelated edits — DI-04 remediation by **exact preservation** (the shared JSON serializer emits the numeric token `-0` via a collision-proof placeholder; the form's draft-text identity rule keeps untouched `-0` values and their complete provenance); serializer, repository, form and raw-row regression tests; contract documented in `npsl-format.md`; no sidecar, version bump, schema or format change | 11 | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full
@@ -526,6 +534,15 @@ supplied by data.
       actually-changed fields follow the established parse/trim policy
       (comma-delimited edit limitation documented); create mode and the
       phase 9A/10/12 preservation rules verified unchanged.
+- [x] Negative-zero preservation (phase 15 fix, audit DI-04): the NPSL
+      serializer emits the numeric JSON token `-0` (collision-proof
+      placeholder; byte-identical output for `-0`-free documents), and a
+      parameter draft still reading the source's own textual display
+      submits the stored number verbatim — an untouched `-0` keeps its
+      sign and its complete provenance through unrelated edits, verified
+      at serializer, repository (literal-token import/export/re-import),
+      form and raw-IndexedDB levels; NaN/±Infinity stay rejected, no
+      ±0 equivalence, no sidecar, no format version change.
 - [x] No invented pharmacological data: fixtures are synthetic and labeled
       as such; the first run is empty.
 - [x] Extensive tests (mapper, migration, import pipeline, repository,

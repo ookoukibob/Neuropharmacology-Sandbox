@@ -47,8 +47,12 @@ Additional fields on every variant: optional `notes`; `recordedAt` /
    [domain-model.md](domain-model.md) §5).
 7. **Unchanged parameters keep their provenance through edits.** The edit
    form compares every parameter against the stored record by stable
-   target id and parameter kind: when the parsed numeric value is
-   `Object.is`-equal and the unit string is identical, the **complete**
+   target id and parameter kind: when the emitted value is `Object.is`-equal
+   to the stored one — either because the draft still reads the source's
+   own textual representation, so the stored number is submitted verbatim
+   (relevant for display-lossy values such as `-0`, which the input shows
+   as `"0"`, audit DI-04), or because the parsed draft is `Object.is`-equal
+   — and the unit string is identical, the **complete**
    provenance object — every field, unknown extension keys included — is
    written back untouched (same object, never rebuilt or mutated).
    Editing name, synonyms, tags or notes therefore never rewrites the

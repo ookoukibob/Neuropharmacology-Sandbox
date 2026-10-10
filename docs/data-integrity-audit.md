@@ -56,8 +56,8 @@ below names the evidence actually examined.
 ## 2. Executive summary
 
 **Confirmed findings: 4** — 0 Critical · **2 High** · **1 Medium** · **1 Low**.
-Of these, **3 are remediated (DI-01 in Phase 12, DI-02 in Phase 13, DI-03 in Phase 14)**;
-**1 remains open** (DI-04).
+Of these, **4 are remediated (DI-01 in Phase 12, DI-02 in Phase 13, DI-03 in Phase 14, DI-04 in Phase 15)**;
+**none remain open**.
 **Coverage gaps: 4** (behavior plausibly correct, evidence inadequate).
 **Not verified: 3** (environment/asset blockers).
 
@@ -66,7 +66,7 @@ Of these, **3 are remediated (DI-01 in Phase 12, DI-02 in Phase 13, DI-03 in Pha
 | **DI-01** | High | confirmed | Every `DrugForm` edit silently drops `identifiers.description` and `identifiers.casNumber` (partial `identifiers` replacement). Repro `R1`. **Remediated in Phase 12** — status details in §5. |
 | **DI-02** | High | confirmed | NPSL import does not implement the documented blocking duplicate-`targets[].id` check; accepted files later cause silent provenance/metadata misattribution on ordinary edits. Repros `R2`, `R3`. **Remediated in Phase 13** — status details in §5. |
 | **DI-03** | Medium | confirmed | The edit form silently normalizes *untouched* list/text fields: synonyms/tags are re-split at commas, trimmed and de-duplicated; names/notes are trimmed. Repro `R4`. **Remediated in Phase 14** — status details in §5. |
-| **DI-04** | Low | confirmed | NPSL JSON round-trip cannot represent `-0` (stringifies to `0`), silently flipping value semantics and (second-order) restamping provenance of an untouched `-0` parameter; `.npsb` has a documented sidecar, `.npsl` has neither documentation nor handling. Node probe. |
+| **DI-04** | Low | confirmed | NPSL JSON round-trip cannot represent `-0` (stringifies to `0`), silently flipping value semantics and (second-order) restamping provenance of an untouched `-0` parameter; `.npsb` has a documented sidecar, `.npsl` has neither documentation nor handling. Node probe. **Remediated in Phase 15** — status details in §5. |
 
 No Critical finding: recovery atomicity, import atomicity, and the quarantine
 machinery behaved as documented in every path exercised (§4 F/G), and no path
@@ -96,7 +96,7 @@ claims. Verdict references point to §4 (matrix), §5 (findings), §6 (gaps).
 | 4 | `applyChanges` (`dexieDrugRepository.ts:93-106`) | Partial update over re-read current row inside transaction | Documented: "absent keys keep their value; structures replaced wholesale when present" (`repository.ts:67-72`) | Pass as a repository contract; only production caller is `DrugDetailView.tsx:109` |
 | 5 | NPSL file → validated drugs: `parseNpsl` + `validateNpslFile` (`importPipeline.ts:247-310`) | Envelope, schema, semantic checks, warnings | `validation.md` §3–§4: duplicate drug ids AND duplicate `targets[].id` per drug are blocking | **Finding DI-02 → remediated (Phase 13)**: per-drug target-id check added to `validateNpslFile` |
 | 6 | Import commit: `importLibrary` (`dexieDrugRepository.ts:258-309`) | `replace` = clear + write; `merge` = `get(id)` + `toStoredRecord(existing, file)` | Atomic in one transaction; invalid file → zero writes; merge does not touch metadata | Pass (D4, D6) |
-| 7 | Domain → NPSL file: `toNpslDocument`/`serializeNpslDocument` (`npslDocument.ts:29-40`) | Full domain drugs incl. unknown fields riding from parse | "No field is invented or rewritten"; quarantined rows excluded with warning | Pass (D1, D9); **Finding DI-04** for `-0` |
+| 7 | Domain → NPSL file: `toNpslDocument`/`serializeNpslDocument` (`npslDocument.ts:29-40`) | Full domain drugs incl. unknown fields riding from parse | "No field is invented or rewritten"; quarantined rows excluded with warning | Pass (D1, D9); **Finding DI-04 → remediated (Phase 15)**: the serializer now emits the numeric token `-0` (collision-proof placeholder), so the contract holds for the sign too |
 | 8 | Domain → CSV: `csvExport.ts` (`drugLevelCells:123`, `targetCells:138`, `provenanceCells:100`, `rowsForDrug:149`) | 57 stable columns; provenance split into type/source/JSON cells; one row per target | Documented lossy projection with always-visible warning (`ExportPanel.tsx:98-105`) | Pass (E1–E4) |
 | 9 | CSV → NPSL document: `csvImport.ts` (`assembleDrug:690`, target-id check `:649`) | New records, `origin: 'imported'` (`:703`) | CSV-specific validation incl. per-drug target-id uniqueness; origin re-stamp documented | Pass (E4, D5 contrast) |
 | 10 | Storage → session: `getAllDrugs` (`dexieDrugRepository.ts:129-143`) + `store.hydrate`/`refresh` (`store.ts:122-150`) | Valid drugs + quarantine report + metadata | Failure ≠ empty library; quarantine never deleted | Pass (G1–G3) |
@@ -150,7 +150,7 @@ code/reproduction evidence; **Not verified** = blocker stated.
 | C4 | Removing/changing one parameter does not transfer another's provenance | Pass (import-time id collisions now blocked — DI-02 remediated in Phase 13; pre-existing stored collisions remain, see §5 DI-02) | Per-target-id, per-kind lookup (`DrugForm.tsx:118,257-263`); removal + distinctness tests in `views.test.tsx:394,636`; the colliding-id exception required a file the import now rejects |
 | C5 | Unknown provenance fields through import → storage → form edit → raw row | Pass | Mapper level `records.test.ts:107-173`; repository matrix `dexieDrugRepository.test.ts:495-506`; form path via persistence test |
 | C6 | CSV provenance flattening disclosed | Pass | `csvExport.ts:100-111` (type/source/JSON cells), warning `ExportPanel.tsx:98-105`, `validation.md` §7, `docs/testing.md:266-270` |
-| C7 | Numeric formatting / value semantics (`-0`) | **Finding DI-04** | `JSON.stringify(-0) === "0"` (node probe); schema accepts `-0` (finite), `npsl-format.md:92` documents only NaN/Infinity rejection; NPSB documents the exact problem and sidecar (`recovery-backup.md:377-386`); form path: `String(-0) === "0"` → `Object.is(-0, 0) === false` → provenance restamp of an untouched parameter |
+| C7 | Numeric formatting / value semantics (`-0`) | **Remediated (Phase 15)** — exact preservation: serializer emits the JSON token `-0`, import stores the parsed sign, and the form's draft-text identity rule keeps an untouched `-0` (and its provenance) through edits | Original defect evidence: `JSON.stringify(-0) === "0"` (node probe); schema accepts `-0` (finite), `npsl-format.md` now documents the `-0` contract; NPSB documents the same JSON problem and sidecar (`recovery-backup.md:377-386`); form path `String(-0) === "0"` → `Object.is(-0, 0) === false` used to restamp an untouched parameter — see §5 DI-04 status |
 | C8 | Provenance attribution under identity ambiguity | **Finding DI-02 → remediated at import (Phase 13)** — collision-causing files are rejected before storage; already-stored ambiguous libraries remain out of scope | Repro `R3`: unchanged literature value replaced by fresh user stamp after an unrelated rename; map is last-wins by target id; input for `R3` now fails validation |
 
 ### D. NPSL import and export
@@ -339,6 +339,57 @@ code/reproduction evidence; **Not verified** = blocker stated.
 
 ### DI-04 — `-0` does not survive the NPSL round trip (undocumented)
 
+> **Status: remediated — Phase 15** (commit `fb28382`,
+> `fix: preserve negative zero in NPSL round trips`).
+> Policy: **exact preservation** — no normalization, no rejection, no
+> sidecar, no format/schema version bump. JSON's number grammar includes
+> the token `-0` (the loss was JavaScript serialization behavior, not a
+> format prohibition), so only two lossy code paths needed fixing.
+> Boundaries fixed: (1) `serializeNpslDocument` (`npslDocument.ts`) —
+> plain `JSON.stringify` canonicalizes `-0` to `0`; it now tags every
+> negative-zero number (recognized scientific values **and** unknown
+> extension fields/arrays alike) with a NUL-delimited placeholder string,
+> proves the placeholder's exact JSON literal absent from the untagged
+> serialization first (collision-proof: an unproven match extends the
+> placeholder until absent), and rewrites only those positions back to
+> the numeric token `-0`. `.npsl` and `.json` exports and the CSV→NPSL
+> preview text share this single serializer; output for documents
+> without `-0` is byte-identical to the previous implementation.
+> (2) `DrugForm.buildInput` — the input displays `-0` as `"0"`
+> (`String(-0)`); a value draft still reading the source's own textual
+> representation (`String(previous.value)`, matched by stable target id
+> + parameter kind, never by re-parsing) now submits the stored number
+> verbatim instead of `Number(draft)`, so an untouched `-0` keeps both
+> its sign and its complete stored provenance — no more `Object.is`
+> mismatch → user restamp. Any other draft text remains a user change
+> under the existing rules, and the `Object.is` provenance policy itself
+> is unchanged (no global ±0 equivalence).
+> Regression evidence: `src/data/mappers/npslDocument.test.ts` (new:
+> token emission, `JSON.parse` + `Object.is` round trip, +0/nonzero
+> controls, multiple `-0` instances in one document, look-alike strings
+> never rewritten, nested unknown-field object/array `-0`, byte-stable
+> no-`-0` output, NaN/Infinity still rejected at the schema boundary —
+> three of six verified to fail against the pre-fix serializer),
+> `dexieDrugRepository.test.ts` ("imports literal -0 tokens, exports
+> them verbatim and re-imports them exactly": hand-written document text
+> with a literal `-0` token → import → raw-row `Object.is` → export
+> token count → re-import → provenance identity — also failed pre-fix),
+> `views.test.tsx` (describe `DrugForm — negative-zero parameter
+> preservation on edit`: untouched `-0` + complete provenance, +0
+> control, explicit-change restamp, cross-target isolation — two failed
+> pre-fix) and `DrugForm.persistence.test.tsx` ("keeps a negative-zero
+> parameter and its provenance exact in the raw row after an unrelated
+> edit": form-driven save, raw-row `Object.is` + fresh read — failed
+> pre-fix — plus the notes absent/empty own-property checks that close
+> the DI-03 persistence evidence gap). Pre-fix total: seven regression
+> tests failed with the documented signature (`"value": 0` on export;
+> `+0` + fresh user stamp from the form). The original DI-04
+> description and node-probe evidence below are retained unchanged as
+> the audit trail. **Out of scope (unchanged):** the `.npsb` numeric
+> sidecar (`recovery-backup.md` §6.3 — its `-0` restore precondition
+> already accepts a literal `-0`, so it stays idempotent); CSV export
+> remains the documented lossy projection.
+
 | Field | Value |
 | --- | --- |
 | Severity | **Low** (value-semantic change of a numerically equal value; narrow trigger) |
@@ -423,20 +474,23 @@ item is scoped to be implementable and testable in one focused phase.
 | 1 | **S1 — Phase 12 (done)** | DI-01 | Reattach `description`/`casNumber` from the stored record in `DrugForm.buildInput` (Phase-10 conditional-spread pattern); add form + persistence regression tests | Must keep absent-stays-absent; no new UI; verify no other partial-contract field was missed in `DrugChanges` (audit found none) |
 | 2 | **S2 — Phase 13 (done)** | DI-02 | Add per-drug target-id uniqueness to `validateNpslFile` (blocking `DUPLICATE_ID`, zero writes) + rejection and no-misattribution tests | Previously-accepted violating files become un-importable; stored ambiguous libraries are out of scope |
 | 3 | **S3 — Phase 14 (done)** | DI-03 | Round-trip-safe list/text handling in `DrugForm` (preserve untouched arrays verbatim; explicit trim policy for edited fields) | Product decision on delimiter/UX; touches only form code — decision taken: keep the comma-delimited widget unchanged for edited lists and document the embedded-comma limitation; untouched fields bypass the widget round trip entirely |
-| 4 | **S4 — Phase 15** | DI-04 | Document (and optionally normalize-or-reject) `-0` in the NPSL contract, aligning with the NPSB sidecar story | Normalization changes stored values — needs an import warning |
+| 4 | **S4 — Phase 15 (done)** | DI-04 | Document (and optionally normalize-or-reject) `-0` in the NPSL contract, aligning with the NPSB sidecar story | Decision taken during the phase: **exact preservation** instead of the sketched normalize-or-reject — the serializer emits the numeric `-0` token (collision-proof placeholder) and the form's draft-text identity rule keeps untouched `-0` parameters; no sidecar, no version bump, no user-visible value policy change |
 | 5 | **S5** | GAP-1, GAP-2 | Two committed regression tests only (targets-replacing + extensions; PK values under unrelated edit). No production change | None |
 | 6 | **S6** | GAP-3 | Decide and document the quarantine-vs-import-collision policy; if protection wins, surface quarantined-id collisions in the preview | Policy decision first; implementation depends on it |
 | 7 | **S7** | GAP-4 | Document multi-tab expectations (field-merge behavior; last-writer-wins for same-field/targets saves) and pin current behavior with a test | Documentation-first; no locking proposed |
 
-**Highest-priority follow-ups: S1 (DI-01) — completed in Phase 12 — and S2
-(DI-02) — completed in Phase 13 — and S3 (DI-03) — completed in Phase 14.**
-S1 was silent field loss through the *most common* supported workflow (any edit
-of an imported/restored user-origin record); S2 was provenance corruption
-through import-then-edit, closed by blocking the colliding file before any
-write; S3 was silent normalization of untouched list/text metadata on every
-save, closed by submitting stored source values verbatim for unchanged drafts.
-**The highest-priority open item is now S4 (DI-04)**, the undocumented `-0`
-round-trip loss, followed by S5 (GAP-1/GAP-2 test gaps).
+**All four confirmed findings are remediated: S1 (DI-01, Phase 12), S2
+(DI-02, Phase 13), S3 (DI-03, Phase 14) and S4 (DI-04, Phase 15).** S1 was
+silent field loss through the *most common* supported workflow (any edit of an
+imported/restored user-origin record); S2 was provenance corruption through
+import-then-edit, closed by blocking the colliding file before any write; S3
+was silent normalization of untouched list/text metadata on every save, closed
+by submitting stored source values verbatim for unchanged drafts; S4 was
+undocumented `-0` round-trip loss (value sign, then provenance restamp),
+closed by exact preservation — the serializer's numeric `-0` token plus the
+form's draft-text identity rule. **The highest-priority open items are now
+the coverage gaps: S5 (GAP-1/GAP-2 regression tests)**, then S6 (GAP-3
+policy decision) and S7 (GAP-4 documentation).
 
 **No finding in this audit warrants emergency remediation ahead of the normal
 sequence:** every loss requires a specific trigger (records carrying

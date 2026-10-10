@@ -46,7 +46,10 @@ Errors block the operation; warnings are surfaced in the preview but do not.
   `libraryMetadata`, `drugs`);
 - semver-shaped version strings;
 - ISO 8601 date-times;
-- finite numeric `value`s (no `NaN`/`±Infinity`);
+- finite numeric `value`s (no `NaN`/`±Infinity`; negative zero is a valid
+  number and is preserved exactly — the serializer emits the JSON token
+  `-0` instead of canonicalizing it to `0`, audit DI-04, remediated in
+  Phase 15);
 - non-empty `unit` strings;
 - the `origin` / `action` / `dataStatus` enums;
 - discriminated provenance unions, including `literature` → `source`,

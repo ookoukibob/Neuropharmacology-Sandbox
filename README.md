@@ -41,6 +41,7 @@ persistence (complete).**
 **Phase 12 — identifier-metadata preservation on drug edits (complete).**
 **Phase 13 — duplicate-target-id rejection in NPSL imports (complete).**
 **Phase 14 — untouched list/text preservation on drug edits (complete).**
+**Phase 15 — negative-zero preservation in NPSL round trips (complete).**
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -59,6 +60,7 @@ a visible warning) and CSV (lossy, with a visible warning), component + CSV unit
 | 12 | Data integrity: stored-only identifier metadata (`description`, `casNumber`) now survives edits to existing drug records (audit DI-01) — reattached from the stored record in the form's submit path while editable fields stay form-driven, verified by form-level tests and a real-repository/raw-IndexedDB test; no new editing controls, schema or format change | done |
 | 13 | Data integrity: NPSL import now blocks documents carrying duplicate `targets[].id` inside one drug (audit DI-02) — per-drug uniqueness enforced with blocking `DUPLICATE_ID` at the existing validation boundary, rejection proven to write nothing to storage, CSV behavior unchanged; no schema or format change | done |
 | 14 | Data integrity: an edit no longer normalizes fields the user never touched (audit DI-03) — synonyms, tags, name and top-level notes are submitted from the stored record verbatim when their draft text is unchanged (embedded commas, duplicate entries, edge whitespace and the `notes` present/absent distinction survive), only actually-changed fields are parsed/trimmed, verified by form-level tests and a real-repository/raw-IndexedDB test; the comma-delimited edit limitation is documented; no widget, schema or format change | done |
+| 15 | Data integrity: negative zero now survives every supported NPSL interchange path and unrelated edit (audit DI-04) — the shared JSON serializer emits the numeric `-0` token (collision-proof placeholder, byte-identical output for `-0`-free documents) and a parameter draft still showing the source's own text submits the stored number verbatim, keeping an untouched `-0` *and* its complete provenance; verified by serializer, repository (literal-token import/export/re-import), form and raw-IndexedDB tests; contract documented in `npsl-format.md`; no sidecar, version bump, schema or format change | done |
 
 ### What works today
 

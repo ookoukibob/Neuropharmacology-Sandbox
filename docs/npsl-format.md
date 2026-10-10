@@ -109,6 +109,19 @@ Provenance variants: `literature` (requires `source`), `user`, `calculated`
 (requires `model`), `derived` (requires `method` + non-empty `from`),
 `unknown`. Full semantics: [provenance.md](provenance.md).
 
+**Numbers stay numbers — including negative zero.** `value` is always a
+JSON number, never a string, and must be finite: `NaN` and `±Infinity`
+are rejected by the schema, not serialized. Negative zero is part of the
+JSON number grammar (the token `-0`) and is preserved exactly through
+the NPSL round trip: the application's serializer emits `"value": -0`
+where a plain `JSON.stringify` would canonicalize it to `0`, the import
+path stores the parsed sign unchanged, and an unrelated form edit keeps
+both the sign and the parameter's complete provenance. This is proven by
+round-trip tests over export, re-import, raw storage rows and form edits
+(`npslDocument.test.ts`, `dexieDrugRepository.test.ts`, the drug-form
+suites); no behavior of external tools beyond the JSON grammar is
+claimed.
+
 ---
 
 ## 5. Complete example
