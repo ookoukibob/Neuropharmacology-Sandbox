@@ -56,14 +56,15 @@ below names the evidence actually examined.
 ## 2. Executive summary
 
 **Confirmed findings: 4** — 0 Critical · **2 High** · **1 Medium** · **1 Low**.
-Of these, **1 is remediated (DI-01, fixed in Phase 12)**; **3 remain open**.
+Of these, **2 are remediated (DI-01 in Phase 12, DI-02 in Phase 13)**;
+**2 remain open** (DI-03, DI-04).
 **Coverage gaps: 4** (behavior plausibly correct, evidence inadequate).
 **Not verified: 3** (environment/asset blockers).
 
 | ID | Severity | Confidence | One-line summary |
 | --- | --- | --- | --- |
 | **DI-01** | High | confirmed | Every `DrugForm` edit silently drops `identifiers.description` and `identifiers.casNumber` (partial `identifiers` replacement). Repro `R1`. **Remediated in Phase 12** — status details in §5. |
-| **DI-02** | High | confirmed | NPSL import does not implement the documented blocking duplicate-`targets[].id` check; accepted files later cause silent provenance/metadata misattribution on ordinary edits. Repros `R2`, `R3`. |
+| **DI-02** | High | confirmed | NPSL import does not implement the documented blocking duplicate-`targets[].id` check; accepted files later cause silent provenance/metadata misattribution on ordinary edits. Repros `R2`, `R3`. **Remediated in Phase 13** — status details in §5. |
 | **DI-03** | Medium | confirmed | The edit form silently normalizes *untouched* list/text fields: synonyms/tags are re-split at commas, trimmed and de-duplicated; names/notes are trimmed. Repro `R4`. |
 | **DI-04** | Low | confirmed | NPSL JSON round-trip cannot represent `-0` (stringifies to `0`), silently flipping value semantics and (second-order) restamping provenance of an untouched `-0` parameter; `.npsb` has a documented sidecar, `.npsl` has neither documentation nor handling. Node probe. |
 
@@ -93,7 +94,7 @@ claims. Verdict references point to §4 (matrix), §5 (findings), §6 (gaps).
 | 2 | Domain → stored row: `toRecord` (`records.ts:238`) + `toStoredRecord` (`records.ts:326`) + `preserveUnknownFields` (`records.ts:177`) | Recognized fields from domain; unknown fields copied from incoming drug + existing raw row (targets matched by stable id) | "A key in the contract is governed by the domain value; a key outside the contract is copied forward" (`records.ts:14-18`) | Pass at mapper level (A1); **Gap** for targets-replacing updates (GAP-1); **Finding** at the form boundary for contract keys (DI-01, remediated in Phase 12) |
 | 3 | `DrugForm.buildInput` → `DrugChanges` (`DrugForm.tsx:246-306`, submit arg `DrugForm.tsx:407`) | name/synonyms/tags/notes/params/provenance/metadata → partial update object | 9A rule (`provenance.md:48-54`); Phase-10 metadata rule (`DrugForm.tsx:283-292`) | Pass (C1, B3); **Finding DI-01** (identifier fields) — **remediated in Phase 12**; **Finding DI-03** (list normalization, open) |
 | 4 | `applyChanges` (`dexieDrugRepository.ts:93-106`) | Partial update over re-read current row inside transaction | Documented: "absent keys keep their value; structures replaced wholesale when present" (`repository.ts:67-72`) | Pass as a repository contract; only production caller is `DrugDetailView.tsx:109` |
-| 5 | NPSL file → validated drugs: `parseNpsl` + `validateNpslFile` (`importPipeline.ts:247-310`) | Envelope, schema, semantic checks, warnings | `validation.md` §3–§4: duplicate drug ids AND duplicate `targets[].id` per drug are blocking | **Finding DI-02** (target-id half unimplemented) |
+| 5 | NPSL file → validated drugs: `parseNpsl` + `validateNpslFile` (`importPipeline.ts:247-310`) | Envelope, schema, semantic checks, warnings | `validation.md` §3–§4: duplicate drug ids AND duplicate `targets[].id` per drug are blocking | **Finding DI-02 → remediated (Phase 13)**: per-drug target-id check added to `validateNpslFile` |
 | 6 | Import commit: `importLibrary` (`dexieDrugRepository.ts:258-309`) | `replace` = clear + write; `merge` = `get(id)` + `toStoredRecord(existing, file)` | Atomic in one transaction; invalid file → zero writes; merge does not touch metadata | Pass (D4, D6) |
 | 7 | Domain → NPSL file: `toNpslDocument`/`serializeNpslDocument` (`npslDocument.ts:29-40`) | Full domain drugs incl. unknown fields riding from parse | "No field is invented or rewritten"; quarantined rows excluded with warning | Pass (D1, D9); **Finding DI-04** for `-0` |
 | 8 | Domain → CSV: `csvExport.ts` (`drugLevelCells:123`, `targetCells:138`, `provenanceCells:100`, `rowsForDrug:149`) | 57 stable columns; provenance split into type/source/JSON cells; one row per target | Documented lossy projection with always-visible warning (`ExportPanel.tsx:98-105`) | Pass (E1–E4) |
@@ -146,11 +147,11 @@ code/reproduction evidence; **Not verified** = blocker stated.
 | C1 | Unchanged value keeps complete provenance (9A) | Pass | Policy `provenance.md:48-54` ("complete object, all fields, unknown extension keys included"); code `DrugForm.tsx:267-277`; `views.test.tsx:394-` describe; persistence test asserts `syntheticExtension` rides through an unrelated edit |
 | C2 | Changed value → fresh `user` stamp; never upgraded | Pass | `DrugForm.tsx:277` (only ever `{type:'user', recordedAt}`); no code path constructs `literature`/`calculated`/`derived`; import writes provenance *as declared in the file* (documented `provenance.md` §2) |
 | C3 | No `Kd`/`Ki`/`EC50`/`IC50` substitution | Pass | Separate named fields (`drug.ts:39-58`); unit-dimension checks per kind (`importPipeline.ts:120-145`); form validation `views.test.tsx:231` |
-| C4 | Removing/changing one parameter does not transfer another's provenance | Pass (with DI-02 caveat) | Per-target-id, per-kind lookup (`DrugForm.tsx:118,257-263`); removal + distinctness tests in `views.test.tsx:394,636`; exception when ids collide → DI-02 |
+| C4 | Removing/changing one parameter does not transfer another's provenance | Pass (import-time id collisions now blocked — DI-02 remediated in Phase 13; pre-existing stored collisions remain, see §5 DI-02) | Per-target-id, per-kind lookup (`DrugForm.tsx:118,257-263`); removal + distinctness tests in `views.test.tsx:394,636`; the colliding-id exception required a file the import now rejects |
 | C5 | Unknown provenance fields through import → storage → form edit → raw row | Pass | Mapper level `records.test.ts:107-173`; repository matrix `dexieDrugRepository.test.ts:495-506`; form path via persistence test |
 | C6 | CSV provenance flattening disclosed | Pass | `csvExport.ts:100-111` (type/source/JSON cells), warning `ExportPanel.tsx:98-105`, `validation.md` §7, `docs/testing.md:266-270` |
 | C7 | Numeric formatting / value semantics (`-0`) | **Finding DI-04** | `JSON.stringify(-0) === "0"` (node probe); schema accepts `-0` (finite), `npsl-format.md:92` documents only NaN/Infinity rejection; NPSB documents the exact problem and sidecar (`recovery-backup.md:377-386`); form path: `String(-0) === "0"` → `Object.is(-0, 0) === false` → provenance restamp of an untouched parameter |
-| C8 | Provenance attribution under identity ambiguity | **Finding DI-02** | Repro `R3`: unchanged literature value replaced by fresh user stamp after an unrelated rename; map is last-wins by target id |
+| C8 | Provenance attribution under identity ambiguity | **Finding DI-02 → remediated at import (Phase 13)** — collision-causing files are rejected before storage; already-stored ambiguous libraries remain out of scope | Repro `R3`: unchanged literature value replaced by fresh user stamp after an unrelated rename; map is last-wins by target id; input for `R3` now fails validation |
 
 ### D. NPSL import and export
 
@@ -160,7 +161,7 @@ code/reproduction evidence; **Not verified** = blocker stated.
 | D2 | Unknown-field preservation across import → storage → export → re-import | Pass | Extension matrix `dexieDrugRepository.test.ts:508-621` (replace, merge, hydration, edit, export, re-import, rollback); `npsl.ts:14-31` documents the contract |
 | D3 | Envelope extras / timestamp filling disclosed | Pass | `ENVELOPE_FIELDS_DROPPED` (`importPipeline.ts:242`), `TIMESTAMPS_FILLED` (`:259`), warning UI test in `ImportPanel` suite |
 | D4 | Duplicate drug ids blocking; invalid input writes nothing | Pass | `importPipeline.ts:251-279`; `store.test.ts:268,285`; validation runs inside the transaction before any write (`dexieDrugRepository.ts:270-274`) |
-| D5 | Duplicate `targets[].id` per drug | **Finding DI-02** | `validation.md:97` promises blocking `DUPLICATE_ID`; `importPipeline` `seenIds` is drug-level only; CSV path *does* check (`csvImport.ts:649`); repro `R2` (`report.ok === true`) |
+| D5 | Duplicate `targets[].id` per drug | **Remediated (Phase 13)** | `validation.md:97` promises blocking `DUPLICATE_ID`; `importPipeline` `seenIds` was drug-level only (repro `R2`: `report.ok === true`); CSV path *does* check (`csvImport.ts:649`); fix adds the per-drug check to `validateNpslFile` (commit `db3c75e`), CSV behavior unchanged |
 | D6 | Merge/replace semantics; mid-write failure rollback | Pass | Atomic transaction (`:270-308`); `store.test.ts:309,331`; merge metadata untouched (`:296-297`) |
 | D7 | Replace import vs quarantined rows | Pass (documented loss) | `drugs.clear()` (`:279`) removes quarantine; replace acknowledgement `ImportPanel.tsx:451-467` ("permanently overwrites every existing record"); recovery story tested `docs/testing.md:195` + E2E `recovery.spec.ts` |
 | D8 | Preview conflict disclosure | Pass with GAP-3 | Conflict count from hydrated valid drugs only (`ImportPanel.tsx:187,207`); quarantined ids invisible → see GAP-3 |
@@ -246,6 +247,31 @@ code/reproduction evidence; **Not verified** = blocker stated.
 
 ### DI-02 — NPSL import accepts duplicate `targets[].id`, causing later provenance/metadata misattribution
 
+> **Status: remediated — Phase 13** (commit `db3c75e`,
+> `fix: reject duplicate target ids in NPSL imports`).
+> The semantic layer of `validateNpslFile` now counts `targets[].id` **per drug** —
+> exact string comparison, no normalization; the same id in a *different* drug stays
+> legal (uniqueness is per drug, per `validation.md:97` and `domain-model.md:119`) —
+> and emits a blocking `DUPLICATE_ID` issue naming the drug, the duplicated id and the
+> path `drugs.<index>.targets`. The check runs in the preview path and is re-run inside
+> `importLibrary`'s existing transaction before the first write, so a violating
+> document — mixed valid/invalid alike — commits nothing (the established all-or-nothing
+> semantics; no new transaction layer). Schema validation still owns malformed ids: the
+> NPSL schema requires every target `id` to be ≥ 1 char, so a missing/empty id surfaces
+> as `SCHEMA`, never as a duplicate.
+> Regression evidence: `src/data/import/importPipeline.test.ts` (describe
+> `validateNpslFile — target id identity (unique per drug, blocking)`: rejection with
+> message/path, distinct-ids acceptance, cross-drug same-id acceptance, schema authority
+> for missing/empty ids, mixed-document rejection, preview reporting — the three
+> rejection tests verified to fail against the pre-fix code with `ok: true`, the exact
+> `R2` signature) and `src/data/repositories/dexieDrugRepository.test.ts` (“rolls back:
+> duplicate target ids inside one drug leave every stored row byte-identical”: raw-row
+> and metadata snapshots unchanged, stored provenance/target notes intact, the valid
+> record from the same rejected file absent — also verified to fail pre-fix). The
+> original defect description and reproductions `R2`/`R3` below are retained unchanged
+> as the audit trail. **Out of scope (unchanged):** libraries that already stored
+> duplicate target ids keep working but remain ambiguous — no stored id is rewritten.
+
 | Field | Value |
 | --- | --- |
 | Severity | **High** (silent misattribution of provenance and target metadata through a supported workflow: import, then ordinary edit) |
@@ -324,7 +350,9 @@ A missing test alone is not a defect; each gap below states what the code
   `Object.is` value + identical unit → complete stored provenance object,
   unknown keys included); tests `views.test.tsx:394-` and the persistence-level
   test asserting raw-row provenance after an unrelated edit. Not modified by
-  this audit. **Intact** — subject to DI-02's identity caveat.
+  this audit. **Intact** — the DI-02 identity caveat is now closed at the
+  import boundary (Phase 13); pre-existing stored id collisions remain
+  ambiguous (out of scope).
 - **Phase 9B (preferences separation):** `preferences/schema.ts:110-114`
   contains only `version`, `theme`, `calculator.settings`; reset scope proven by
   `SettingsPage.test.tsx:211,241` and `preferences/store.test.ts:226,244`;
@@ -359,19 +387,20 @@ item is scoped to be implementable and testable in one focused phase.
 | Order | Item | Targets | Scope sketch | Risks/dependencies |
 | --- | --- | --- | --- | --- |
 | 1 | **S1 — Phase 12 (done)** | DI-01 | Reattach `description`/`casNumber` from the stored record in `DrugForm.buildInput` (Phase-10 conditional-spread pattern); add form + persistence regression tests | Must keep absent-stays-absent; no new UI; verify no other partial-contract field was missed in `DrugChanges` (audit found none) |
-| 2 | **S2 — Phase 13** | DI-02 | Add per-drug target-id uniqueness to `validateNpslFile` (blocking `DUPLICATE_ID`, zero writes) + rejection and no-misattribution tests | Previously-accepted violating files become un-importable; stored ambiguous libraries are out of scope |
+| 2 | **S2 — Phase 13 (done)** | DI-02 | Add per-drug target-id uniqueness to `validateNpslFile` (blocking `DUPLICATE_ID`, zero writes) + rejection and no-misattribution tests | Previously-accepted violating files become un-importable; stored ambiguous libraries are out of scope |
 | 3 | **S3 — Phase 14** | DI-03 | Round-trip-safe list/text handling in `DrugForm` (preserve untouched arrays verbatim; explicit trim policy for edited fields) | Product decision on delimiter/UX; touches only form code |
 | 4 | **S4 — Phase 15** | DI-04 | Document (and optionally normalize-or-reject) `-0` in the NPSL contract, aligning with the NPSB sidecar story | Normalization changes stored values — needs an import warning |
 | 5 | **S5** | GAP-1, GAP-2 | Two committed regression tests only (targets-replacing + extensions; PK values under unrelated edit). No production change | None |
 | 6 | **S6** | GAP-3 | Decide and document the quarantine-vs-import-collision policy; if protection wins, surface quarantined-id collisions in the preview | Policy decision first; implementation depends on it |
 | 7 | **S7** | GAP-4 | Document multi-tab expectations (field-merge behavior; last-writer-wins for same-field/targets saves) and pin current behavior with a test | Documentation-first; no locking proposed |
 
-**Highest-priority follow-up: S1 (DI-01) — completed in Phase 12.** It was
-silent field loss through the *most common* supported workflow (any edit of
-an imported/restored user-origin record); the fix reused the pattern proven
-in Phase 10 and had no policy decisions blocking it. **The highest-priority
-open item is now S2 (DI-02)**, because provenance corruption, once
-triggered, silently rewrites scientific attribution.
+**Highest-priority follow-ups: S1 (DI-01) — completed in Phase 12 — and S2
+(DI-02) — completed in Phase 13.** S1 was silent field loss through the
+*most common* supported workflow (any edit of an imported/restored
+user-origin record); S2 was provenance corruption through import-then-edit,
+closed by blocking the colliding file before any write. **The highest-priority
+open item is now S3 (DI-03)**, the remaining silent normalization defect,
+followed by S4 (DI-04).
 
 **No finding in this audit warrants emergency remediation ahead of the normal
 sequence:** every loss requires a specific trigger (records carrying
