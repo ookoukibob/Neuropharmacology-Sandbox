@@ -1126,3 +1126,142 @@ describe('DrugForm — identifier metadata preservation on edit', () => {
     expect(input.identifiers).not.toHaveProperty('casNumber')
   })
 })
+
+describe('DrugForm — untouched list/text preservation on edit', () => {
+  /**
+   * Data-integrity audit DI-03: the comma-delimited draft is potentially
+   * lossy (distinct arrays render identically), so unchanged status is
+   * decided by comparing the current draft *text* with the mount-time
+   * baseline — never by re-splitting — and an unchanged field submits the
+   * stored source value verbatim: embedded commas, duplicate entries and
+   * edge whitespace all survive. All values are synthetic fixtures, not
+   * pharmacological information.
+   */
+  const PADDED_NAME = '  Fixture Compound A  '
+  const PADDED_NOTES = '  Synthetic edge-note with padding  '
+
+  function r4Fixture(): Drug {
+    return syntheticDrug({
+      identifiers: {
+        name: PADDED_NAME,
+        synonyms: ['Alpha,Beta', 'X', 'X'],
+        description: FIXTURE_NOTE,
+      },
+      tags: ['one,two', 'duplicate', 'duplicate'],
+      notes: PADDED_NOTES,
+    })
+  }
+
+  function renderEdit(drug: Drug) {
+    const onSave = vi.fn<(input: DrugInput) => Promise<unknown>>(async () => undefined)
+    render(<DrugForm drug={drug} onSave={onSave} onCancel={vi.fn()} />)
+    return { onSave }
+  }
+
+  async function submitAndGetInput(onSave: {
+    mock: { calls: ReadonlyArray<readonly [input: DrugInput]> }
+  }): Promise<DrugInput> {
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave.mock.calls).toHaveLength(1))
+    return onSave.mock.calls[0]?.[0] as DrugInput
+  }
+
+  it('keeps embedded commas and duplicate entries in untouched synonyms and tags', async () => {
+    const { onSave } = renderEdit(r4Fixture())
+    const input = await submitAndGetInput(onSave)
+
+    // Regression (audit DI-03 repro R4): this previously re-split and
+    // de-duplicated both arrays without the user touching them.
+    expect(input.identifiers.synonyms).toEqual(['Alpha,Beta', 'X', 'X'])
+    expect(input.tags).toEqual(['one,two', 'duplicate', 'duplicate'])
+  })
+
+  it('preserves an untouched name and top-level notes byte-for-byte', async () => {
+    const { onSave } = renderEdit(r4Fixture())
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.identifiers.name).toBe(PADDED_NAME)
+    expect(input.notes).toBe(PADDED_NOTES)
+  })
+
+  it('leaves every untouched field verbatim when an unrelated field changes', async () => {
+    const { onSave } = renderEdit(r4Fixture())
+    // Unrelated edit: add a target row; no drug-level draft is touched.
+    fireEvent.click(screen.getByTestId('add-target'))
+    const nameInputs = screen.getAllByLabelText(/Target name/)
+    fireEvent.change(nameInputs[nameInputs.length - 1] as HTMLInputElement, {
+      target: { value: 'NEW-T' },
+    })
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.targets).toHaveLength(3)
+    expect(input.identifiers.synonyms).toEqual(['Alpha,Beta', 'X', 'X'])
+    expect(input.tags).toEqual(['one,two', 'duplicate', 'duplicate'])
+    expect(input.identifiers.name).toBe(PADDED_NAME)
+    expect(input.notes).toBe(PADDED_NOTES)
+  })
+
+  it('still parses a synonyms or tags draft the user actually changed', async () => {
+    const { onSave } = renderEdit(r4Fixture())
+    fireEvent.change(screen.getByLabelText(/^Synonyms/), {
+      target: { value: '  New Syn , Other , Other  ' },
+    })
+    fireEvent.change(screen.getByLabelText(/^Tags/), { target: { value: ' alpha , beta , beta ' } })
+    const input = await submitAndGetInput(onSave)
+
+    // The established parser policy applies only to changed drafts:
+    // comma-split, trimmed, empty parts dropped, de-duplicated.
+    expect(input.identifiers.synonyms).toEqual(['New Syn', 'Other'])
+    expect(input.tags).toEqual(['alpha', 'beta'])
+  })
+
+  it('trims only the name and notes drafts the user actually changed', async () => {
+    const { onSave } = renderEdit(r4Fixture())
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: '  Renamed  ' } })
+    fireEvent.change(screen.getByLabelText(/^Notes/), { target: { value: '  edited note  ' } })
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.identifiers.name).toBe('Renamed')
+    expect(input.notes).toBe('edited note')
+    // The untouched lists stay verbatim even though other fields changed.
+    expect(input.identifiers.synonyms).toEqual(['Alpha,Beta', 'X', 'X'])
+    expect(input.tags).toEqual(['one,two', 'duplicate', 'duplicate'])
+  })
+
+  it('treats a draft reverted to its exact initial text as unchanged', async () => {
+    const { onSave } = renderEdit(r4Fixture())
+    fireEvent.change(screen.getByLabelText(/^Synonyms/), { target: { value: 'typed something' } })
+    fireEvent.change(screen.getByLabelText(/^Synonyms/), {
+      target: { value: 'Alpha,Beta, X, X' },
+    })
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: '  Something Else  ' } })
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: PADDED_NAME } })
+    const input = await submitAndGetInput(onSave)
+
+    // Back at the exact baseline: the SOURCE value is submitted, not a
+    // re-parse of the display text (which would lose the comma entry and
+    // the duplicates) and not a trim of the padded name.
+    expect(input.identifiers.synonyms).toEqual(['Alpha,Beta', 'X', 'X'])
+    expect(input.identifiers.name).toBe(PADDED_NAME)
+  })
+
+  it('keeps an absent top-level notes field absent through an edit', async () => {
+    const { notes: _notes, ...withoutNotes } = syntheticDrug()
+    const { onSave } = renderEdit(withoutNotes)
+    const input = await submitAndGetInput(onSave)
+
+    // The form always submits the `notes` key (documented contract:
+    // explicit `undefined` = clear), so absence is expressed as that
+    // clear — an invented value would fail this — and `toRecord` omits
+    // the key from the stored row (records.ts, covered by mapper tests).
+    expect(input.notes).toBeUndefined()
+    expect(input.identifiers.name).toBe('Fixture Compound A')
+  })
+
+  it('keeps an explicitly empty top-level notes value present', async () => {
+    const { onSave } = renderEdit(syntheticDrug({ notes: '' }))
+    const input = await submitAndGetInput(onSave)
+
+    expect(input).toHaveProperty('notes', '')
+  })
+})

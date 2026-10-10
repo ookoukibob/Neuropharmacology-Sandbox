@@ -6,9 +6,11 @@
  * user provenance only on the parameter that actually changed, keeps the
  * supported target-level metadata (`gene`, `action`, `species`, `notes`)
  * of every surviving target in the raw stored row — matched by stable
- * target id, never by position or name — and keeps the stored-only
+ * target id, never by position or name — keeps the stored-only
  * identifier metadata (`description`, `casNumber`) the form cannot edit
- * (data-integrity audit DI-01).
+ * (data-integrity audit DI-01), and keeps untouched list/text fields
+ * (`synonyms`, `tags`, name, top-level `notes`) byte-identical through
+ * an unrelated edit (audit DI-03).
  * All fixture values are synthetic test data — not pharmacological
  * information.
  */
@@ -52,15 +54,18 @@ beforeEach(async () => {
   })
   const created = await libraryRepository.createDrug({
     identifiers: {
-      name: 'Fixture Compound A',
-      synonyms: ['FCA'],
+      // Edge-whitespace name, comma-bearing and duplicate-carrying lists,
+      // padded notes (audit DI-03): none of it may be normalized by an
+      // edit that never touches these fields.
+      name: '  Fixture Compound A  ',
+      synonyms: ['Alpha,Beta', 'X', 'X'],
       // Stored-only identifier metadata (DI-01): no form control exists,
       // so an unrelated edit must never erase these.
       description: FIXTURE_NOTE,
       casNumber: FIXTURE_CAS,
     },
-    tags: ['fixture'],
-    notes: FIXTURE_NOTE,
+    tags: ['one,two', 'duplicate', 'duplicate'],
+    notes: '  Synthetic edge-note with padding  ',
     targets: [
       {
         id: 'fixture-target-1',
@@ -335,5 +340,58 @@ describe('DrugForm — edit persistence (real repository)', () => {
       description: FIXTURE_NOTE,
       casNumber: FIXTURE_CAS,
     })
+  })
+
+  it('keeps untouched list and text fields byte-identical in the raw row after an unrelated edit', async () => {
+    renderDetail()
+    fireEvent.click(screen.getByTestId('edit-drug'))
+    // Unrelated edit: add a new target with one parameter; no drug-level
+    // draft (name/synonyms/tags/notes) is touched at all.
+    fireEvent.click(screen.getByTestId('add-target'))
+    const rows = screen.getAllByTestId('target-row')
+    const newRow = rows[rows.length - 1] as HTMLElement
+    fireEvent.change(within(newRow).getByLabelText('Target name *'), {
+      target: { value: 'NEW-T' },
+    })
+    fireEvent.click(within(newRow).getByTestId('add-param'))
+    fireEvent.change(within(newRow).getByLabelText('Parameter *'), { target: { value: 'kd' } })
+    fireEvent.change(within(newRow).getByLabelText('Value *'), { target: { value: '4.2' } })
+    fireEvent.change(within(newRow).getByLabelText('Unit *'), { target: { value: 'nM' } })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await waitFor(() => expect(screen.queryByTestId('drug-form')).not.toBeInTheDocument())
+
+    // Raw stored row — before any mapper touches it: every untouched
+    // list/text value is byte-identical (embedded commas, duplicate
+    // entries and edge whitespace included). Audit DI-03 previously
+    // normalized all four here without the user touching them.
+    const raw = await storedRecord()
+    expect(raw?.identifiers.name).toBe('  Fixture Compound A  ')
+    expect(raw?.identifiers.synonyms).toEqual(['Alpha,Beta', 'X', 'X'])
+    expect(raw?.tags).toEqual(['one,two', 'duplicate', 'duplicate'])
+    expect(raw?.notes).toBe('  Synthetic edge-note with padding  ')
+
+    // The previously covered layers survive the same write: DI-01
+    // identifier metadata, Phase 10 target metadata, Phase 9A provenance.
+    expect(raw?.identifiers.description).toBe(FIXTURE_NOTE)
+    expect(raw?.identifiers.casNumber).toBe(FIXTURE_CAS)
+    expect(raw?.targets).toHaveLength(3)
+    expect(raw?.targets[0]).toMatchObject({
+      id: 'fixture-target-1',
+      gene: 'SYNTH-P1',
+      action: 'modulator',
+      species: 'synthetic',
+    })
+    expect(raw?.targets[0]?.kd?.provenance).toEqual(LITERATURE)
+    expect(raw?.targets[1]).toMatchObject({ id: 'fixture-target-2', gene: 'SYNTH-P2' })
+    expect(raw?.targets[1]?.ic50?.provenance).toEqual(USER_PROVENANCE)
+    expect(raw?.targets[2]).toMatchObject({ name: 'NEW-T' })
+    expect(raw?.targets[2]?.kd?.provenance).toMatchObject({ type: 'user' })
+
+    // A fresh repository read hydrates the same untouched values.
+    const reloaded = await libraryRepository.getDrug(drugId)
+    expect(reloaded?.identifiers.name).toBe('  Fixture Compound A  ')
+    expect(reloaded?.identifiers.synonyms).toEqual(['Alpha,Beta', 'X', 'X'])
+    expect(reloaded?.tags).toEqual(['one,two', 'duplicate', 'duplicate'])
+    expect(reloaded?.notes).toBe('  Synthetic edge-note with padding  ')
   })
 })

@@ -27,10 +27,20 @@
  *   stored record at submit (data-integrity audit DI-01). `name` and
  *   `synonyms` keep coming from form state; a stored-only field keeps its
  *   exact stored value when present and stays absent — omitted, never an
- *   explicit `undefined` — when the record never had it.
+ *   explicit `undefined` — when the record never had it;
+ * - preserved untouched fields (data-integrity audit DI-03): synonyms,
+ *   tags, name and top-level notes submit the stored source value
+ *   verbatim whenever their draft text is still the mount-time baseline,
+ *   so embedded commas, duplicate entries and edge whitespace in a field
+ *   the user never touched survive an unrelated edit. Only a field the
+ *   user actually changed follows the established policy — lists are
+ *   comma-split, trimmed and de-duplicated (`splitList`), name and notes
+ *   are trimmed — and the comma-delimited inputs cannot represent an
+ *   individual list entry containing a comma once that list is edited
+ *   (documented limitation; no escaping syntax exists).
  */
 import { Plus, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -249,11 +259,20 @@ function validate(
   return { errors, cleaned }
 }
 
+/**
+ * Assembles the repository input from the resolved field values `submit`
+ * computed (stored source verbatim for an untouched draft, the established
+ * parse/trim policy for a changed one — data-integrity audit DI-03) plus
+ * the reattached stored-only fields. `notes` is likewise resolved by the
+ * caller: the source value verbatim (or `undefined` when the record never
+ * had notes) for an untouched draft, the trim-to-`undefined`-when-blank
+ * policy for an edited one.
+ */
 function buildInput(
   cleaned: readonly TargetDraft[],
-  identifiers: { name: string; synonyms: string[] },
-  tags: string[],
-  notes: string,
+  identifiers: { name: string; synonyms: readonly string[] },
+  tags: readonly string[],
+  notes: string | undefined,
   now: string,
   original: Drug | undefined,
 ): DrugInput {
@@ -304,8 +323,9 @@ function buildInput(
   })
 
   return {
-    // Editable identifier fields come from form state (the parameter
-    // above); the stored-only recognized fields this form cannot edit are
+    // Editable identifier fields arrive already resolved by `submit`
+    // (stored source verbatim when untouched, form state when edited);
+    // the stored-only recognized fields this form cannot edit are
     // reattached from the original record — the same source-of-truth rule
     // as target metadata, keyed by the record itself. Present keeps its
     // exact stored value, absent stays absent (conditional spread, no
@@ -322,7 +342,11 @@ function buildInput(
     },
     tags,
     targets,
-    notes: notes.trim() === '' ? undefined : notes.trim(),
+    // Resolved by `submit`: verbatim source (present stays present,
+    // absent stays `undefined`) when the draft is untouched, the
+    // trim-when-edited policy otherwise. The explicit-`undefined`
+    // contract of `DrugChanges` is unchanged.
+    notes,
   }
 }
 
@@ -347,6 +371,37 @@ export function DrugForm({
   const [synonyms, setSynonyms] = useState(drug?.identifiers.synonyms.join(', ') ?? '')
   const [tags, setTags] = useState(drug?.tags.join(', ') ?? '')
   const [notes, setNotes] = useState(drug?.notes ?? '')
+  /**
+   * Mount-time baseline for untouched-field preservation (data-integrity
+   * audit DI-03): the stored source values this edit started from and
+   * each field's initial draft text. `submit` decides "unchanged" by
+   * comparing the *current draft string* against this exact baseline —
+   * never by re-parsing it — so a comma-bearing, duplicate-carrying or
+   * padded source value survives an untouched submit verbatim (the
+   * comma-delimited display is potentially lossy: distinct arrays can
+   * render identically), while a draft the user actually changed — even
+   * one later reverted to its initial text — still follows the
+   * established parse/trim policy. Captured once at mount so form
+   * rerenders cannot drift it; read only inside event handlers.
+   */
+  const baseline = useRef(
+    drug === undefined
+      ? undefined
+      : {
+          source: {
+            name: drug.identifiers.name,
+            synonyms: drug.identifiers.synonyms,
+            tags: drug.tags,
+            notes: drug.notes,
+          },
+          initialDraft: {
+            name: drug.identifiers.name,
+            synonyms: drug.identifiers.synonyms.join(', '),
+            tags: drug.tags.join(', '),
+            notes: drug.notes ?? '',
+          },
+        },
+  )
   const [targets, setTargets] = useState<TargetDraft[]>(() =>
     drug !== undefined ? draftsFromDrug(drug) : [],
   )
@@ -423,11 +478,34 @@ export function DrugForm({
       return
     }
     setErrors([])
+    // Untouched-field rule (data-integrity audit DI-03): a draft still at
+    // its mount-time baseline submits the stored source value verbatim —
+    // embedded commas, duplicate entries, edge whitespace and the
+    // present/absent distinction included. Only a field the user actually
+    // changed follows the established policy (lists: `splitList`; name
+    // and notes: trim). Draft-text equality — never a re-parse of the
+    // display string — decides, so a draft edited and reverted to its
+    // exact initial text is untouched again.
+    const base = baseline.current
+    const nameValue =
+      base !== undefined && name === base.initialDraft.name ? base.source.name : name.trim()
+    const synonymsValue =
+      base !== undefined && synonyms === base.initialDraft.synonyms
+        ? base.source.synonyms
+        : splitList(synonyms)
+    const tagsValue =
+      base !== undefined && tags === base.initialDraft.tags ? base.source.tags : splitList(tags)
+    const notesValue =
+      base !== undefined && notes === base.initialDraft.notes
+        ? base.source.notes
+        : notes.trim() === ''
+          ? undefined
+          : notes.trim()
     const input = buildInput(
       cleaned,
-      { name: name.trim(), synonyms: splitList(synonyms) },
-      splitList(tags),
-      notes,
+      { name: nameValue, synonyms: synonymsValue },
+      tagsValue,
+      notesValue,
       new Date().toISOString(),
       drug,
     )
