@@ -424,6 +424,7 @@ device-local presentation preferences — see §4.7.
 | 10 | Data integrity: preserve supported target-level metadata (`gene`, `action`, `species`, `notes`) through the drug edit workflow — feature-layer regression fix (reattach by stable target id at submit) with form-level, real-repository and E2E coverage; no new editing UI, schema or format change | 3 | done |
 | 11 | Repository data integrity audit (audit-only): evidence-driven review of reconstruction, serialization, import/export, persistence, identity and recovery boundaries — coverage matrix, confirmed findings DI-01…DI-04, coverage gaps and a prioritized remediation backlog in `data-integrity-audit.md`; no production changes | all | done |
 | 12 | Data integrity: preserve stored-only identifier metadata (`description`, `casNumber`) through the drug edit workflow — DI-01 remediation (reattach from the stored record at submit, absent stays absent) with form-level and real-repository/raw-row regression coverage; no new editing UI, schema or format change | 10, 11 | done |
+| 13 | Data integrity: NPSL import rejects duplicate `targets[].id` within one drug — DI-02 remediation (per-drug blocking `DUPLICATE_ID` at the existing semantic-validation boundary, re-run inside the import transaction so a rejected document writes nothing); rejection, scope, schema-authority and no-write regression tests; no schema, format or CSV change | 11 | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full

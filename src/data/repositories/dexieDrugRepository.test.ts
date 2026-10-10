@@ -9,6 +9,7 @@
 import 'fake-indexeddb/auto'
 import { describe, expect, it } from 'vitest'
 import {
+  FIXTURE_NOTE,
   syntheticDrug,
   syntheticDrugB,
   syntheticLibrary,
@@ -333,6 +334,59 @@ describe('DexieDrugRepository — importLibrary', () => {
       expect(report.ok).toBe(false)
       if (!report.ok) expect(report.errors.map((e) => e.code)).toEqual(['DUPLICATE_ID'])
       expect(await db.drugs.count()).toBe(1)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('rolls back: duplicate target ids inside one drug leave every stored row byte-identical', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      await db.drugs.put(toRecord(syntheticDrug()))
+      await db.meta.put({
+        id: 'local-library',
+        name: 'Original',
+        createdAt: '2020-01-01T00:00:00.000Z',
+        updatedAt: '2020-01-01T00:00:00.000Z',
+        dataStatus: 'unspecified',
+      })
+      const rowsBefore = structuredClone(await db.drugs.toArray())
+      const metaBefore = structuredClone((await db.meta.toArray())[0])
+
+      // Mixed document: one perfectly valid, new record plus one whose
+      // two targets collide on `fixture-target-1` — partial application
+      // would have added the valid one (audit DI-02).
+      const donor = syntheticDrug().targets
+      const invalid = syntheticDrug({
+        id: 'fixture-drug-3',
+        identifiers: { name: 'Fixture Compound C', synonyms: [] },
+        targets: [donor[0]!, { ...donor[1]!, id: donor[0]!.id }],
+      })
+      const report = await repo.importLibrary(
+        syntheticNpslText([syntheticDrugB(), invalid]),
+        { mode: 'merge' },
+      )
+      expect(report.ok).toBe(false)
+      if (!report.ok) {
+        expect(report.errors.map((e) => e.code)).toEqual(['DUPLICATE_ID'])
+        expect(report.errors[0]?.message).toContain('fixture-target-1')
+      }
+
+      // Zero persistent mutation: raw rows byte-identical (target-level
+      // notes and whole parameter provenance included), library metadata
+      // untouched, and the valid record from the rejected file absent.
+      expect(await db.drugs.toArray()).toEqual(rowsBefore)
+      expect((await db.meta.toArray())[0]).toEqual(metaBefore)
+      expect(await db.drugs.count()).toBe(1)
+      const stored = await db.drugs.get('fixture-drug-1')
+      expect(stored?.targets[0]?.kd?.provenance).toEqual({
+        type: 'literature',
+        source: 'Synthetic fixture source',
+        citation: 'Invented for tests, 2026',
+      })
+      expect(stored?.targets[0]?.notes).toBe(FIXTURE_NOTE)
+      expect(await db.drugs.get('fixture-drug-2')).toBeUndefined()
     } finally {
       await db.delete()
     }

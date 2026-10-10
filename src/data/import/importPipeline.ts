@@ -5,7 +5,9 @@
  * inside the import transaction (all-or-nothing commit).
  *
  * Blocking errors: malformed JSON, incompatible envelope versions, schema
- * violations (with zod paths), duplicate drug ids inside one file.
+ * violations (with zod paths), duplicate drug ids inside one file, and
+ * duplicate target ids inside one drug (identity conflicts — provenance
+ * and target metadata are keyed by target id).
  * Non-blocking warnings: duplicate drug names (names are labels, not
  * identities), unknown or unexpected units (data is imported as declared —
  * the application never rewrites a unit), legacy records without
@@ -249,8 +251,29 @@ export function validateNpslFile(file: unknown, now?: string): NpslValidation {
   // Both checks run here, inside the caller's transaction, so a failing
   // import commits nothing.
   const seenIds = new Map<DrugId, number>()
-  for (const raw of parsed.data.drugs) {
+  for (const [drugIndex, raw] of parsed.data.drugs.entries()) {
     seenIds.set(raw.id, (seenIds.get(raw.id) ?? 0) + 1)
+    // `targets[].id` must be unique *within* one drug (validation.md §4,
+    // domain-model.md §2): provenance, target metadata and list identity
+    // are all keyed by it, so a collision silently misattributes stored
+    // state on the next edit. Exact string comparison — ids are opaque,
+    // never normalized — and the same id in a *different* drug stays
+    // legal (uniqueness is per drug, matching the CSV path). Schema
+    // validation already guaranteed a non-empty id string here, so a
+    // missing/malformed id surfaces as SCHEMA, never as a duplicate.
+    const seenTargetIds = new Map<string, number>()
+    for (const target of raw.targets) {
+      seenTargetIds.set(target.id, (seenTargetIds.get(target.id) ?? 0) + 1)
+    }
+    for (const [targetId, count] of seenTargetIds) {
+      if (count > 1) {
+        errors.push({
+          code: 'DUPLICATE_ID',
+          message: `duplicate target id "${targetId}" appears ${count} times in drug "${raw.identifiers.name}" — target ids must be unique within a drug`,
+          path: `drugs.${drugIndex}.targets`,
+        })
+      }
+    }
     // zod validated the record; its optional-undefined typing is bridged to
     // the domain's exact-optional typing here (see records.ts fromRecord).
     const drug = raw as Drug

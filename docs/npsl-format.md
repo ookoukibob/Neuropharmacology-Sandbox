@@ -73,8 +73,10 @@ required by the specification. A bundled demo library ships with
 
 ### `ReceptorTarget`
 
-`id`, `name` required; `gene?`, `action?`, `species?`, `kd?`, `ki?`, `ec50?`,
-`ic50?`, `notes?` optional. `action` is an enum:
+`id`, `name` required; the `id` must be unique within its drug (a
+collision is rejected at import with the blocking error `DUPLICATE_ID`,
+see validation.md §4); `gene?`, `action?`, `species?`, `kd?`, `ki?`,
+`ec50?`, `ic50?`, `notes?` optional. `action` is an enum:
 `agonist` \| `partial-agonist` \| `antagonist` \| `inverse-agonist` \|
 `modulator` \| `reuptake-inhibitor` \| `unknown`.
 

@@ -39,6 +39,7 @@ persistence (complete).**
 **Phase 10 — target-metadata preservation on drug edits (complete).**
 **Phase 11 — repository data integrity audit (complete).**
 **Phase 12 — identifier-metadata preservation on drug edits (complete).**
+**Phase 13 — duplicate-target-id rejection in NPSL imports (complete).**
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -55,6 +56,7 @@ a visible warning) and CSV (lossy, with a visible warning), component + CSV unit
 | 10 | Data integrity: supported target-level metadata (`gene`, `action`, `species`, `notes`) now survives edits to existing drug records — reattached by stable target id in the form's submit path, verified by form-level tests, a real-repository/IndexedDB integration test and an E2E workflow; no new editing controls, schema or format change | done |
 | 11 | Repository data integrity audit: evidence-driven coverage matrix over reconstruction, serialization, import/export, persistence, identity and recovery boundaries — confirmed findings DI-01…DI-04, coverage gaps and a prioritized remediation backlog in `docs/data-integrity-audit.md` (audit-only commit) | done |
 | 12 | Data integrity: stored-only identifier metadata (`description`, `casNumber`) now survives edits to existing drug records (audit DI-01) — reattached from the stored record in the form's submit path while editable fields stay form-driven, verified by form-level tests and a real-repository/raw-IndexedDB test; no new editing controls, schema or format change | done |
+| 13 | Data integrity: NPSL import now blocks documents carrying duplicate `targets[].id` inside one drug (audit DI-02) — per-drug uniqueness enforced with blocking `DUPLICATE_ID` at the existing validation boundary, rejection proven to write nothing to storage, CSV behavior unchanged; no schema or format change | done |
 
 ### What works today
 

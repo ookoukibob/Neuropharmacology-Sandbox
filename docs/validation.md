@@ -94,7 +94,7 @@ rendered field-by-field by the calculator (phase 4).
 | Unit known | every `unit` exists in the unit catalog | warning `UNKNOWN_UNIT` — imported exactly as declared; a calculation that *uses* it fails with the engine's `UNIT_UNKNOWN` |
 | Unit dimension | `halfLife` is time, `kd`/`ki`/`ec50`/`ic50` are molar- or mass-concentration, `bioavailability` is dimensionless | warning `UNEXPECTED_DIMENSION` — never rewritten |
 | Cross-parameter consistency | one target may not carry both `kd` and `ki` **for the same measurement** with conflicting literature sources | non-blocking warning in the CSV mapping UI (`mapping-warnings`: the two stay separate values, never substituted) — the import never resolves it silently |
-| Duplicate ids | unique `Drug.id`, unique `targets[].id` per drug | error `DUPLICATE_ID` — blocking |
+| Duplicate ids | unique `Drug.id` (file-wide), unique `targets[].id` per drug — compared as exact strings, never normalized; the same target id in a *different* drug is legal | error `DUPLICATE_ID` — blocking, enforced on both the NPSL path (`validateNpslFile`, at preview and again inside the import transaction before any write) and the CSV path |
 | Duplicate names | same `identifiers.name` twice in one file | warning `DUPLICATE_NAME` — names are labels, not identities |
 | Ranges | fraction-like values in range, non-negative where required | error (form) / engine-side (calculator) |
 | Provenance completeness | `literature` with no citation/doi/url beyond `source` | accepted — `source` alone satisfies the schema; a fuller citation is encouraged by documentation, not enforced by an import warning |
