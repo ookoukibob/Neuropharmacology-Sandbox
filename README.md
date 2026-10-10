@@ -37,6 +37,8 @@ persistence (complete).**
 **Phase 8 — recovery backup/restore (`.npsb`, complete).**
 **Phase 9 — settings & persistent presentation preferences (complete).**
 **Phase 10 — target-metadata preservation on drug edits (complete).**
+**Phase 11 — repository data integrity audit (complete).**
+**Phase 12 — identifier-metadata preservation on drug edits (complete).**
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -51,6 +53,8 @@ a visible warning) and CSV (lossy, with a visible warning), component + CSV unit
 | 8 | Recovery backup: `.npsb` full-storage archive (raw rows incl. quarantined and unknown-field records, every metadata row, numeric sidecar for `-0`/`NaN`/`±Infinity`, explicit fidelity boundary), a dedicated Recovery tab with preview → explicit acknowledgement → atomic full-replacement restore and the four outcomes (rejected / failed / ok / committed-refresh-failed, never auto-re-run), mutual rejection with ordinary `.npsl` import, honest export failure with no file — contract designed in 8A (`recovery-backup.md`, ADR-18), implemented and verified in 8B with unit/repository/component/E2E/axe suites | done |
 | 9 | Settings: device-local presentation preferences — a persistent theme (system/light/dark, `.dark` on the document root, live OS follow), per-model curve display defaults validated with Zod and the engine's own curve rules, data-management links, About, and a scoped acknowledged reset that restores only preferences (one versioned `localStorage` record, ADR-19; scientific data neither stored nor touched) | done |
 | 10 | Data integrity: supported target-level metadata (`gene`, `action`, `species`, `notes`) now survives edits to existing drug records — reattached by stable target id in the form's submit path, verified by form-level tests, a real-repository/IndexedDB integration test and an E2E workflow; no new editing controls, schema or format change | done |
+| 11 | Repository data integrity audit: evidence-driven coverage matrix over reconstruction, serialization, import/export, persistence, identity and recovery boundaries — confirmed findings DI-01…DI-04, coverage gaps and a prioritized remediation backlog in `docs/data-integrity-audit.md` (audit-only commit) | done |
+| 12 | Data integrity: stored-only identifier metadata (`description`, `casNumber`) now survives edits to existing drug records (audit DI-01) — reattached from the stored record in the form's submit path while editable fields stay form-driven, verified by form-level tests and a real-repository/raw-IndexedDB test; no new editing controls, schema or format change | done |
 
 ### What works today
 

@@ -109,10 +109,12 @@ mutual rejection with ordinary import), and
 `src/features/drug-library/DrugForm.persistence.test.tsx` (an edit save
 through the real detail → form → store → repository chain keeps unchanged
 parameter provenance whole — citation/DOI/unknown keys included — in the
-actual stored record, stamps only the parameter that changed, and keeps
+actual stored record, stamps only the parameter that changed, keeps
 every surviving target's `gene` / `action` / `species` / `notes` in the
 raw IndexedDB row — with no metadata migrating onto survivors or
-recreated targets — proven by a fresh repository read; same
+recreated targets — proven by a fresh repository read, and keeps the
+stored-only identifier metadata `description` / `casNumber` byte-identical
+in the raw row after an unrelated edit (audit DI-01); same
 real-repository setup) and
 `src/app/pages/SettingsPage.test.tsx` (the settings controls against the
 real app stores: theme applied to the document root and persisted,
@@ -305,7 +307,7 @@ lossy edges are listed in `docs/validation.md` §7.
 | Schema migration tests | done — v1→v2 upgrade: bookkeeping only, scientific + unknown fields survive |
 | Repository tests | done — CRUD, metadata stamping, quarantine, atomic replace/import rollback, NPSL round trip, reload, extension-field matrix (replace/merge/hydration/edit/export/re-import/rollback) |
 | Import pipeline tests | done — parse/schema/semantic/preview classification, metadata extension resolution, envelope-field warning |
-| Store + library UI tests | done — hydration guard, quarantine report, form safeguards, target-metadata preservation on edit (unrelated edit, rename, parameter change, multiple targets, removal + position shift, remove-and-recreate, absent fields stay absent, create mode), transactional `importLibrary` outcome (ok / invalid / failed / committed-refresh-failed) |
+| Store + library UI tests | done — hydration guard, quarantine report, form safeguards, target-metadata preservation on edit (unrelated edit, rename, parameter change, multiple targets, removal + position shift, remove-and-recreate, absent fields stay absent, create mode), identifier-metadata preservation on edit (unrelated rename, synonyms/tags/notes edits, lone description, lone casNumber, absent stays absent, editable fields from form state, no source mutation, create mode), transactional `importLibrary` outcome (ok / invalid / failed / committed-refresh-failed) |
 | Calculator tests (adapters, store, schemas, components) | done — drafts, stale semantics, curve settings, PK mode union |
 | CSV tests (parse, write, export, mapping, conversion) | done — quoting/escaping/BOM/errors, spreadsheet formula-injection guard (text cells protected, numeric cells byte-exact), stable header, provenance columns, ambiguity + unit rules, CSV → NPSL document, grouping, row errors |
 | Import/export UI tests | done — preview-before-write, replace gate, cancel, CSV mapping flow, export contents + object-URL lifecycle, committed-but-refresh-failed report (never "nothing was written"), quarantine export warning (visible with data, silent when empty) |
@@ -315,8 +317,8 @@ lossy edges are listed in `docs/validation.md` §7.
 | Preferences tests (schema, storage, store) | done — defaults on first run, save/restore round trip with verbatim string forms, malformed JSON and non-object payloads, unsupported schema versions, invalid theme/scale/value types, engine cross-field range rules (min < max, log-safe min, points bounds), live system-mode theme behavior, manual-theme precedence over OS changes, write-failure degradation (`loadStatus: 'unavailable'`), scoped reset, persisted-key shape (no scientific state) |
 | Calculator presentation-settings tests | done — `applyPresentationSettings` replaces display defaults without touching drafts/report/curve, marks the curve stale when a report exists; `defaultCalculatorSettings` returns fresh independent copies |
 | Settings UI tests | done — four sections with accessible headings, theme applied + persisted per model blocks, invalid range text refused with `aria-invalid`/description, cross-field enforcement, restore-defaults keeps the theme, data-management link, About metadata, acknowledged reset (Escape, focus, scope) with repository mutation spies and an untouched scientific draft, invalid/unavailable-storage notes |
-| Drug-form persistence integration tests | done — real detail → form → store → Dexie chain: whole provenance of unchanged parameters in the raw stored row, user stamp only on the changed parameter, supported target metadata (`gene` / `action` / `species` / `notes`) intact after an unrelated edit, no metadata migration after removal + same-name recreation (raw row + fresh repository read) |
-| Test suite total | 728 unit tests (45 files) |
+| Drug-form persistence integration tests | done — real detail → form → store → Dexie chain: whole provenance of unchanged parameters in the raw stored row, user stamp only on the changed parameter, supported target metadata (`gene` / `action` / `species` / `notes`) intact after an unrelated edit, no metadata migration after removal + same-name recreation, and stored-only identifier metadata (`description` / `casNumber`) preserved byte-identical in the raw row after an unrelated edit (raw row + fresh repository read) |
+| Test suite total | 737 unit tests (45 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
 | Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
 | Library reload e2e | done — 2 workflows (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload; and target metadata: import user-origin record with `gene`/`action`/`species`/`notes` → unrelated edit → fields still shown → reload → persisted |

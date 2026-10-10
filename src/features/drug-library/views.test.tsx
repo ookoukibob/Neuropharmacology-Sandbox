@@ -2,7 +2,8 @@
  * Minimal UI tests: list rendering/filtering/quarantine banner, detail
  * provenance + storage-origin display, edit/create safeguard behavior
  * (explicit units, validated numbers, provenance preservation on edit,
- * target-metadata preservation on edit, no provenance editing).
+ * target-metadata preservation on edit, identifier-metadata preservation
+ * on edit, no provenance editing).
  *
  * The singleton store is seeded directly with synthetic fixture state — no
  * database access happens in these tests, and form submissions that fail
@@ -938,5 +939,190 @@ describe('DrugForm — target metadata preservation on edit', () => {
     expect(Object.keys(input.targets?.[0] ?? {})).toEqual(['name', 'kd'])
     expect(input.targets?.[0]?.name).toBe('NEW-T')
     expect(input.targets?.[0]?.kd).toMatchObject({ value: 4.2, unit: 'nM' })
+  })
+})
+
+describe('DrugForm — identifier metadata preservation on edit', () => {
+  /**
+   * Data-integrity audit DI-01: the form edits only `name` and `synonyms`,
+   * but `DrugChanges.identifiers` replaces the whole structure — so the
+   * stored-only recognized fields (`description`, `casNumber`) must be
+   * reattached from the record at submit. Present keeps its exact stored
+   * value; absent stays absent — no key at all, never an explicit
+   * `undefined`. All values are synthetic fixtures, not pharmacological
+   * information.
+   */
+  const DESCRIPTION = 'Synthetic fixture description — not pharmacological information.'
+  const CAS = 'SYNTH-CAS-0001'
+
+  function identifiersFixture(identifiers: Drug['identifiers']): Drug {
+    return syntheticDrug({ identifiers })
+  }
+
+  function renderEdit(drug: Drug) {
+    const onSave = vi.fn<(input: DrugInput) => Promise<unknown>>(async () => undefined)
+    render(<DrugForm drug={drug} onSave={onSave} onCancel={vi.fn()} />)
+    return { onSave }
+  }
+
+  /**
+   * Submit the form and return the exact `DrugInput` handed to `onSave`
+   * (structural parameter type — no dependence on vitest's Mock generics).
+   */
+  async function submitAndGetInput(onSave: {
+    mock: { calls: ReadonlyArray<readonly [input: DrugInput]> }
+  }): Promise<DrugInput> {
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave.mock.calls).toHaveLength(1))
+    return onSave.mock.calls[0]?.[0] as DrugInput
+  }
+
+  it('keeps description and casNumber when only the drug name changes', async () => {
+    const { onSave } = renderEdit(
+      identifiersFixture({
+        name: 'Fixture Compound A',
+        synonyms: ['FCA'],
+        description: DESCRIPTION,
+        casNumber: CAS,
+      }),
+    )
+    fireEvent.change(screen.getByLabelText('Name *'), {
+      target: { value: 'Fixture Compound A Renamed' },
+    })
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.identifiers.name).toBe('Fixture Compound A Renamed')
+    expect(Object.keys(input.identifiers).sort()).toEqual([
+      'casNumber',
+      'description',
+      'name',
+      'synonyms',
+    ])
+    expect(input.identifiers.description).toBe(DESCRIPTION)
+    expect(input.identifiers.casNumber).toBe(CAS)
+    expect(input.identifiers.synonyms).toEqual(['FCA'])
+  })
+
+  it('keeps description and casNumber when synonyms, tags and notes change', async () => {
+    const { onSave } = renderEdit(
+      identifiersFixture({
+        name: 'Fixture Compound A',
+        synonyms: ['FCA'],
+        description: DESCRIPTION,
+        casNumber: CAS,
+      }),
+    )
+    fireEvent.change(screen.getByLabelText(/^Synonyms/), { target: { value: 'FCA, EDITED' } })
+    fireEvent.change(screen.getByLabelText(/^Tags/), { target: { value: 'fixture, edited' } })
+    fireEvent.change(screen.getByLabelText(/^Notes/), { target: { value: 'Edited note' } })
+    const input = await submitAndGetInput(onSave)
+
+    // The editable fields carry the form's new values …
+    expect(input.identifiers.synonyms).toEqual(['FCA', 'EDITED'])
+    expect(input.tags).toEqual(['fixture', 'edited'])
+    expect(input.notes).toBe('Edited note')
+    // … while the stored-only fields ride through unchanged.
+    expect(Object.keys(input.identifiers).sort()).toEqual([
+      'casNumber',
+      'description',
+      'name',
+      'synonyms',
+    ])
+    expect(input.identifiers.description).toBe(DESCRIPTION)
+    expect(input.identifiers.casNumber).toBe(CAS)
+  })
+
+  it('keeps a lone description without gaining a casNumber', async () => {
+    const { onSave } = renderEdit(
+      identifiersFixture({ name: 'Fixture Compound A', synonyms: ['FCA'], description: DESCRIPTION }),
+    )
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'Renamed' } })
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.identifiers.description).toBe(DESCRIPTION)
+    expect(Object.keys(input.identifiers).sort()).toEqual(['description', 'name', 'synonyms'])
+    // An explicit `undefined` property would still satisfy toHaveProperty.
+    expect(input.identifiers).not.toHaveProperty('casNumber')
+  })
+
+  it('keeps a lone casNumber without gaining a description', async () => {
+    const { onSave } = renderEdit(
+      identifiersFixture({ name: 'Fixture Compound A', synonyms: ['FCA'], casNumber: CAS }),
+    )
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'Renamed' } })
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.identifiers.casNumber).toBe(CAS)
+    expect(Object.keys(input.identifiers).sort()).toEqual(['casNumber', 'name', 'synonyms'])
+    expect(input.identifiers).not.toHaveProperty('description')
+  })
+
+  it('adds neither field when the record never had them', async () => {
+    const { onSave } = renderEdit(
+      identifiersFixture({ name: 'Fixture Compound A', synonyms: ['FCA'] }),
+    )
+    fireEvent.change(screen.getByLabelText(/^Tags/), { target: { value: 'edited' } })
+    const input = await submitAndGetInput(onSave)
+
+    expect(Object.keys(input.identifiers).sort()).toEqual(['name', 'synonyms'])
+    expect(input.identifiers).not.toHaveProperty('description')
+    expect(input.identifiers).not.toHaveProperty('casNumber')
+  })
+
+  it('submits editable name and synonyms from form state, not the stored record', async () => {
+    const { onSave } = renderEdit(
+      identifiersFixture({
+        name: 'Fixture Compound A',
+        synonyms: ['FCA'],
+        description: DESCRIPTION,
+        casNumber: CAS,
+      }),
+    )
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'Form State Name' } })
+    fireEvent.change(screen.getByLabelText(/^Synonyms/), { target: { value: 'FORM, STATE' } })
+    const input = await submitAndGetInput(onSave)
+
+    // The stored originals are not reattached over the editable fields …
+    expect(input.identifiers.name).toBe('Form State Name')
+    expect(input.identifiers.synonyms).toEqual(['FORM', 'STATE'])
+    expect(input.identifiers.name).not.toBe('Fixture Compound A')
+    // … and the stored-only fields still come from the record.
+    expect(input.identifiers.description).toBe(DESCRIPTION)
+    expect(input.identifiers.casNumber).toBe(CAS)
+  })
+
+  it('does not mutate the source drug record or its identifiers', async () => {
+    const drug = identifiersFixture({
+      name: 'Fixture Compound A',
+      synonyms: ['FCA'],
+      description: DESCRIPTION,
+      casNumber: CAS,
+    })
+    const snapshot = structuredClone(drug)
+    const { onSave } = renderEdit(drug)
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'Renamed' } })
+    fireEvent.change(screen.getByLabelText(/^Synonyms/), { target: { value: 'RE' } })
+    const input = await submitAndGetInput(onSave)
+
+    expect(input.identifiers.description).toBe(DESCRIPTION)
+    expect(drug).toEqual(snapshot)
+    expect(drug.identifiers).toEqual(snapshot.identifiers)
+    expect(Object.keys(drug.identifiers).sort()).toEqual([
+      'casNumber',
+      'description',
+      'name',
+      'synonyms',
+    ])
+  })
+
+  it('create mode still submits only name and synonyms — nothing is invented', async () => {
+    const onSave = vi.fn<(input: DrugInput) => Promise<unknown>>(async () => undefined)
+    render(<DrugForm onSave={onSave} onCancel={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'New Compound' } })
+    const input = await submitAndGetInput(onSave)
+
+    expect(Object.keys(input.identifiers).sort()).toEqual(['name', 'synonyms'])
+    expect(input.identifiers).not.toHaveProperty('description')
+    expect(input.identifiers).not.toHaveProperty('casNumber')
   })
 })

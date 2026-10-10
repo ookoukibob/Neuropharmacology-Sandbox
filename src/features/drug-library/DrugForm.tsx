@@ -21,7 +21,13 @@
  *   the stored record by stable target id at submit — the same identity
  *   basis as provenance — so an unrelated edit never silently deletes them,
  *   and fields the record never had stay absent (nothing is filled in or
- *   synthesized).
+ *   synthesized);
+ * - preserved identifier metadata: the recognized identifier fields this
+ *   form cannot edit (`description`, `casNumber`) are reattached from the
+ *   stored record at submit (data-integrity audit DI-01). `name` and
+ *   `synonyms` keep coming from form state; a stored-only field keeps its
+ *   exact stored value when present and stays absent — omitted, never an
+ *   explicit `undefined` — when the record never had it.
  */
 import { Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -298,7 +304,22 @@ function buildInput(
   })
 
   return {
-    identifiers,
+    // Editable identifier fields come from form state (the parameter
+    // above); the stored-only recognized fields this form cannot edit are
+    // reattached from the original record — the same source-of-truth rule
+    // as target metadata, keyed by the record itself. Present keeps its
+    // exact stored value, absent stays absent (conditional spread, no
+    // explicit `undefined`), and nothing is ever invented.
+    identifiers: {
+      name: identifiers.name,
+      synonyms: identifiers.synonyms,
+      ...(original?.identifiers.description !== undefined
+        ? { description: original.identifiers.description }
+        : {}),
+      ...(original?.identifiers.casNumber !== undefined
+        ? { casNumber: original.identifiers.casNumber }
+        : {}),
+    },
     tags,
     targets,
     notes: notes.trim() === '' ? undefined : notes.trim(),

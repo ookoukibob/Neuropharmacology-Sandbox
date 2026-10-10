@@ -56,12 +56,13 @@ below names the evidence actually examined.
 ## 2. Executive summary
 
 **Confirmed findings: 4** — 0 Critical · **2 High** · **1 Medium** · **1 Low**.
+Of these, **1 is remediated (DI-01, fixed in Phase 12)**; **3 remain open**.
 **Coverage gaps: 4** (behavior plausibly correct, evidence inadequate).
 **Not verified: 3** (environment/asset blockers).
 
 | ID | Severity | Confidence | One-line summary |
 | --- | --- | --- | --- |
-| **DI-01** | High | confirmed | Every `DrugForm` edit silently drops `identifiers.description` and `identifiers.casNumber` (partial `identifiers` replacement). Repro `R1`. |
+| **DI-01** | High | confirmed | Every `DrugForm` edit silently drops `identifiers.description` and `identifiers.casNumber` (partial `identifiers` replacement). Repro `R1`. **Remediated in Phase 12** — status details in §5. |
 | **DI-02** | High | confirmed | NPSL import does not implement the documented blocking duplicate-`targets[].id` check; accepted files later cause silent provenance/metadata misattribution on ordinary edits. Repros `R2`, `R3`. |
 | **DI-03** | Medium | confirmed | The edit form silently normalizes *untouched* list/text fields: synonyms/tags are re-split at commas, trimmed and de-duplicated; names/notes are trimmed. Repro `R4`. |
 | **DI-04** | Low | confirmed | NPSL JSON round-trip cannot represent `-0` (stringifies to `0`), silently flipping value semantics and (second-order) restamping provenance of an untouched `-0` parameter; `.npsb` has a documented sidecar, `.npsl` has neither documentation nor handling. Node probe. |
@@ -89,8 +90,8 @@ claims. Verdict references point to §4 (matrix), §5 (findings), §6 (gaps).
 | # | Boundary (code path) | What crosses | Key contract | Verdict |
 | --- | --- | --- | --- | --- |
 | 1 | Zod parse → domain: `records.ts` `fromRecord` (`records.ts:287`) over `npsl.ts` schemas | Stored raw row → `Drug`; all schemas are `z.looseObject` (`npsl.ts:14-31`) | Unknown keys kept at every level; invalid → quarantine, never repair | Pass (A2, G1) |
-| 2 | Domain → stored row: `toRecord` (`records.ts:238`) + `toStoredRecord` (`records.ts:326`) + `preserveUnknownFields` (`records.ts:177`) | Recognized fields from domain; unknown fields copied from incoming drug + existing raw row (targets matched by stable id) | "A key in the contract is governed by the domain value; a key outside the contract is copied forward" (`records.ts:14-18`) | Pass at mapper level (A1); **Gap** for targets-replacing updates (GAP-1); **Finding** at the form boundary for contract keys (DI-01) |
-| 3 | `DrugForm.buildInput` → `DrugChanges` (`DrugForm.tsx:246-306`, submit arg `DrugForm.tsx:407`) | name/synonyms/tags/notes/params/provenance/metadata → partial update object | 9A rule (`provenance.md:48-54`); Phase-10 metadata rule (`DrugForm.tsx:283-292`) | Pass (C1, B3) but **Finding DI-01** (identifier fields) and **Finding DI-03** (list normalization) |
+| 2 | Domain → stored row: `toRecord` (`records.ts:238`) + `toStoredRecord` (`records.ts:326`) + `preserveUnknownFields` (`records.ts:177`) | Recognized fields from domain; unknown fields copied from incoming drug + existing raw row (targets matched by stable id) | "A key in the contract is governed by the domain value; a key outside the contract is copied forward" (`records.ts:14-18`) | Pass at mapper level (A1); **Gap** for targets-replacing updates (GAP-1); **Finding** at the form boundary for contract keys (DI-01, remediated in Phase 12) |
+| 3 | `DrugForm.buildInput` → `DrugChanges` (`DrugForm.tsx:246-306`, submit arg `DrugForm.tsx:407`) | name/synonyms/tags/notes/params/provenance/metadata → partial update object | 9A rule (`provenance.md:48-54`); Phase-10 metadata rule (`DrugForm.tsx:283-292`) | Pass (C1, B3); **Finding DI-01** (identifier fields) — **remediated in Phase 12**; **Finding DI-03** (list normalization, open) |
 | 4 | `applyChanges` (`dexieDrugRepository.ts:93-106`) | Partial update over re-read current row inside transaction | Documented: "absent keys keep their value; structures replaced wholesale when present" (`repository.ts:67-72`) | Pass as a repository contract; only production caller is `DrugDetailView.tsx:109` |
 | 5 | NPSL file → validated drugs: `parseNpsl` + `validateNpslFile` (`importPipeline.ts:247-310`) | Envelope, schema, semantic checks, warnings | `validation.md` §3–§4: duplicate drug ids AND duplicate `targets[].id` per drug are blocking | **Finding DI-02** (target-id half unimplemented) |
 | 6 | Import commit: `importLibrary` (`dexieDrugRepository.ts:258-309`) | `replace` = clear + write; `merge` = `get(id)` + `toStoredRecord(existing, file)` | Atomic in one transaction; invalid file → zero writes; merge does not touch metadata | Pass (D4, D6) |
@@ -118,7 +119,7 @@ code/reproduction evidence; **Not verified** = blocker stated.
 | --- | --- | --- | --- |
 | A1 | `toRecord`/`fromRecord`/`toStoredRecord`/`preserveUnknownFields` (`records.ts`) | Pass | `records.test.ts:24-173` (round trip, provenance triples, absent-optionals, quarantine, contract-key rules, target-id-not-position matching `:132`); extension matrix `dexieDrugRepository.test.ts:508-621` |
 | A2 | Zod schema strictness/loose behavior (`npsl.ts`) | Pass | Full read: every object is `z.looseObject`; non-finite rejected (`records.test.ts:89`); wrong enum rejected (`records.test.ts:73`) |
-| A3 | Recognized `DrugIdentifiers` fields across the **form edit** path | **Finding DI-01** | `DrugForm.tsx:248,407` builds `{name, synonyms}` only; `dexieDrugRepository.ts:99` replaces wholesale; `IDENTIFIER_KEYS` (`records.ts:91`) excludes them from copy-forward; repro `R1` |
+| A3 | Recognized `DrugIdentifiers` fields across the **form edit** path | **Finding DI-01 → remediated (Phase 12)** | `DrugForm.tsx:248,407` builds `{name, synonyms}` only; `dexieDrugRepository.ts:99` replaces wholesale; `IDENTIFIER_KEYS` (`records.ts:91`) excludes them from copy-forward; repro `R1`. Fix: `buildInput` reattaches both fields from the stored record; regression tests in `views.test.tsx` (`DrugForm — identifier metadata preservation on edit`) and `DrugForm.persistence.test.tsx` (raw-row assertion) |
 | A4 | `assignTargetIds` / `createDrug` reconstruction (`dexieDrugRepository.ts:82-89`) | Pass | Spread preserves all fields; id kept when present, `newId()` when empty; `TargetInput` widens only `id` |
 | A5 | `applyChanges` partial-update semantics (`:93-106`) | Pass (contract) | Documented `repository.ts:67-72`; `tags`/`notes`/`origin`/`createdAt`/`persistenceVersion` verified intact on edit (repro `R1` raw-row assertion covered them); `pharmacokinetics` key absent from form input → untouched (code `:102`, repro `R6` pass) → committed-test gap GAP-2 |
 | A6 | Migration hook (`database.ts:33-43`) | Pass | Hook adds only two bookkeeping keys via `modify`; `database.test.ts` migration test; limitation: fixture data only |
@@ -130,7 +131,7 @@ code/reproduction evidence; **Not verified** = blocker stated.
 | Row | Path | Verdict | Evidence examined |
 | --- | --- | --- | --- |
 | B1 | Create flow | Pass | `views.test.tsx:231` safeguards describe; `store.test.ts:130`; invalid creation leaves state untouched `:147` |
-| B2 | Edit: name, synonyms, tags, notes, description, CAS | **Findings DI-01, DI-03** | `R1`, `R4`; detail view displays description/CAS at `DrugDetailView.tsx:141-145` (loss is user-visible after save) |
+| B2 | Edit: name, synonyms, tags, notes, description, CAS | **DI-01 remediated (Phase 12); DI-03 open** | `R1`, `R4`; detail view displays description/CAS at `DrugDetailView.tsx:141-145` (loss was user-visible after save; now preserved per A3 regression tests) |
 | B3 | Target add/remove/rename, stable identity, ID assignment | Pass | Phase 10 suite `views.test.tsx:636-` (8 tests), `DrugForm.persistence.test.tsx` (2), E2E `e2e/library.spec.ts:197`; removal/position-shift and remove-recreate covered |
 | B4 | Parameter add/remove, unit change, kind change | Pass | `views.test.tsx:231` (unit/dimension guards), `:394` (9A provenance describe); kind-substitution impossible by construction (separate named fields, `drug.ts:39-58`) |
 | B5 | Read-only/origin gating | Pass | `DrugDetailView.tsx:116,226`; only `origin === 'user'` editable; `updateDrug` has exactly one production caller (traced) |
@@ -216,6 +217,18 @@ code/reproduction evidence; **Not verified** = blocker stated.
 ## 5. Confirmed findings
 
 ### DI-01 — Form edit silently drops `identifiers.description` and `identifiers.casNumber`
+
+> **Status: remediated — Phase 12** (`fix: preserve identifier metadata during drug edits`).
+> The fix lives in `DrugForm.buildInput`: `description`/`casNumber` are reattached from the
+> stored record with conditional spreads — present keeps its exact stored value, absent
+> stays absent (omitted, never an explicit `undefined`), nothing is synthesized — while
+> `name`/`synonyms` keep coming from form state and create mode is unchanged.
+> Regression evidence: form-level tests in `src/features/drug-library/views.test.tsx`
+> (describe `DrugForm — identifier metadata preservation on edit`) plus the real-repository
+> test in `src/features/drug-library/DrugForm.persistence.test.tsx` (“keeps identifiers
+> description and CAS in the raw row after an unrelated edit”), which asserts the raw
+> IndexedDB row before any mapper runs. The original defect description and reproduction
+> `R1` below are retained unchanged as the audit trail.
 
 | Field | Value |
 | --- | --- |
@@ -345,7 +358,7 @@ item is scoped to be implementable and testable in one focused phase.
 
 | Order | Item | Targets | Scope sketch | Risks/dependencies |
 | --- | --- | --- | --- | --- |
-| 1 | **S1 — Phase 12** | DI-01 | Reattach `description`/`casNumber` from the stored record in `DrugForm.buildInput` (Phase-10 conditional-spread pattern); add form + persistence regression tests | Must keep absent-stays-absent; no new UI; verify no other partial-contract field was missed in `DrugChanges` (audit found none) |
+| 1 | **S1 — Phase 12 (done)** | DI-01 | Reattach `description`/`casNumber` from the stored record in `DrugForm.buildInput` (Phase-10 conditional-spread pattern); add form + persistence regression tests | Must keep absent-stays-absent; no new UI; verify no other partial-contract field was missed in `DrugChanges` (audit found none) |
 | 2 | **S2 — Phase 13** | DI-02 | Add per-drug target-id uniqueness to `validateNpslFile` (blocking `DUPLICATE_ID`, zero writes) + rejection and no-misattribution tests | Previously-accepted violating files become un-importable; stored ambiguous libraries are out of scope |
 | 3 | **S3 — Phase 14** | DI-03 | Round-trip-safe list/text handling in `DrugForm` (preserve untouched arrays verbatim; explicit trim policy for edited fields) | Product decision on delimiter/UX; touches only form code |
 | 4 | **S4 — Phase 15** | DI-04 | Document (and optionally normalize-or-reject) `-0` in the NPSL contract, aligning with the NPSB sidecar story | Normalization changes stored values — needs an import warning |
@@ -353,12 +366,12 @@ item is scoped to be implementable and testable in one focused phase.
 | 6 | **S6** | GAP-3 | Decide and document the quarantine-vs-import-collision policy; if protection wins, surface quarantined-id collisions in the preview | Policy decision first; implementation depends on it |
 | 7 | **S7** | GAP-4 | Document multi-tab expectations (field-merge behavior; last-writer-wins for same-field/targets saves) and pin current behavior with a test | Documentation-first; no locking proposed |
 
-**Highest-priority follow-up: S1 (DI-01).** It is silent field loss through
-the *most common* supported workflow (any edit of an imported/restored
-user-origin record), the fix pattern already exists and was proven in Phase 10,
-and it has no policy decisions blocking it — unlike S3/S6. S2 (DI-02) follows
-because provenance corruption, once triggered, silently rewrites scientific
-attribution.
+**Highest-priority follow-up: S1 (DI-01) — completed in Phase 12.** It was
+silent field loss through the *most common* supported workflow (any edit of
+an imported/restored user-origin record); the fix reused the pattern proven
+in Phase 10 and had no policy decisions blocking it. **The highest-priority
+open item is now S2 (DI-02)**, because provenance corruption, once
+triggered, silently rewrites scientific attribution.
 
 **No finding in this audit warrants emergency remediation ahead of the normal
 sequence:** every loss requires a specific trigger (records carrying

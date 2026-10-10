@@ -215,12 +215,14 @@ A failed validation leaves both IndexedDB and application state untouched.
 Editing an existing record also preserves data the form does not expose:
 the supported target-level metadata (`gene`, `action`, `species`, `notes`)
 of every surviving target is reattached by stable target id when the
-submitted target list is built, so an unrelated edit never silently
-deletes it, a removed target's metadata leaves with it, and fields a
-record never had stay absent. The submitted `targets` array still replaces
-the stored list wholesale (the repository contract is unchanged), and this
-adds no metadata editing controls, no schema field and no interchange
-format change.
+submitted target list is built, and the stored-only recognized identifier
+fields (`description`, `casNumber`) are reattached from the record itself,
+so an unrelated edit never silently deletes either group, a removed
+target's metadata leaves with it, and fields a record never had stay
+absent. The submitted `targets` array still replaces the stored list
+wholesale and `identifiers` still carries the form's `name`/`synonyms`
+(the repository contract is unchanged), and this adds no editing controls,
+no schema field and no interchange format change.
 
 ### 4.3 Calculation
 
@@ -420,6 +422,8 @@ device-local presentation preferences — see §4.7.
 | 8 | Lossless recovery backup for quarantined records: a separate versioned `.npsb` archive (raw valid + quarantined rows, all metadata rows, explicit fidelity boundary with numeric sidecar), replace-only restore with pre-write validation, atomic commit and commit-aware outcomes — **8A: format contract + ADR-18 (this documentation phase only)**; **8B: export/restore implementation and verification** | 3 | 8A: done · 8B: done |
 | 9 | Settings: device-local presentation preferences — persistent theme (system/light/dark, `.dark` on the document root, live OS follow), per-model curve display defaults with Zod + engine validation, data-management links, About, and a scoped acknowledged reset — scientific data neither stored nor touched | 4 | done |
 | 10 | Data integrity: preserve supported target-level metadata (`gene`, `action`, `species`, `notes`) through the drug edit workflow — feature-layer regression fix (reattach by stable target id at submit) with form-level, real-repository and E2E coverage; no new editing UI, schema or format change | 3 | done |
+| 11 | Repository data integrity audit (audit-only): evidence-driven review of reconstruction, serialization, import/export, persistence, identity and recovery boundaries — coverage matrix, confirmed findings DI-01…DI-04, coverage gaps and a prioritized remediation backlog in `data-integrity-audit.md`; no production changes | all | done |
+| 12 | Data integrity: preserve stored-only identifier metadata (`description`, `casNumber`) through the drug edit workflow — DI-01 remediation (reattach from the stored record at submit, absent stays absent) with form-level and real-repository/raw-row regression coverage; no new editing UI, schema or format change | 10, 11 | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full
@@ -494,6 +498,14 @@ supplied by data.
       name; a removed target's metadata leaves with it, a recreated target
       inherits nothing, and fields a record never had stay absent. No
       metadata editing controls, schema or interchange change was added.
+- [x] Identifier metadata preservation (phase 12 fix, audit DI-01): the
+      stored-only recognized identifier fields (`description`,
+      `casNumber`) survive every edit of an existing record — reattached
+      from the stored record at submit while `name`/`synonyms` keep
+      coming from form state; absent stays absent (omitted, never an
+      explicit `undefined`), nothing is synthesized, and create mode is
+      unchanged. Verified against the raw stored row through the real
+      repository chain.
 - [x] No invented pharmacological data: fixtures are synthetic and labeled
       as such; the first run is empty.
 - [x] Extensive tests (mapper, migration, import pipeline, repository,

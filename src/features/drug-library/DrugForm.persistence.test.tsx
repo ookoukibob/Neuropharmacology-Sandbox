@@ -3,10 +3,12 @@
  * repository): a save through the actual detail → form → store → repository
  * chain writes unchanged parameters with their whole provenance (citation,
  * DOI, URL, unknown extension keys included) into the stored record, stamps
- * user provenance only on the parameter that actually changed, and keeps
- * the supported target-level metadata (`gene`, `action`, `species`,
- * `notes`) of every surviving target in the raw stored row — matched by
- * stable target id, never by position or name.
+ * user provenance only on the parameter that actually changed, keeps the
+ * supported target-level metadata (`gene`, `action`, `species`, `notes`)
+ * of every surviving target in the raw stored row — matched by stable
+ * target id, never by position or name — and keeps the stored-only
+ * identifier metadata (`description`, `casNumber`) the form cannot edit
+ * (data-integrity audit DI-01).
  * All fixture values are synthetic test data — not pharmacological
  * information.
  */
@@ -32,6 +34,9 @@ const LITERATURE = {
 }
 const USER_PROVENANCE = { type: 'user' as const, recordedAt: FIXTURE_TIMESTAMP }
 
+/** Synthetic CAS-shaped string — schema only requires a non-empty value. */
+const FIXTURE_CAS = 'SYNTH-CAS-0001'
+
 let drugId = ''
 
 beforeEach(async () => {
@@ -46,7 +51,14 @@ beforeEach(async () => {
     filter: '',
   })
   const created = await libraryRepository.createDrug({
-    identifiers: { name: 'Fixture Compound A', synonyms: ['FCA'] },
+    identifiers: {
+      name: 'Fixture Compound A',
+      synonyms: ['FCA'],
+      // Stored-only identifier metadata (DI-01): no form control exists,
+      // so an unrelated edit must never erase these.
+      description: FIXTURE_NOTE,
+      casNumber: FIXTURE_CAS,
+    },
     tags: ['fixture'],
     notes: FIXTURE_NOTE,
     targets: [
@@ -273,5 +285,55 @@ describe('DrugForm — edit persistence (real repository)', () => {
     expect(reloaded?.targets[1]?.name).toBe('TEST-R')
     expect(reloaded?.targets[1]).not.toHaveProperty('gene')
     expect(reloaded?.targets[1]).not.toHaveProperty('notes')
+  })
+
+  it('keeps identifiers description and CAS in the raw row after an unrelated edit', async () => {
+    renderDetail()
+    fireEvent.click(screen.getByTestId('edit-drug'))
+    fireEvent.change(screen.getByTestId('drug-name'), {
+      target: { value: 'Fixture Compound A Renamed' },
+    })
+    fireEvent.change(screen.getByLabelText(/^Synonyms/), { target: { value: 'FCA, EDITED' } })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await waitFor(() => expect(screen.queryByTestId('drug-form')).not.toBeInTheDocument())
+
+    // Raw stored row — before any mapper touches it: the stored-only
+    // identifier fields are byte-identical (exact key set, so an invented
+    // or explicit-`undefined` key would fail), the editable fields took
+    // the form's values, and Phase 9A provenance + Phase 10 target
+    // metadata survive the same write untouched.
+    const raw = await storedRecord()
+    expect(raw?.identifiers).toEqual({
+      name: 'Fixture Compound A Renamed',
+      synonyms: ['FCA', 'EDITED'],
+      description: FIXTURE_NOTE,
+      casNumber: FIXTURE_CAS,
+    })
+    expect(Object.keys(raw?.identifiers ?? {}).sort()).toEqual([
+      'casNumber',
+      'description',
+      'name',
+      'synonyms',
+    ])
+    expect(raw?.targets).toHaveLength(2)
+    expect(raw?.targets[0]).toMatchObject({
+      id: 'fixture-target-1',
+      gene: 'SYNTH-P1',
+      action: 'modulator',
+      species: 'synthetic',
+    })
+    expect(raw?.targets[0]?.kd?.value).toBe(12.4)
+    expect(raw?.targets[0]?.kd?.provenance).toEqual(LITERATURE)
+    expect(raw?.targets[1]).toMatchObject({ id: 'fixture-target-2', gene: 'SYNTH-P2' })
+    expect(raw?.targets[1]?.ic50?.provenance).toEqual(USER_PROVENANCE)
+
+    // A fresh repository read hydrates the same identifier metadata.
+    const reloaded = await libraryRepository.getDrug(drugId)
+    expect(reloaded?.identifiers).toEqual({
+      name: 'Fixture Compound A Renamed',
+      synonyms: ['FCA', 'EDITED'],
+      description: FIXTURE_NOTE,
+      casNumber: FIXTURE_CAS,
+    })
   })
 })
