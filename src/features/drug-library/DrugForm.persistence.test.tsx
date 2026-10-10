@@ -8,9 +8,12 @@
  * of every surviving target in the raw stored row — matched by stable
  * target id, never by position or name — keeps the stored-only
  * identifier metadata (`description`, `casNumber`) the form cannot edit
- * (data-integrity audit DI-01), and keeps untouched list/text fields
+ * (data-integrity audit DI-01), keeps untouched list/text fields
  * (`synonyms`, `tags`, name, top-level `notes`) byte-identical through
- * an unrelated edit (audit DI-03).
+ * an unrelated edit (audit DI-03), and keeps a negative-zero parameter
+ * and its complete provenance exact through an unrelated edit, with the
+ * top-level `notes` present/absent distinction proven by raw-row
+ * own-property checks (audit DI-04 and the DI-03 follow-up).
  * All fixture values are synthetic test data — not pharmacological
  * information.
  */
@@ -91,21 +94,21 @@ beforeEach(async () => {
   await useLibraryStore.getState().hydrate()
 })
 
-function renderDetail(): void {
+function renderDetail(id: string = drugId): void {
   render(
-    <MemoryRouter initialEntries={[`/library/${drugId}`]}>
+    <MemoryRouter initialEntries={[`/library/${id}`]}>
       <Routes>
-        <Route path="/library/:drugId" element={<DrugDetailView drugId={drugId} />} />
+        <Route path="/library/:drugId" element={<DrugDetailView drugId={id} />} />
       </Routes>
     </MemoryRouter>,
   )
 }
 
 /** The raw stored row — before any mapper touches it on the way out. */
-async function storedRecord() {
+async function storedRecord(id: string = drugId) {
   const db = new SandboxDatabase()
   try {
-    return await db.drugs.get(drugId)
+    return await db.drugs.get(id)
   } finally {
     db.close()
   }
@@ -393,5 +396,85 @@ describe('DrugForm — edit persistence (real repository)', () => {
     expect(reloaded?.identifiers.synonyms).toEqual(['Alpha,Beta', 'X', 'X'])
     expect(reloaded?.tags).toEqual(['one,two', 'duplicate', 'duplicate'])
     expect(reloaded?.notes).toBe('  Synthetic edge-note with padding  ')
+  })
+})
+
+describe('DrugForm — negative-zero and notes-presence persistence (audit DI-04)', () => {
+  /** Seed an own record and render its detail through the real store chain. */
+  async function seedAndRender(input: Parameters<typeof libraryRepository.createDrug>[0]) {
+    const created = await libraryRepository.createDrug(input)
+    await useLibraryStore.getState().hydrate()
+    renderDetail(created.id)
+    return created
+  }
+
+  /** The supported unrelated edit: rename the drug; touch nothing else. */
+  function renameDrug(to: string): void {
+    fireEvent.click(screen.getByTestId('edit-drug'))
+    fireEvent.change(screen.getByTestId('drug-name'), { target: { value: to } })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+  }
+
+  it('keeps a negative-zero parameter and its provenance exact in the raw row after an unrelated edit', async () => {
+    const created = await seedAndRender({
+      identifiers: { name: 'Synthetic Negative-Zero Record', synonyms: [] },
+      targets: [
+        {
+          id: 'negzero-target-1',
+          name: 'NZ-R',
+          kd: { value: -0, unit: 'nM', provenance: LITERATURE },
+        },
+      ],
+    })
+    renameDrug('Synthetic Negative-Zero Record Renamed')
+    await waitFor(() => expect(screen.queryByTestId('drug-form')).not.toBeInTheDocument())
+
+    // Raw stored row — the displayed "0" must not have been re-parsed.
+    const raw = await storedRecord(created.id)
+    expect(Object.is(raw?.targets[0]?.kd?.value, -0)).toBe(true)
+    expect(raw?.targets[0]?.kd?.provenance).toEqual(LITERATURE)
+
+    // A fresh repository read hydrates the same value and provenance.
+    const reloaded = await libraryRepository.getDrug(created.id)
+    expect(Object.is(reloaded?.targets[0]?.kd?.value, -0)).toBe(true)
+    expect(reloaded?.targets[0]?.kd?.provenance).toEqual(LITERATURE)
+    expect(reloaded?.targets[0]?.kd?.provenance).toHaveProperty(
+      'syntheticExtension',
+      'synthetic-extension-value',
+    )
+  })
+
+  it('keeps an absent top-level notes field absent in the raw row (own-property check)', async () => {
+    const created = await seedAndRender({
+      identifiers: { name: 'Synthetic Absent-Notes Record', synonyms: [] },
+      targets: [],
+    })
+    renameDrug('Synthetic Absent-Notes Record Renamed')
+    await waitFor(() => expect(screen.queryByTestId('drug-form')).not.toBeInTheDocument())
+
+    // `raw.notes === undefined` alone cannot distinguish a missing key
+    // from an explicit `undefined` key — assert own-property presence.
+    const raw = await storedRecord(created.id)
+    expect(raw).toBeDefined()
+    expect(Object.prototype.hasOwnProperty.call(raw ?? {}, 'notes')).toBe(false)
+    const reloaded = await libraryRepository.getDrug(created.id)
+    expect(reloaded?.notes).toBeUndefined()
+  })
+
+  it('keeps an explicitly empty top-level notes string present in the raw row (own-property check)', async () => {
+    const created = await seedAndRender({
+      identifiers: { name: 'Synthetic Empty-Notes Record', synonyms: [] },
+      targets: [],
+      notes: '',
+    })
+    renameDrug('Synthetic Empty-Notes Record Renamed')
+    await waitFor(() => expect(screen.queryByTestId('drug-form')).not.toBeInTheDocument())
+
+    const raw = await storedRecord(created.id)
+    expect(raw).toBeDefined()
+    expect(Object.prototype.hasOwnProperty.call(raw ?? {}, 'notes')).toBe(true)
+    expect(raw?.notes).toBe('')
+    const reloaded = await libraryRepository.getDrug(created.id)
+    expect(reloaded?.notes).toBe('')
   })
 })

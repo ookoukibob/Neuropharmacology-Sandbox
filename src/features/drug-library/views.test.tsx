@@ -1265,3 +1265,119 @@ describe('DrugForm — untouched list/text preservation on edit', () => {
     expect(input).toHaveProperty('notes', '')
   })
 })
+
+describe('DrugForm — negative-zero parameter preservation on edit', () => {
+  /**
+   * Audit DI-04 (form path): the input shows a stored `-0` as `"0"`
+   * (`String(-0)`), so a submit used to re-parse it to `+0`, fail the
+   * `Object.is` provenance check and restamp the untouched parameter with
+   * fresh user provenance. Fix: a draft still reading the source's own
+   * textual representation submits the SOURCE number verbatim — matched by
+   * stable target id + parameter kind, never by re-parsing. Synthetic
+   * fixtures only; every sign assertion uses `Object.is`.
+   */
+  const LITERATURE = {
+    type: 'literature' as const,
+    source: 'Synthetic fixture source',
+    citation: 'Invented for tests, 2026',
+    doi: '10.5555/synthetic-fixture',
+    url: 'https://example.invalid/synthetic-fixture',
+    accessedAt: FIXTURE_TIMESTAMP,
+    notes: FIXTURE_NOTE,
+    syntheticExtension: 'synthetic-extension-value',
+  }
+  const USER_PROVENANCE = { type: 'user' as const, recordedAt: FIXTURE_TIMESTAMP }
+
+  /** Target 1 carries the negative zero; target 2 a +0 and an ordinary value. */
+  function negZeroFixture(): Drug {
+    return syntheticDrug({
+      targets: [
+        {
+          id: 'negzero-target-1',
+          name: 'NZ-R',
+          kd: { value: -0, unit: 'nM', provenance: LITERATURE },
+        },
+        {
+          id: 'negzero-target-2',
+          name: 'NZ-S',
+          kd: { value: 12.4, unit: 'nM', provenance: USER_PROVENANCE },
+          ic50: { value: 0, unit: 'nM', provenance: USER_PROVENANCE },
+        },
+      ],
+    })
+  }
+
+  function renderEdit(drug: Drug) {
+    const onSave = vi.fn<(input: DrugInput) => Promise<unknown>>(async () => undefined)
+    render(<DrugForm drug={drug} onSave={onSave} onCancel={vi.fn()} />)
+    return { onSave }
+  }
+
+  async function submitAndGetInput(onSave: {
+    mock: { calls: ReadonlyArray<readonly [input: DrugInput]> }
+  }): Promise<DrugInput> {
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await vi.waitFor(() => expect(onSave.mock.calls).toHaveLength(1))
+    return onSave.mock.calls[0]?.[0] as DrugInput
+  }
+
+  it('displays and preserves an untouched negative-zero parameter with its complete provenance', async () => {
+    const { onSave } = renderEdit(negZeroFixture())
+    // The display keeps the existing UI representation of -0.
+    expect((screen.getAllByLabelText('Value *')[0] as HTMLInputElement).value).toBe('0')
+    // Unrelated edit: rename the drug; no parameter draft is touched.
+    fireEvent.change(screen.getByLabelText('Name *'), {
+      target: { value: 'Synthetic Negative-Zero Renamed' },
+    })
+    const input = await submitAndGetInput(onSave)
+
+    // The SOURCE value is submitted, not the re-parse of "0".
+    expect(Object.is(input.targets?.[0]?.kd?.value, -0)).toBe(true)
+    // The complete stored provenance object survives — not restamped.
+    expect(input.targets?.[0]?.kd?.provenance).toEqual(LITERATURE)
+    expect(input.targets?.[0]?.kd?.provenance).toMatchObject({ type: 'literature' })
+  })
+
+  it('keeps a positive zero positive and ordinary values unchanged', async () => {
+    const { onSave } = renderEdit(negZeroFixture())
+    const input = await submitAndGetInput(onSave)
+
+    expect(Object.is(input.targets?.[1]?.ic50?.value, 0)).toBe(true)
+    expect(Object.is(input.targets?.[1]?.ic50?.value, -0)).toBe(false)
+    expect(input.targets?.[1]?.kd?.value).toBe(12.4)
+    expect(input.targets?.[1]?.kd?.provenance).toEqual(USER_PROVENANCE)
+  })
+
+  it('restamps and rewrites a negative-zero parameter the user explicitly changed', async () => {
+    const { onSave } = renderEdit(negZeroFixture())
+    // "0.0" is a different textual representation → an explicit change.
+    const values = screen.getAllByLabelText('Value *')
+    fireEvent.change(values[0] as HTMLInputElement, { target: { value: '0.0' } })
+    const input = await submitAndGetInput(onSave)
+
+    expect(Object.is(input.targets?.[0]?.kd?.value, 0)).toBe(true)
+    expect(Object.is(input.targets?.[0]?.kd?.value, -0)).toBe(false)
+    expect(input.targets?.[0]?.kd?.provenance).toMatchObject({ type: 'user' })
+    expect(Object.keys(input.targets?.[0]?.kd?.provenance ?? {})).toEqual(['type', 'recordedAt'])
+    // The untouched parameters on the other target keep theirs.
+    expect(Object.is(input.targets?.[1]?.ic50?.value, 0)).toBe(true)
+    expect(input.targets?.[1]?.ic50?.provenance).toEqual(USER_PROVENANCE)
+  })
+
+  it('editing one target neither restamps nor rewrites another target\'s negative zero', async () => {
+    const { onSave } = renderEdit(negZeroFixture())
+    const rows = screen.getAllByTestId('target-row')
+    const secondRowValues = within(rows[1] as HTMLElement).getAllByLabelText('Value *')
+    fireEvent.change(secondRowValues[0] as HTMLInputElement, { target: { value: '13' } })
+    const input = await submitAndGetInput(onSave)
+
+    // NZ-R's -0 and its literature provenance are untouched by the edit.
+    expect(Object.is(input.targets?.[0]?.kd?.value, -0)).toBe(true)
+    expect(input.targets?.[0]?.kd?.provenance).toEqual(LITERATURE)
+    // The actually changed parameter follows the changed-value rules.
+    expect(input.targets?.[1]?.kd?.value).toBe(13)
+    expect(input.targets?.[1]?.kd?.provenance).toMatchObject({ type: 'user' })
+    expect(Object.keys(input.targets?.[1]?.kd?.provenance ?? {})).toEqual(['type', 'recordedAt'])
+    expect(Object.is(input.targets?.[1]?.ic50?.value, 0)).toBe(true)
+  })
+})

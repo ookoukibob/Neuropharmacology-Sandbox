@@ -37,7 +37,14 @@
  *   comma-split, trimmed and de-duplicated (`splitList`), name and notes
  *   are trimmed — and the comma-delimited inputs cannot represent an
  *   individual list entry containing a comma once that list is edited
- *   (documented limitation; no escaping syntax exists).
+ *   (documented limitation; no escaping syntax exists);
+ * - preserved negative-zero parameters (data-integrity audit DI-04): the
+ *   input displays a stored `-0` as "0", so a value draft still reading
+ *   the source's own textual representation submits the STORED number
+ *   verbatim — matched by stable target id + parameter kind, never by
+ *   re-parsing — keeping both the sign and the complete stored
+ *   provenance; any other text is a user change and follows the normal
+ *   parse + stamp rules.
  */
 import { Plus, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -284,16 +291,25 @@ function buildInput(
     const byKind: Partial<Record<ParamKind, ScientificValue>> = {}
     for (const param of row.params) {
       if (param.kind === '') continue
-      const value = Number(param.value)
       const previous = prior?.get(param.kind)
+      // Draft-text identity (audit DI-04): the input shows a stored `-0`
+      // as "0" (`String(-0)`), so the draft can be lossy for the sign.
+      // When the draft still reads exactly the source's own textual
+      // representation — matched by stable target id + parameter kind —
+      // the SOURCE number is emitted verbatim, never its re-parse, so
+      // `-0` survives an untouched edit. Any other text is a user change
+      // and follows the normal parse + provenance rules below.
+      const draftIsSourceText = previous !== undefined && param.value === String(previous.value)
+      const value = draftIsSourceText ? previous.value : Number(param.value)
       byKind[param.kind] = {
         value,
         unit: param.unit,
-        // Preservation rule: same target id + kind, `Object.is`-equal parsed
-        // value and identical unit means the parameter did not change — keep
-        // the complete stored provenance object (all fields, unknown
-        // extension keys included) untouched. Anything else is a normal user
-        // entry; the form never creates or upgrades any other provenance.
+        // Preservation rule: same target id + kind, `Object.is`-equal
+        // emitted value and identical unit means the parameter did not
+        // change — keep the complete stored provenance object (all
+        // fields, unknown extension keys included) untouched. Anything
+        // else is a normal user entry; the form never creates or
+        // upgrades any other provenance.
         provenance:
           previous !== undefined &&
           Object.is(previous.value, value) &&
@@ -379,10 +395,11 @@ export function DrugForm({
    * never by re-parsing it — so a comma-bearing, duplicate-carrying or
    * padded source value survives an untouched submit verbatim (the
    * comma-delimited display is potentially lossy: distinct arrays can
-   * render identically), while a draft the user actually changed — even
-   * one later reverted to its initial text — still follows the
-   * established parse/trim policy. Captured once at mount so form
-   * rerenders cannot drift it; read only inside event handlers.
+   * render identically). A draft the user changed and then reverted back
+   * to its exact initial text again compares equal and is therefore
+   * treated as unchanged: the source value is preserved, not re-parsed.
+   * Captured once at mount so form rerenders cannot drift it; read only
+   * inside event handlers.
    */
   const baseline = useRef(
     drug === undefined

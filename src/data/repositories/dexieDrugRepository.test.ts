@@ -819,3 +819,114 @@ describe('RepositoryError', () => {
     expect(error.message).toBe('gone')
   })
 })
+
+/**
+ * Negative-zero NPSL preservation (data-integrity audit DI-04). The
+ * document text below is a hand-written template literal: the numeric
+ * token `-0` appears verbatim — never built through `JSON.stringify`,
+ * which would canonicalize `-0` to `0` before the fixture reached the
+ * implementation. Sign assertions use `Object.is`. Synthetic data only.
+ */
+const NEG_ZERO_NPSL_TEXT = `{
+  "formatVersion": "1.0.0",
+  "schemaVersion": "1.0.0",
+  "libraryMetadata": {
+    "id": "fixture-library",
+    "name": "Synthetic negative-zero library",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-01T00:00:00.000Z",
+    "dataStatus": "example"
+  },
+  "drugs": [
+    {
+      "id": "negzero-drug-1",
+      "origin": "imported",
+      "identifiers": {
+        "name": "Synthetic Negative-Zero Fixture",
+        "synonyms": [],
+        "description": "Synthetic string containing 0 and -0 tokens."
+      },
+      "tags": [],
+      "targets": [
+        {
+          "id": "negzero-target-1",
+          "name": "NZ-R",
+          "kd": {
+            "value": -0,
+            "unit": "nM",
+            "syntheticExtension": "neg-zero-ext",
+            "provenance": {
+              "type": "literature",
+              "source": "Synthetic fixture source",
+              "citation": "Invented for tests, 2026",
+              "syntheticProvenanceExtension": "neg-zero-prov-ext"
+            }
+          }
+        }
+      ],
+      "pharmacokinetics": {
+        "halfLife": {
+          "value": -0,
+          "unit": "h",
+          "provenance": { "type": "user", "recordedAt": "2026-01-01T00:00:00.000Z" }
+        }
+      }
+    }
+  ]
+}`
+
+describe('DexieDrugRepository — negative-zero NPSL preservation (audit DI-04)', () => {
+  it('imports literal -0 tokens, exports them verbatim and re-imports them exactly', async () => {
+    const dbA = freshDb()
+    const dbB = freshDb()
+    try {
+      const repoA = new DexieDrugRepository(dbA)
+      const report = await repoA.importLibrary(NEG_ZERO_NPSL_TEXT, { mode: 'replace' })
+      expect(report.ok).toBe(true)
+
+      // Raw stored row — before any mapper — holds the exact negative zero
+      // for both scientific values, with the extension fields intact.
+      const raw: unknown = await dbA.drugs.get('negzero-drug-1')
+      expect(Object.is(fieldAt(raw, 'targets', '0', 'kd', 'value'), -0)).toBe(true)
+      expect(Object.is(fieldAt(raw, 'pharmacokinetics', 'halfLife', 'value'), -0)).toBe(true)
+      expect(fieldAt(raw, 'targets', '0', 'kd', 'syntheticExtension')).toBe('neg-zero-ext')
+      expect(fieldAt(raw, 'targets', '0', 'kd', 'provenance', 'syntheticProvenanceExtension')).toBe(
+        'neg-zero-prov-ext',
+      )
+      expect(fieldAt(raw, 'identifiers', 'description')).toBe(
+        'Synthetic string containing 0 and -0 tokens.',
+      )
+
+      // A fresh repository read hydrates the same values and provenance.
+      const drug = await repoA.getDrug('negzero-drug-1')
+      expect(Object.is(drug?.targets[0]?.kd?.value, -0)).toBe(true)
+      expect(Object.is(drug?.pharmacokinetics?.halfLife?.value, -0)).toBe(true)
+      expect(drug?.targets[0]?.kd?.provenance).toEqual(
+        fieldAt(raw, 'targets', '0', 'kd', 'provenance'),
+      )
+
+      // Export emits the numeric token `-0` twice (kd + halfLife) — not
+      // `0`, not the string "-0" — and the look-alike description stays
+      // a quoted string.
+      const text = serializeNpslDocument(toNpslDocument(await repoA.exportLibrary()))
+      expect(text.match(/"value": -0/g) ?? []).toHaveLength(2)
+      expect(text).toContain('"Synthetic string containing 0 and -0 tokens."')
+
+      // Re-importing the exported text preserves the exact values again,
+      // with the parameter's whole provenance unchanged.
+      const repoB = new DexieDrugRepository(dbB)
+      const second = await repoB.importLibrary(text, { mode: 'replace' })
+      expect(second.ok).toBe(true)
+      const reimported = await repoB.getDrug('negzero-drug-1')
+      expect(Object.is(reimported?.targets[0]?.kd?.value, -0)).toBe(true)
+      expect(Object.is(reimported?.pharmacokinetics?.halfLife?.value, -0)).toBe(true)
+      expect(reimported?.targets[0]?.kd?.provenance).toEqual(drug?.targets[0]?.kd?.provenance)
+      const rawB: unknown = await dbB.drugs.get('negzero-drug-1')
+      expect(Object.is(fieldAt(rawB, 'targets', '0', 'kd', 'value'), -0)).toBe(true)
+      expect(Object.is(fieldAt(rawB, 'pharmacokinetics', 'halfLife', 'value'), -0)).toBe(true)
+    } finally {
+      await dbA.delete()
+      await dbB.delete()
+    }
+  })
+})
