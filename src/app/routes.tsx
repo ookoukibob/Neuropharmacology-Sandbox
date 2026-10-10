@@ -1,6 +1,7 @@
 import { Navigate, type RouteObject } from 'react-router-dom'
 import { AppLayout } from './layout/AppLayout'
 import { CalculatorPage } from './pages/CalculatorPage'
+import { DataSourcesPage } from './pages/DataSourcesPage'
 import { DrugDetailPage } from './pages/DrugDetailPage'
 import { DrugLibraryPage } from './pages/DrugLibraryPage'
 import { DrugNewPage } from './pages/DrugNewPage'
@@ -23,6 +24,7 @@ export const routes: RouteObject[] = [
       { path: 'library/new', element: <DrugNewPage /> },
       { path: 'library/:drugId', element: <DrugDetailPage /> },
       { path: 'calculator', element: <CalculatorPage /> },
+      { path: 'data-sources', element: <DataSourcesPage /> },
       { path: 'import-export', element: <ImportExportPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: '*', element: <NotFoundPage /> },

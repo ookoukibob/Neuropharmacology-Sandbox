@@ -1,4 +1,4 @@
-import { Calculator, Library, ArrowLeftRight, Settings } from 'lucide-react'
+import { Calculator, Database, Library, ArrowLeftRight, Settings } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -14,6 +14,7 @@ interface NavItem {
 const NAV_ITEMS: readonly NavItem[] = [
   { to: '/library', label: 'Drug Library', icon: Library },
   { to: '/calculator', label: 'Calculator', icon: Calculator },
+  { to: '/data-sources', label: 'Data Sources', icon: Database },
   { to: '/import-export', label: 'Import / Export', icon: ArrowLeftRight },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
@@ -23,6 +24,7 @@ function titleForPath(pathname: string): string {
   if (pathname === '/library/new') return 'New Drug Record'
   if (pathname === '/library' || pathname === '/') return 'Drug Library'
   if (pathname === '/calculator') return 'Calculator'
+  if (pathname === '/data-sources') return 'Data Sources'
   if (pathname === '/import-export') return 'Import / Export'
   if (pathname === '/settings') return 'Settings'
   if (/^\/library\/[^/]+$/.test(pathname)) return 'Drug Detail'

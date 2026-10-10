@@ -42,9 +42,12 @@ import type {
 import { drugSchema } from '../schemas/npsl'
 
 /**
- * Record-shape version written by this build. Aligned with the
- * `SandboxDatabase` schema version (v2) so records and indexes describe the
- * same contract; the 1 -> 2 upgrade backfills it on legacy records.
+ * Record-shape version written by this build for drug records. The drug
+ * record contract has not changed since schema v2, so this stays at 2 and
+ * the 1 -> 2 upgrade keeps backfilling it on legacy records; the Dexie
+ * database schema has since gained purely additive source-data tables
+ * (see database.ts v3), which are versioned by the database schema
+ * rather than by this field.
  */
 export const PERSISTENCE_VERSION = 2
 
@@ -112,6 +115,7 @@ const PROVENANCE_KEYS = new Set([
   'doi',
   'url',
   'accessedAt',
+  'observationId',
   'recordedAt',
   'model',
   'method',

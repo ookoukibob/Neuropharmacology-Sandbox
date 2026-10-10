@@ -56,6 +56,8 @@ export const literatureProvenanceSchema = z.looseObject({
   doi: z.string().min(1).optional(),
   url: z.url().optional(),
   accessedAt: isoDateTime.optional(),
+  /** Explicit Layer B → Layer C link: the stored observation this value came from. */
+  observationId: z.string().min(1).optional(),
   notes: z.string().optional(),
 })
 

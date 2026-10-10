@@ -1,12 +1,18 @@
 /**
  * Schema migration demo (ADR-14): a database written by the v1 build is
- * upgraded to v2 in place — scientific data survives byte-for-byte,
- * unknown (future) fields are never destroyed, only bookkeeping is
- * backfilled, and the new indexes become usable.
+ * upgraded in place — scientific data survives byte-for-byte, unknown
+ * (future) fields are never destroyed, only bookkeeping is backfilled,
+ * and the newer indexes/tables become usable. Two chains are covered:
  *
- * fake-indexeddb provides the storage; the legacy database is declared here
- * exactly as the v1 build declared it (a second version() in this file would
- * not exercise Dexie's real upgrade path).
+ * - v1 → v2 → v3 (the historical path): bookkeeping backfill runs, then
+ *   the additive v3 schema adds the source-data tables;
+ * - v2 → v3 (what an existing install actually performs): drugs and meta
+ *   are untouched, the new `compounds`/`observations` tables open empty,
+ *   and startup never seeds them.
+ *
+ * fake-indexeddb provides the storage; the legacy databases are declared
+ * here exactly as the old builds declared them (a second version() in
+ * this file would not exercise Dexie's real upgrade path).
  */
 import 'fake-indexeddb/auto'
 import Dexie, { type EntityTable } from 'dexie'
@@ -32,20 +38,35 @@ class LegacyDatabaseV1 extends Dexie {
   }
 }
 
+/** The immediately previous build's schema, declared verbatim. */
+class LegacyDatabaseV2 extends Dexie {
+  drugs!: EntityTable<Record<string, unknown>, 'id'>
+  meta!: EntityTable<Record<string, unknown>, 'id'>
+
+  constructor(name: string) {
+    super(name)
+    this.version(1).stores({ drugs: 'id', meta: 'id' })
+    this.version(2).stores({ drugs: 'id, origin, updatedAt', meta: 'id' })
+  }
+}
+
 describe('SandboxDatabase — fresh database', () => {
-  it('opens empty at the current schema version', async () => {
+  it('opens empty at the current schema version, with empty source tables', async () => {
     const db = new SandboxDatabase(freshName())
     try {
-      expect(db.verno).toBe(2)
+      expect(db.verno).toBe(3)
       expect(await db.drugs.count()).toBe(0)
       expect(await db.meta.count()).toBe(0)
+      // The on-demand source tables exist but are never seeded at startup.
+      expect(await db.compounds.count()).toBe(0)
+      expect(await db.observations.count()).toBe(0)
     } finally {
       await db.delete()
     }
   })
 })
 
-describe('SandboxDatabase — v1 → v2 migration', () => {
+describe('SandboxDatabase — v1 → v2 → v3 migration', () => {
   it('backfills bookkeeping only; scientific and unknown fields survive verbatim', async () => {
     const name = freshName()
 
@@ -75,10 +96,11 @@ describe('SandboxDatabase — v1 → v2 migration', () => {
     await legacy.meta.put({ id: 'legacy-library', name: 'Legacy library' })
     legacy.close()
 
-    // 2. Open with the current build — Dexie runs the version(2) upgrade.
+    // 2. Open with the current build — Dexie runs the version(2) and
+    //    version(3) upgrades.
     const db = new SandboxDatabase(name)
     try {
-      expect(db.verno).toBe(2)
+      expect(db.verno).toBe(3)
 
       // Bookkeeping was backfilled…
       const plain = await db.drugs.get('fixture-drug-1')
@@ -141,6 +163,82 @@ describe('SandboxDatabase — v1 → v2 migration', () => {
       expect(await second.drugs.get('fixture-drug-1')).toEqual(afterUpgrade)
     } finally {
       await second.delete()
+    }
+  })
+})
+
+describe('SandboxDatabase — v2 → v3 migration', () => {
+  it('adds empty source tables without touching stored data, and never seeds them', async () => {
+    const name = freshName()
+
+    // A v2-era database with a real drug record and library metadata.
+    const legacy = new LegacyDatabaseV2(name)
+    const legacyDrug = { ...toRecord(syntheticDrug()), futureField: { keep: 'me' } }
+    await legacy.drugs.put(legacyDrug)
+    await legacy.meta.put({ id: 'v2-library', name: 'V2 library' })
+    legacy.close()
+
+    const db = new SandboxDatabase(name)
+    try {
+      expect(db.verno).toBe(3)
+
+      // Existing data is untouched — record shape, bookkeeping and the
+      // unknown future field all survive byte-for-byte.
+      const upgraded = await db.drugs.get('fixture-drug-1')
+      expect(upgraded).toEqual(legacyDrug)
+      expect(fromRecord(upgraded).ok).toBe(true)
+      const meta = await db.meta.get('v2-library')
+      expect(meta?.name).toBe('V2 library')
+
+      // The new tables are present and empty: opening an existing
+      // database never creates, fetches or seeds source records.
+      expect(await db.compounds.count()).toBe(0)
+      expect(await db.observations.count()).toBe(0)
+
+      // …and they are immediately usable (id + compoundId indexes live).
+      const compound = {
+        id: 'chembl:CHEMBL99990001',
+        source: 'chembl',
+        sourceId: 'CHEMBL99990001',
+        synonyms: [],
+        identifiers: { chemblId: 'CHEMBL99990001' },
+        provenance: {
+          source: 'chembl',
+          sourceName: 'ChEMBL',
+          recordId: 'CHEMBL99990001',
+          url: 'https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL99990001',
+          retrievedAt: FIXTURE_TIMESTAMP,
+        },
+        createdAt: FIXTURE_TIMESTAMP,
+        updatedAt: FIXTURE_TIMESTAMP,
+      }
+      await db.compounds.put(compound)
+      const observation = {
+        id: 'chembl:99000001',
+        compoundId: 'chembl:CHEMBL99990001',
+        compoundSourceId: 'CHEMBL99990001',
+        target: {},
+        endpoint: 'IC50',
+        value: 3.5,
+        unit: 'nM',
+        qualifier: '=' as const,
+        provenance: {
+          source: 'chembl',
+          sourceName: 'ChEMBL',
+          recordId: '99000001',
+          url: 'https://www.ebi.ac.uk/chembl/api/data/activity.json?activity_id=99000001',
+          retrievedAt: FIXTURE_TIMESTAMP,
+        },
+        createdAt: FIXTURE_TIMESTAMP,
+        updatedAt: FIXTURE_TIMESTAMP,
+      }
+      await db.observations.put(observation)
+      expect(
+        await db.observations.where('compoundId').equals('chembl:CHEMBL99990001').count(),
+      ).toBe(1)
+      expect(await db.compounds.get('chembl:CHEMBL99990001')).toEqual(compound)
+    } finally {
+      await db.delete()
     }
   })
 })

@@ -7,6 +7,8 @@
  */
 import type { Drug } from '../domain/drug/drug'
 import type { DrugLibrary, LibraryMetadata } from '../domain/library/library'
+import type { Compound } from '../domain/sources/compound'
+import type { ExperimentalObservation } from '../domain/sources/observation'
 
 export const FIXTURE_NOTE = 'Synthetic test fixture — not pharmacological information.'
 
@@ -107,4 +109,67 @@ export function syntheticNpslText(
 
 export function syntheticLibrary(drugs: readonly Drug[]): DrugLibrary {
   return { metadata: syntheticMetadata(), drugs }
+}
+
+/**
+ * A fully-populated, deterministic Layer A record (compound identity) for
+ * source-data repository/store tests. Ids and attribution point at the
+ * synthetic fixture ids — no real compound.
+ */
+export function syntheticCompound(overrides: Partial<Compound> = {}): Compound {
+  const base: Compound = {
+    id: 'chembl:CHEMBL99990001',
+    source: 'chembl',
+    sourceId: 'CHEMBL99990001',
+    name: 'Synthetic Fixture Compound',
+    synonyms: ['SFC-1'],
+    identifiers: { chemblId: 'CHEMBL99990001', inchiKey: 'FIXTUREKEYSXYZ-UHFFFAOYSA-N' },
+    provenance: {
+      source: 'chembl',
+      sourceName: 'ChEMBL',
+      recordId: 'CHEMBL99990001',
+      url: 'https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL99990001',
+      retrievedAt: FIXTURE_TIMESTAMP,
+      licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+      licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
+    },
+    createdAt: FIXTURE_TIMESTAMP,
+    updatedAt: FIXTURE_TIMESTAMP,
+  }
+  return { ...base, ...overrides }
+}
+
+/** A deterministic Layer B record (one measurement) for source-data tests. */
+export function syntheticObservation(
+  overrides: Partial<ExperimentalObservation> = {},
+): ExperimentalObservation {
+  const base: ExperimentalObservation = {
+    id: 'chembl:99000001',
+    compoundId: 'chembl:CHEMBL99990001',
+    compoundSourceId: 'CHEMBL99990001',
+    compoundName: 'Synthetic Fixture Compound',
+    target: {
+      name: 'Synthetic Target A',
+      sourceTargetId: 'CHEMBL99991001',
+      organism: 'Homo sapiens',
+    },
+    endpoint: 'IC50',
+    parameterKind: 'ic50',
+    value: 3.5,
+    unit: 'nM',
+    qualifier: '=',
+    species: 'Homo sapiens',
+    provenance: {
+      source: 'chembl',
+      sourceName: 'ChEMBL',
+      recordId: '99000001',
+      url: 'https://www.ebi.ac.uk/chembl/api/data/activity.json?activity_id=99000001',
+      retrievedAt: FIXTURE_TIMESTAMP,
+      licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+      licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
+    },
+    createdAt: FIXTURE_TIMESTAMP,
+    updatedAt: FIXTURE_TIMESTAMP,
+  }
+  return { ...base, ...overrides }
 }

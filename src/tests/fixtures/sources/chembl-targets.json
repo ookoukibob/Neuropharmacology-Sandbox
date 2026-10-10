@@ -1,0 +1,12 @@
+{
+  "page_meta": { "limit": 8, "next": null, "offset": 0, "previous": null, "total_count": 1 },
+  "targets": [
+    {
+      "target_chembl_id": "CHEMBL99991001",
+      "pref_name": "Synthetic Target A",
+      "organism": "Homo sapiens",
+      "target_type": "SINGLE PROTEIN",
+      "tax_id": 9606
+    }
+  ]
+}

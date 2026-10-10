@@ -37,6 +37,13 @@ export interface LiteratureProvenance {
   readonly url?: string
   /** When the source was last consulted (ISO 8601). */
   readonly accessedAt?: IsoDateTime
+  /**
+   * Reference to the stored experimental observation (Layer B) this value
+   * was taken from — the explicit Layer B → Layer C link. Set only when
+   * the user applied a specific stored observation to this parameter;
+   * absent for hand-entered or legacy literature values.
+   */
+  readonly observationId?: string
   readonly notes?: string
 }
 

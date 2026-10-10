@@ -5,11 +5,13 @@
  *
  * This is the one React-side module that reaches into `src/data/db` —
  * features and views depend on the store, which depends on the repository
- * interface, never on Dexie itself.
+ * interface, never on Dexie itself. The database instance is exported so
+ * sibling composition roots (data sources) share ONE connection.
  */
 import { SandboxDatabase } from '@/data/db/database'
 import { DexieDrugRepository } from '@/data/repositories/dexieDrugRepository'
 import { createLibraryStore } from '@/features/drug-library/store'
 
-export const libraryRepository = new DexieDrugRepository(new SandboxDatabase())
+export const libraryDatabase = new SandboxDatabase()
+export const libraryRepository = new DexieDrugRepository(libraryDatabase)
 export const useLibraryStore = createLibraryStore(libraryRepository)

@@ -4,6 +4,7 @@
 // though the runtime ESM build does export a default.
 import { AxeBuilder } from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
+import { mockChEMBL } from './sourceMocks.js'
 
 /**
  * Automated accessibility scans (phase 6).
@@ -115,6 +116,39 @@ test('a11y: the calculator passes the axe scan with input, PK mode and result st
   await page.getByTestId('calculate-btn').click()
   await expect(page.getByTestId('result-panel')).toBeVisible()
   await scan(page, 'calculator (with result)')
+})
+
+test('a11y: the data sources page passes the axe scan in idle, results and apply states', async ({
+  page,
+}) => {
+  // Idle first, WITHOUT any route: the page must render its honest empty
+  // state with no network at all (nothing is fetched on load).
+  await page.goto('/data-sources')
+  await expect(page.getByTestId('data-sources-view')).toBeVisible()
+  await expect(page.getByTestId('stored-status')).toContainText('0 compound identity records')
+  await scan(page, 'data sources (idle, nothing fetched)')
+
+  // The populated states are scanned against the mocked ChEMBL payloads.
+  await mockChEMBL(page)
+  await page.getByTestId('source-select').selectOption('chembl')
+  await page.getByTestId('scope-targets').click()
+  await page.getByTestId('query-input').fill('synthetic target')
+  await page.getByTestId('search-button').click()
+  await expect(page.getByTestId('target-result')).toBeVisible()
+  await page.getByTestId('target-select-CHEMBL99991001').click()
+  await page.getByTestId('fetch-observations-button').click()
+  await expect(page.getByTestId('observation-row').first()).toBeVisible()
+  await scan(page, 'data sources (target results + measurements)')
+
+  // Import one record, then scan the stored panel and the apply form.
+  await page.getByTestId('observation-select-chembl:99000001').check()
+  await page.getByTestId('confirm-import-button').click()
+  await expect(page.getByTestId('import-report')).toBeVisible()
+  await scan(page, 'data sources (import report)')
+
+  await page.getByTestId('apply-to-parameter-chembl:99000001').click()
+  await expect(page.getByTestId('apply-card')).toBeVisible()
+  await scan(page, 'data sources (apply card)')
 })
 
 test('a11y: import mapping, import preview and the export view pass the axe scan', async ({

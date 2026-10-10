@@ -1,0 +1,27 @@
+{
+  "InformationList": {
+    "Information": [
+      {
+        "CID": 90000001,
+        "Synonym": [
+          "Synthetic Fixture Compound",
+          "SFC-1",
+          "Synthetic Fixture Compound",
+          "Fixture synonym 3",
+          "Fixture synonym 4",
+          "Fixture synonym 5",
+          "Fixture synonym 6",
+          "Fixture synonym 7",
+          "Fixture synonym 8",
+          "Fixture synonym 9",
+          "Fixture synonym 10",
+          "Fixture synonym 11"
+        ]
+      },
+      {
+        "CID": 90000002,
+        "Synonym": ["Synthetic Fixture Compound B"]
+      }
+    ]
+  }
+}

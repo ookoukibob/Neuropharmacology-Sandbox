@@ -1,0 +1,19 @@
+{
+  "PropertyTable": {
+    "Properties": [
+      {
+        "CID": 90000001,
+        "Title": "Synthetic Fixture Compound",
+        "IUPACName": "synthetic fixture compound",
+        "MolecularFormula": "C12H14N2O",
+        "MolecularWeight": "202.25",
+        "ConnectivitySMILES": "CCN(CC)C(=O)C1=CC=CC=C1NC1=CC=CC=C1",
+        "InChIKey": "FIXTUREKEYSXYZ-UHFFFAOYSA-N"
+      },
+      {
+        "CID": 90000002,
+        "Title": "Synthetic Fixture Compound B"
+      }
+    ]
+  }
+}

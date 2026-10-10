@@ -318,7 +318,7 @@ test('responsive: navigation and core forms stay operable at a narrow viewport',
 }) => {
   await page.setViewportSize({ width: 375, height: 667 })
 
-  for (const path of ['/library', '/library/new', '/calculator', '/import-export']) {
+  for (const path of ['/library', '/library/new', '/calculator', '/data-sources', '/import-export']) {
     await page.goto(path)
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible()
 
@@ -332,7 +332,7 @@ test('responsive: navigation and core forms stay operable at a narrow viewport',
     )
 
     // Every primary navigation entry is still reachable and visible.
-    for (const label of ['Drug Library', 'Calculator', 'Import / Export', 'Settings']) {
+    for (const label of ['Drug Library', 'Calculator', 'Data Sources', 'Import / Export', 'Settings']) {
       await expect(
         page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: label }),
       ).toBeVisible()
