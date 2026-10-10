@@ -444,6 +444,7 @@ device-local presentation preferences — see §4.7.
 | 13 | Data integrity: NPSL import rejects duplicate `targets[].id` within one drug — DI-02 remediation (per-drug blocking `DUPLICATE_ID` at the existing semantic-validation boundary, re-run inside the import transaction so a rejected document writes nothing); rejection, scope, schema-authority and no-write regression tests; no schema, format or CSV change | 11 | done |
 | 14 | Data integrity: preserve untouched list/text fields through drug edits — DI-03 remediation (mount-time baseline in `DrugForm`; a draft still at its baseline submits the stored value verbatim, only actually-changed fields are parsed/trimmed); form-level and real-repository/raw-row regression tests; comma-delimited edit limitation documented; no widget, schema or format change | 11 | done |
 | 15 | Data integrity: preserve negative zero across NPSL round trips and unrelated edits — DI-04 remediation by **exact preservation** (the shared JSON serializer emits the numeric token `-0` via a collision-proof placeholder; the form's draft-text identity rule keeps untouched `-0` values and their complete provenance); serializer, repository, form and raw-row regression tests; contract documented in `npsl-format.md`; no sidecar, version bump, schema or format change | 11 | done |
+| 16 | Data integrity: close audit coverage gaps GAP-1 and GAP-2 with committed regression tests — unknown target extensions under targets-replacing updates (stable-identity reattachment plus removal/new-id non-transfer boundaries, repository and real form path), pharmacokinetics values/units/provenance under unrelated edits (raw-row + fresh-read deep equality), and the DI-04 placeholder collision-branch test; test-only, no production change | 11 | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full
@@ -543,6 +544,15 @@ supplied by data.
       at serializer, repository (literal-token import/export/re-import),
       form and raw-IndexedDB levels; NaN/±Infinity stay rejected, no
       ±0 equivalence, no sidecar, no format version change.
+- [x] GAP-1/GAP-2 regression coverage (phase 16, audit S5): unknown
+      target extension fields survive targets-replacing updates matched
+      by stable id — import baseline, reordered same-id replacement and
+      removal/new-id non-transfer asserted on raw rows at repository and
+      form level; the whole pharmacokinetics object (values, units,
+      complete provenance) deep-equals its fixture in the raw row and a
+      fresh read after an unrelated edit; the `-0` placeholder's
+      collision branch exercised with marker-like source data — all
+      test-only, no production change.
 - [x] No invented pharmacological data: fixtures are synthetic and labeled
       as such; the first run is empty.
 - [x] Extensive tests (mapper, migration, import pipeline, repository,

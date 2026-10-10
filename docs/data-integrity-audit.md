@@ -58,7 +58,9 @@ below names the evidence actually examined.
 **Confirmed findings: 4** — 0 Critical · **2 High** · **1 Medium** · **1 Low**.
 Of these, **4 are remediated (DI-01 in Phase 12, DI-02 in Phase 13, DI-03 in Phase 14, DI-04 in Phase 15)**;
 **none remain open**.
-**Coverage gaps: 4** (behavior plausibly correct, evidence inadequate).
+**Coverage gaps: 4** (behavior plausibly correct, evidence inadequate) —
+**2 closed**: GAP-1 and GAP-2 gained committed regression coverage in
+Phase 16 (no production change was needed); **2 remain**: GAP-3, GAP-4.
 **Not verified: 3** (environment/asset blockers).
 
 | ID | Severity | Confidence | One-line summary |
@@ -91,7 +93,7 @@ claims. Verdict references point to §4 (matrix), §5 (findings), §6 (gaps).
 | # | Boundary (code path) | What crosses | Key contract | Verdict |
 | --- | --- | --- | --- | --- |
 | 1 | Zod parse → domain: `records.ts` `fromRecord` (`records.ts:287`) over `npsl.ts` schemas | Stored raw row → `Drug`; all schemas are `z.looseObject` (`npsl.ts:14-31`) | Unknown keys kept at every level; invalid → quarantine, never repair | Pass (A2, G1) |
-| 2 | Domain → stored row: `toRecord` (`records.ts:238`) + `toStoredRecord` (`records.ts:326`) + `preserveUnknownFields` (`records.ts:177`) | Recognized fields from domain; unknown fields copied from incoming drug + existing raw row (targets matched by stable id) | "A key in the contract is governed by the domain value; a key outside the contract is copied forward" (`records.ts:14-18`) | Pass at mapper level (A1); **Gap** for targets-replacing updates (GAP-1); **Finding** at the form boundary for contract keys (DI-01, remediated in Phase 12) |
+| 2 | Domain → stored row: `toRecord` (`records.ts:238`) + `toStoredRecord` (`records.ts:326`) + `preserveUnknownFields` (`records.ts:177`) | Recognized fields from domain; unknown fields copied from incoming drug + existing raw row (targets matched by stable id) | "A key in the contract is governed by the domain value; a key outside the contract is copied forward" (`records.ts:14-18`) | Pass at mapper level (A1); targets-replacing coverage committed (GAP-1 → **Phase 16**); **Finding** at the form boundary for contract keys (DI-01, remediated in Phase 12) |
 | 3 | `DrugForm.buildInput` → `DrugChanges` (`DrugForm.tsx:246-306`, submit arg `DrugForm.tsx:407`) | name/synonyms/tags/notes/params/provenance/metadata → partial update object | 9A rule (`provenance.md:48-54`); Phase-10 metadata rule (`DrugForm.tsx:283-292`) | Pass (C1, B3); **Finding DI-01** (identifier fields) — **remediated in Phase 12**; **Finding DI-03** (list/text normalization) — **remediated in Phase 14** (mount-time baseline; untouched drafts submit source values verbatim) |
 | 4 | `applyChanges` (`dexieDrugRepository.ts:93-106`) | Partial update over re-read current row inside transaction | Documented: "absent keys keep their value; structures replaced wholesale when present" (`repository.ts:67-72`) | Pass as a repository contract; only production caller is `DrugDetailView.tsx:109` |
 | 5 | NPSL file → validated drugs: `parseNpsl` + `validateNpslFile` (`importPipeline.ts:247-310`) | Envelope, schema, semantic checks, warnings | `validation.md` §3–§4: duplicate drug ids AND duplicate `targets[].id` per drug are blocking | **Finding DI-02 → remediated (Phase 13)**: per-drug target-id check added to `validateNpslFile` |
@@ -122,10 +124,10 @@ code/reproduction evidence; **Not verified** = blocker stated.
 | A2 | Zod schema strictness/loose behavior (`npsl.ts`) | Pass | Full read: every object is `z.looseObject`; non-finite rejected (`records.test.ts:89`); wrong enum rejected (`records.test.ts:73`) |
 | A3 | Recognized `DrugIdentifiers` fields across the **form edit** path | **Finding DI-01 → remediated (Phase 12)** | `DrugForm.tsx:248,407` builds `{name, synonyms}` only; `dexieDrugRepository.ts:99` replaces wholesale; `IDENTIFIER_KEYS` (`records.ts:91`) excludes them from copy-forward; repro `R1`. Fix: `buildInput` reattaches both fields from the stored record; regression tests in `views.test.tsx` (`DrugForm — identifier metadata preservation on edit`) and `DrugForm.persistence.test.tsx` (raw-row assertion) |
 | A4 | `assignTargetIds` / `createDrug` reconstruction (`dexieDrugRepository.ts:82-89`) | Pass | Spread preserves all fields; id kept when present, `newId()` when empty; `TargetInput` widens only `id` |
-| A5 | `applyChanges` partial-update semantics (`:93-106`) | Pass (contract) | Documented `repository.ts:67-72`; `tags`/`notes`/`origin`/`createdAt`/`persistenceVersion` verified intact on edit (repro `R1` raw-row assertion covered them); `pharmacokinetics` key absent from form input → untouched (code `:102`, repro `R6` pass) → committed-test gap GAP-2 |
+| A5 | `applyChanges` partial-update semantics (`:93-106`) | Pass (contract) | Documented `repository.ts:67-72`; `tags`/`notes`/`origin`/`createdAt`/`persistenceVersion` verified intact on edit (repro `R1` raw-row assertion covered them); `pharmacokinetics` key absent from form input → untouched (code `:102`, repro `R6` pass) → GAP-2 closed with a committed PK round-trip test (Phase 16) |
 | A6 | Migration hook (`database.ts:33-43`) | Pass | Hook adds only two bookkeeping keys via `modify`; `database.test.ts` migration test; limitation: fixture data only |
 | A7 | Library-metadata mapping (`resolveLibraryMetadata`, `touchLibrary:413-419`) | Pass | `touchLibrary` spreads current row; metadata extensions carried in `dexieDrugRepository.test.ts:509` (`metadataExtras`) |
-| A8 | Unknown-field survival under a **targets-replacing** update (form path) | **Gap GAP-1** | Existing test only updates `{notes}` (`dexieDrugRepository.test.ts:609-621`), so `changes.targets` is never supplied; local experiment `R5` **passed** (target + provenance extensions survive a form-style rewrite) — implementation correct today, no committed regression test |
+| A8 | Unknown-field survival under a **targets-replacing** update (form path) | **Resolved (Phase 16)** — committed regression coverage, no production change needed | Repository: `dexieDrugRepository.test.ts` GAP-1 describe (import baseline, reordered same-id replacement, removal/new-id non-transfer); form: `DrugForm.persistence.test.tsx` GAP-1 test (real detail → edit → save, `changes.targets` supplied wholesale as the form always does). Both fail when stable-id matching in `preserveUnknownFields` is deliberately broken; `R5` local experiment reproduced in committed form |
 
 ### B. Drug create, edit, delete workflows
 
@@ -136,7 +138,7 @@ code/reproduction evidence; **Not verified** = blocker stated.
 | B3 | Target add/remove/rename, stable identity, ID assignment | Pass | Phase 10 suite `views.test.tsx:636-` (8 tests), `DrugForm.persistence.test.tsx` (2), E2E `e2e/library.spec.ts:197`; removal/position-shift and remove-recreate covered |
 | B4 | Parameter add/remove, unit change, kind change | Pass | `views.test.tsx:231` (unit/dimension guards), `:394` (9A provenance describe); kind-substitution impossible by construction (separate named fields, `drug.ts:39-58`) |
 | B5 | Read-only/origin gating | Pass | `DrugDetailView.tsx:116,226`; only `origin === 'user'` editable; `updateDrug` has exactly one production caller (traced) |
-| B6 | Pharmacokinetics preservation on unrelated edit | **Gap GAP-2** | Code `dexieDrugRepository.ts:102` (key-absent → untouched); no committed assertion on PK *values* (only PK extension via `expectDrugExtensions`, `dexieDrugRepository.test.ts:502`); local experiment `R6` **passed** |
+| B6 | Pharmacokinetics preservation on unrelated edit | **Resolved (Phase 16)** — committed regression coverage, no production change needed | Code `dexieDrugRepository.ts:102` (key-absent → untouched); `DrugForm.persistence.test.tsx` GAP-2 test deep-equals the whole stored `pharmacokinetics` object (values, units, complete provenance incl. unknown extension key) against the fixture in the raw row and in a fresh repository read after a form-driven rename; fails if PK is reset or rebuilt (`applyChanges` break verified); `R6` local experiment reproduced in committed form |
 | B7 | Delete flow | Pass | `store.test.ts:164,186`; E2E `e2e/library.spec.ts:63` |
 | B8 | Repository `targets` replacement semantics | Pass | `applyChanges:101` + `assignTargetIds`; contract documented `repository.ts:71` |
 
@@ -383,7 +385,19 @@ code/reproduction evidence; **Not verified** = blocker stated.
 > pre-fix — plus the notes absent/empty own-property checks that close
 > the DI-03 persistence evidence gap). Pre-fix total: seven regression
 > tests failed with the documented signature (`"value": 0` on export;
-> `+0` + fresh user stamp from the form). The original DI-04
+> `+0` + fresh user stamp from the form). Phase 16 added the
+> collision-branch test: source data containing the initial placeholder
+> marker itself (as an extension value *and* as an extension property
+> key) plus the first extended candidate forces the placeholder loop to
+> advance twice; after `JSON.parse`, every marker-like string/key is
+> byte-identical, both `-0` positions stay `Object.is(-0)`, and
+> unrelated fields are untouched (verified to fail when the loop is
+> capped at a single extension). The ordinary-fixture assertion was
+> corrected from a meaningless raw-NUL check (JSON escaping means a
+> leaked placeholder never appears as a literal NUL) to absence of the
+> marker's distinctive text — fixtures that legitimately contain
+> marker-like data are covered by the collision test instead. The
+> original DI-04
 > description and node-probe evidence below are retained unchanged as
 > the audit trail. **Out of scope (unchanged):** the `.npsb` numeric
 > sidecar (`recovery-backup.md` §6.3 — its `-0` restore precondition
@@ -413,8 +427,8 @@ A missing test alone is not a defect; each gap below states what the code
 
 | ID | Area | What the code does (inspected) | Why it is a gap | Local experiment |
 | --- | --- | --- | --- | --- |
-| **GAP-1** | Unknown extension fields under a **targets-replacing** update (`records.ts:177` + `applyChanges:101`) | `toStoredRecord(existing, next)` re-attaches unknown keys from the raw row, targets matched by stable id | The committed "editing an unrelated known field" test only sends `{notes}` (`dexieDrugRepository.test.ts:609-621`), so the wholesale-replacement path (the form path) has **no** committed extension test | `R5` **passed**: `futureTargetField` and `provenance.futureProvField` survived a form-style `updateDrug` with a rewritten target list |
-| **GAP-2** | `pharmacokinetics` values under unrelated edits (`applyChanges:102`) | Key absent from form input → PK never replaced | No committed assertion on PK *values* (only the PK extension via `expectDrugExtensions`, `dexieDrugRepository.test.ts:502`) | `R6` **passed**: `halfLife` triple intact after a rename through the real form |
+| **GAP-1** | Unknown extension fields under a **targets-replacing** update (`records.ts:177` + `applyChanges:101`) | `toStoredRecord(existing, next)` re-attaches unknown keys from the raw row, targets matched by stable id | **Resolved (Phase 16)** — was: the committed "editing an unrelated known field" test only sent `{notes}`, so the wholesale-replacement path had no committed extension test | `R5` passed locally; now committed: `dexieDrugRepository.test.ts` describe `GAP-1 — unknown target extensions under a targets-replacing update (audit)` (import baseline → reordered same-id replacement + unrelated edit → per-position raw-row asserts; removal + new-id non-transfer boundary with the removed target's fields asserted absent from the whole row) plus the form-path test in `DrugForm.persistence.test.tsx` (real detail → edit → save where the form always submits a replacement `targets` array). Both fail when the stable-id match in `preserveUnknownFields` is deliberately broken |
+| **GAP-2** | `pharmacokinetics` values under unrelated edits (`applyChanges:102`) | Key absent from form input → PK never replaced | **Resolved (Phase 16)** — was: no committed assertion on PK *values* (only the PK extension via `expectDrugExtensions`) | `R6` passed locally; now committed: `DrugForm.persistence.test.tsx` GAP-2 test seeds all four PK parameters (half-life, clearance, Vd, bioavailability) with units and complete provenance incl. an unknown extension key, performs an unrelated rename through the real form, then deep-equals the whole stored `pharmacokinetics` object against the fixture in the raw IndexedDB row and in a fresh repository read; fails if `applyChanges` drops or rebuilds PK |
 | **GAP-3** | Merge import over a colliding **quarantined** row (`dexieDrugRepository.ts:291-292`) | `get(id)` returns the raw quarantined row; `put` overwrites it with the valid incoming record; the row silently leaves the quarantine report | Undisclosed (preview conflict count comes from hydrated valid drugs only, `ImportPanel.tsx:187`), untested, and contract-ambiguous: "incoming wins per id" (`repository.ts:83`) vs the quarantine-preservation intent (`records.ts:12-13`). Not labeled a defect because the documented quarantine contract covers hydration, export, and `.npsb` — this path was never ruled in or out | `R7` **recorded actual behavior**: quarantine list loses the id; valid list gains it; import reports `ok` |
 | **GAP-4** | Multi-tab concurrent writes to the same record | `updateDrug` re-reads inside the transaction and merges only provided changes (`:181-202`), so *different-field* concurrent saves compose; same-field and `targets`-replacing saves are last-writer-wins with no conflict detection | No multi-tab tests; no documented concurrency guarantee; loss scenario plausible but unproven | Not attempted (would require two browsing contexts; jsdom cannot model it credibly) |
 
@@ -475,7 +489,7 @@ item is scoped to be implementable and testable in one focused phase.
 | 2 | **S2 — Phase 13 (done)** | DI-02 | Add per-drug target-id uniqueness to `validateNpslFile` (blocking `DUPLICATE_ID`, zero writes) + rejection and no-misattribution tests | Previously-accepted violating files become un-importable; stored ambiguous libraries are out of scope |
 | 3 | **S3 — Phase 14 (done)** | DI-03 | Round-trip-safe list/text handling in `DrugForm` (preserve untouched arrays verbatim; explicit trim policy for edited fields) | Product decision on delimiter/UX; touches only form code — decision taken: keep the comma-delimited widget unchanged for edited lists and document the embedded-comma limitation; untouched fields bypass the widget round trip entirely |
 | 4 | **S4 — Phase 15 (done)** | DI-04 | Document (and optionally normalize-or-reject) `-0` in the NPSL contract, aligning with the NPSB sidecar story | Decision taken during the phase: **exact preservation** instead of the sketched normalize-or-reject — the serializer emits the numeric `-0` token (collision-proof placeholder) and the form's draft-text identity rule keeps untouched `-0` parameters; no sidecar, no version bump, no user-visible value policy change |
-| 5 | **S5** | GAP-1, GAP-2 | Two committed regression tests only (targets-replacing + extensions; PK values under unrelated edit). No production change | None |
+| 5 | **S5 — Phase 16 (done)** | GAP-1, GAP-2 | Two committed regression tests only (targets-replacing + extensions; PK values under unrelated edit). No production change | Done exactly as scoped: two repository GAP-1 tests (stable-identity reattachment; removal/new-id non-transfer boundary), one form-path GAP-1 test, one GAP-2 PK round-trip test, plus the DI-04 collision-branch test; **no production code changed** |
 | 6 | **S6** | GAP-3 | Decide and document the quarantine-vs-import-collision policy; if protection wins, surface quarantined-id collisions in the preview | Policy decision first; implementation depends on it |
 | 7 | **S7** | GAP-4 | Document multi-tab expectations (field-merge behavior; last-writer-wins for same-field/targets saves) and pin current behavior with a test | Documentation-first; no locking proposed |
 
@@ -488,9 +502,11 @@ was silent normalization of untouched list/text metadata on every save, closed
 by submitting stored source values verbatim for unchanged drafts; S4 was
 undocumented `-0` round-trip loss (value sign, then provenance restamp),
 closed by exact preservation — the serializer's numeric `-0` token plus the
-form's draft-text identity rule. **The highest-priority open items are now
-the coverage gaps: S5 (GAP-1/GAP-2 regression tests)**, then S6 (GAP-3
-policy decision) and S7 (GAP-4 documentation).
+form's draft-text identity rule. **S5 (GAP-1/GAP-2 regression tests) is
+done — Phase 16 — closing both coverage gaps with committed tests and no
+production change.** The highest-priority open items are now S6 (GAP-3
+policy decision) and S7 (GAP-4 documentation), then the unverified paths
+NV-1..3.
 
 **No finding in this audit warrants emergency remediation ahead of the normal
 sequence:** every loss requires a specific trigger (records carrying
