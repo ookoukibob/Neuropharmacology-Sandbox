@@ -783,11 +783,30 @@ conditions:
 - Change only what you intend (for a duplicate-reference row: remove
   exactly the one duplicate entry from that target's
   `sourceReferences` array, keeping the reference you chose) and leave
-  everything else alone — every other row, the `counts`, the entry
-  `key` (it must keep matching the row's own `id`), and any
-  `specialNumbers` sidecar annotations. The archive has no checksum: a
-  structurally valid but careless edit restores just as verbatim as a
-  careful one.
+  everything else alone — every other row, the `counts`, and the entry
+  `key` (it must keep matching the row's own `id`). The archive has no
+  checksum: a structurally valid but careless edit restores just as
+  verbatim as a careful one.
+- **Sidecar rule for array edits (phase 18I.2.1).**
+  `specialNumbers` annotations are RFC 6901 pointers into the raw row
+  (§6.3). If removing an array element cannot affect any pointer —
+  no annotation targets the edited `sourceReferences` array at or after
+  the removed index — leave the sidecar unchanged. If any annotation
+  does, leaving the sidecar unchanged is **not safe**: the unchanged
+  pointer either fails loudly (its target no longer exists or its
+  placeholder no longer matches, so the restore is rejected) or — worse
+  — still validates when the element shifted into its place carries a
+  compatible placeholder, silently reconstructing the special number at
+  the wrong reference while the intended reference keeps the raw
+  placeholder. Preview and structural validation **cannot** detect this
+  case: they check the current pointer and placeholder, they never
+  authenticate the file. In that situation the affected annotations must
+  be removed (when their value belonged to the deleted entry) or
+  reindexed to match the edited JSON, and every remaining pointer and
+  placeholder re-checked. If you cannot confidently make that
+  pointer-level adjustment, **do not perform the manual array edit**:
+  keep the untouched original archive and stop rather than risk a
+  silent semantic change.
 - Verify the edited JSON parses and says what you intend, then read
   the restore preview closely: it shows the counts recorded at export,
   **this build's** classification of every row, and any warnings. An
@@ -795,7 +814,9 @@ conditions:
   non-blocking `RECLASSIFICATION_DIFFERS` warning (the export recorded
   the row as quarantined; this build now reads it). Confirm only when
   the numbers match your expectation — the acknowledgement checkbox
-  gates the full-replacement write.
+  gates the full-replacement write. A clean preview proves the archive
+  is structurally valid and reads as shown; it does **not** prove that
+  an edited file retains the original's semantic meaning.
 - `.npsb` is **not authenticated and not checksummed** (§12/§13):
   restoring a hand-edited archive proves nothing about authenticity or
   integrity — it is your own local data, edited by you, restored
@@ -952,6 +973,7 @@ fixtures); no real pharmacology. The matrix below is implemented by:
 | All meta rows | Restored verbatim; `getLibraryMetadata()` returns the first row by key order; extra rows present in storage |
 | Snapshot consistency | Counts in archive ≡ entries even when a concurrent `put` lands after the snapshot (§7 fallback under test) |
 | Hand-edited repair of a quarantined row (phase 18I.2) | Seed a duplicate-source-reference row (unknown fields at drug, target and reference level) + a valid row + metadata → hydration quarantines it unchanged → export (counts 1 readable / 1 quarantined) → deliberate JSON edit, located via the entry's `key` ≡ row id, retaining one reference and removing the duplicate → a structurally broken edit still rejected (`ARCHIVE_KEY_MISMATCH`, storage untouched) → edited archive previews with `RECLASSIFICATION_DIFFERS` (this build 2 readable / 0 quarantined) and restores verbatim; the repaired row is readable with exactly the retained reference (values + unknown fields intact), unrelated rows and metadata are byte-identical, no row loss or creation, the quarantine report agrees with the restore report, and the untouched original export text still previews as the pre-repair snapshot |
+| Stale-sidecar hazard and adjusted-sidecar repair (phase 18I.2.1) | Same seed family: a duplicate-source-reference row whose LATER references carry special numbers (`Infinity`/`NaN` via unknown fields, plus a plain-`null` placeholder at the same property name on another later reference) + a valid row + metadata → export (sidecar points at the ORIGINAL array indexes) → **Case A (hazard)**: the documented array-element removal performed lazily — duplicate removed, sidecar untouched — the archive is ACCEPTED (the stale pointers still resolve against the shifted elements' compatible `null` placeholders) and the special numbers are reconstructed at the SHIFTED destinations (the deleted duplicate's `NaN` rebounds to the PubChem reference, which loses its own `Infinity`; the PubChem `Infinity` lands on the GuidePHARM reference) while the row still validates as readable and nothing else changes — asserted explicitly as the documented §11 hazard, not a successful repair; **Case B (safe)**: the same archive with a deliberately adjusted sidecar (deleted-owner annotation removed, shifted annotation reindexed, out-of-array annotation preserved) — retained special number reconstructed at the INTENDED reference, duplicate source entry removed, unknown fields survive, unrelated row and metadata byte-identical, repaired record readable |
 
 ### 15.3 Component tests (store + Import/Export view)
 
