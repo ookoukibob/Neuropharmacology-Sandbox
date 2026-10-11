@@ -458,6 +458,245 @@ describe('DexieDrugRepository — recovery preview and restore', () => {
     }
   })
 
+  // Phase 18I.2.1 — shared seed for the sidecar-safety cases: the malformed
+  // row's LATER references carry special numbers (annotated in the `.npsb`
+  // sidecar), plus a valid row and metadata. Synthetic test data only.
+  async function seededSidecarDb() {
+    const db = freshDb()
+    const validRecord = toRecord(syntheticDrug())
+    const retainedReference = {
+      source: 'chembl',
+      sourceName: 'ChEMBL',
+      sourceTargetId: 'CHEMBL99991001',
+      name: 'TEST-R',
+      futureReferenceField: 'kept',
+    }
+    const duplicateReference = {
+      source: 'chembl',
+      sourceName: 'ChEMBL',
+      sourceTargetId: 'CHEMBL99991002',
+      name: 'TEST-R',
+      futureNumberField: Number.NaN,
+    }
+    const shiftedReference = {
+      source: 'pubchem',
+      sourceName: 'PubChem',
+      sourceTargetId: '12345',
+      futureNumberField: Number.POSITIVE_INFINITY,
+    }
+    const laterReference = {
+      source: 'guidepharm',
+      sourceName: 'GuidePHARM',
+      sourceTargetId: 'G-1',
+      // A plain `null` — the SAME JSON placeholder shape an annotated
+      // NaN/±Infinity would serialize to (§6.3): the hazard's enabler.
+      futureNumberField: null,
+    }
+    const base = syntheticDrug({
+      id: 'fixture-drug-sidecar',
+      identifiers: { name: 'Fixture Compound Sidecar', synonyms: [] },
+    })
+    const first = base.targets[0]
+    if (first === undefined) throw new Error('fixture needs a target')
+    // The mapper writes known fields only (unknown reference keys drop on a
+    // create — referenceToRecord/preserveUnknownFields need an existing row),
+    // so `toRecord` maps the known shape and the RAW reference objects —
+    // unknown fields and their special numbers included — are attached at the
+    // storage layer. That stored shape is what the `.npsb` exporter snapshots
+    // and annotates (phase 18I.2.1).
+    const mapped = toRecord({
+      ...base,
+      targets: [{ ...first, sourceReferences: [] }],
+    })
+    const malformedRow = {
+      ...mapped,
+      targets: mapped.targets.map((target, index) =>
+        index === 0
+          ? {
+              ...target,
+              sourceReferences: [
+                retainedReference,
+                duplicateReference,
+                shiftedReference,
+                laterReference,
+              ],
+            }
+          : target,
+      ),
+      futureDrugField: Number.NaN,
+    }
+    const metadataRow = {
+      ...syntheticMetadata({ name: 'Sidecar fixture library' }),
+      futureMetaField: 'kept',
+    }
+    await db.drugs.put(validRecord)
+    await db.drugs.put(malformedRow as never)
+    await db.meta.put(metadataRow)
+    return { db, validRecord, metadataRow }
+  }
+
+  interface SidecarArchiveEntry {
+    key: string
+    value: Record<string, unknown>
+    specialNumbers?: { path: string; kind: string }[]
+  }
+
+  function parseArchiveTree(text: string): {
+    archive: { drugs: SidecarArchiveEntry[] }
+    entry: SidecarArchiveEntry
+  } {
+    const archive = JSON.parse(text) as { drugs: SidecarArchiveEntry[] }
+    const entry = archive.drugs.find((candidate) => candidate.key === 'fixture-drug-sidecar')
+    if (entry === undefined) throw new Error('the archive must carry the malformed row')
+    return { archive, entry }
+  }
+
+  function sidecarReferences(entry: SidecarArchiveEntry): Record<string, unknown>[] {
+    const targets = entry.value['targets'] as Record<string, unknown>[]
+    const target = targets[0]
+    if (target === undefined) throw new Error('the row must carry a target')
+    const references = target['sourceReferences']
+    if (!Array.isArray(references)) throw new Error('the target must carry sourceReferences')
+    return references as Record<string, unknown>[]
+  }
+
+  it('shows the stale-sidecar hazard: an unadjusted pointer rebuilds the number at the shifted destination (18I.2.1)', async () => {
+    const { db, validRecord, metadataRow } = await seededSidecarDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      expect((await repo.getAllDrugs()).quarantine.map((q) => q.id)).toEqual(['fixture-drug-sidecar'])
+
+      const exported = await repo.exportRecoveryArchive()
+      if (!exported.ok) throw new Error(JSON.stringify(exported.issues))
+
+      // The sidecar points at the ORIGINAL array indexes of the stored row:
+      // the duplicate's NaN at index 1, the PubChem Infinity at index 2.
+      const { archive, entry } = parseArchiveTree(exported.text)
+      expect(entry.specialNumbers).toContainEqual({
+        path: '/targets/0/sourceReferences/1/futureNumberField',
+        kind: 'NaN',
+      })
+      expect(entry.specialNumbers).toContainEqual({
+        path: '/targets/0/sourceReferences/2/futureNumberField',
+        kind: 'Infinity',
+      })
+
+      // The documented repair performed LAZILY: the duplicate reference is
+      // removed, the sidecar is left untouched (still naming indexes 1 and 2).
+      sidecarReferences(entry).splice(1, 1)
+      const editedText = JSON.stringify(archive, null, 2)
+
+      // ACTUAL parser behavior: the archive is ACCEPTED. The stale pointers
+      // still resolve — every shifted destination carries a compatible `null`
+      // placeholder at the same property name (§6.3 checks the CURRENT
+      // placeholder, it never authenticates the original file) — and the
+      // special numbers are reconstructed at the SHIFTED destinations. This
+      // is a silent semantic change, NOT a repair: a documented hazard of
+      // hand-edited unsigned archives (docs/recovery-backup.md §11). No
+      // production code guards it, by design.
+      const restored = await repo.restoreRecoveryArchive(editedText)
+      if (!restored.ok) throw new Error(JSON.stringify(restored.issues))
+      expect(restored.report.currentBuild).toEqual({ readable: 2, quarantined: 0 })
+
+      const rawRow = (await db.drugs.get('fixture-drug-sidecar')) as unknown as {
+        readonly futureDrugField: number
+        readonly targets: readonly {
+          readonly sourceReferences: readonly Record<string, unknown>[]
+        }[]
+      }
+      const stored = rawRow.targets[0]?.sourceReferences ?? []
+      expect(stored.map((reference) => reference['sourceTargetId'])).toEqual([
+        'CHEMBL99991001',
+        '12345',
+        'G-1',
+      ])
+      // The PubChem reference (index 1 after the shift) LOST its Infinity and
+      // now carries the DELETED duplicate's NaN: the stale index-1 annotation
+      // rebound to the shifted element because its `null` placeholder happens
+      // to be compatible with the `NaN` kind (§6.3).
+      expect(Object.is(stored[1]?.['futureNumberField'], Number.NaN)).toBe(true)
+      // The GuidePHARM reference (index 2 after the shift) GAINED an Infinity
+      // it never stored: the stale index-2 annotation landed on the element
+      // that shifted into its place.
+      expect(stored[2]?.['futureNumberField']).toBe(Infinity)
+      // The drug-level annotation outside the array is unaffected.
+      expect(Object.is(rawRow.futureDrugField, Number.NaN)).toBe(true)
+      // Nothing catches the corruption: the row validates as readable —
+      // schema, quarantine and hydration all see a structurally sound row.
+      expect((await repo.getAllDrugs()).quarantine).toEqual([])
+      // Unrelated rows and metadata are unchanged; no row loss or creation.
+      expect(await db.drugs.get('fixture-drug-1')).toEqual(validRecord)
+      expect(await db.meta.get('fixture-library')).toEqual(metadataRow)
+      expect(await db.drugs.count()).toBe(2)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('repairs with a deliberately adjusted sidecar — removed, reindexed and preserved annotations (18I.2.1)', async () => {
+    const { db, validRecord, metadataRow } = await seededSidecarDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const exported = await repo.exportRecoveryArchive()
+      if (!exported.ok) throw new Error(JSON.stringify(exported.issues))
+
+      // Same starting archive as the hazard case; only the sidecar handling
+      // differs. 1. Remove the duplicate (the explicit user choice: keep the
+      // first chembl reference).
+      const { archive, entry } = parseArchiveTree(exported.text)
+      sidecarReferences(entry).splice(1, 1)
+      // 2. Adjust the sidecar to the edited structure: an annotation whose
+      //    owner was deleted goes with it; an annotation into the array at or
+      //    after the removed index is reindexed; everything else is preserved.
+      entry.specialNumbers = (entry.specialNumbers ?? []).flatMap((annotation) => {
+        if (annotation.path === '/targets/0/sourceReferences/1/futureNumberField') return []
+        if (annotation.path === '/targets/0/sourceReferences/2/futureNumberField') {
+          return [{ ...annotation, path: '/targets/0/sourceReferences/1/futureNumberField' }]
+        }
+        return [annotation]
+      })
+      const repairedText = JSON.stringify(archive, null, 2)
+
+      // Structural validation plus correct placeholders: accepted. A wrong
+      // adjustment would instead fail loudly (ARCHIVE_ANNOTATION_* codes).
+      const preview = await repo.previewRecoveryArchive(repairedText)
+      if (!preview.ok) throw new Error(JSON.stringify(preview.issues))
+      expect(preview.report.currentBuild).toEqual({ readable: 2, quarantined: 0 })
+
+      const restored = await repo.restoreRecoveryArchive(repairedText)
+      if (!restored.ok) throw new Error(JSON.stringify(restored.issues))
+      expect(restored.report.currentBuild).toEqual({ readable: 2, quarantined: 0 })
+
+      // The duplicate source entry is gone; every pointer resolved to its
+      // intended property: the special number is reconstructed at the
+      // INTENDED (PubChem) reference and nothing else moved.
+      const rawRow = (await db.drugs.get('fixture-drug-sidecar')) as unknown as {
+        readonly futureDrugField: number
+        readonly targets: readonly {
+          readonly sourceReferences: readonly Record<string, unknown>[]
+        }[]
+      }
+      const stored = rawRow.targets[0]?.sourceReferences ?? []
+      expect(stored.map((reference) => reference['source'])).toEqual(['chembl', 'pubchem', 'guidepharm'])
+      expect(stored[1]?.['futureNumberField']).toBe(Infinity)
+      expect(stored[2]?.['futureNumberField']).toBeNull()
+      // The preserved drug-level annotation outside the array still
+      // reconstructs, and unknown fields survive (row-level NaN field and
+      // the reference-level `futureReferenceField`).
+      expect(Object.is(rawRow.futureDrugField, Number.NaN)).toBe(true)
+      expect(stored[0]?.['futureReferenceField']).toBe('kept')
+      const repaired = await repo.getDrug('fixture-drug-sidecar')
+      expect(repaired?.targets[0]?.sourceReferences?.[0]?.sourceTargetId).toBe('CHEMBL99991001')
+      // Unrelated rows and metadata remain unchanged; the record is readable.
+      expect(await db.drugs.get('fixture-drug-1')).toEqual(validRecord)
+      expect(await db.meta.get('fixture-library')).toEqual(metadataRow)
+      expect(await db.drugs.count()).toBe(2)
+      expect((await repo.getAllDrugs()).quarantine).toEqual([])
+    } finally {
+      await db.delete()
+    }
+  })
+
   it('rejects an invalid archive before opening any write transaction', async () => {
     const { db } = await seededDb()
     try {
