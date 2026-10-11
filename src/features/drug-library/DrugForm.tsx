@@ -44,7 +44,14 @@
  *   verbatim — matched by stable target id + parameter kind, never by
  *   re-parsing — keeping both the sign and the complete stored
  *   provenance; any other text is a user change and follows the normal
- *   parse + stamp rules.
+ *   parse + stamp rules;
+ * - stale-write protection (phase 20, audit GAP-4): an edit session
+ *   submits the revision token it mounted from, so a save based on a
+ *   record state another tab has since superseded is rejected atomically
+ *   at the repository (`CONFLICT`) instead of silently overwriting the
+ *   newer record — the draft stays here intact, the failure names the
+ *   conflict, and recovery (review the latest in a new tab, or reload
+ *   and re-enter) is always an explicit user choice.
  */
 import { Plus, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -97,6 +104,37 @@ interface ParamDraft {
 interface FormError {
   readonly message: string
   readonly fieldIds: readonly string[]
+}
+
+/**
+ * What a submit callback reports back (phase 20, audit GAP-4). `ok` — or
+ * no value at all (a callback that only navigates away needs none) — ends
+ * the attempt; a failure keeps the form open with its draft intact and
+ * the form shows it. `conflict: true` marks the typed stale-write
+ * rejection: the record changed elsewhere since this form mounted, the
+ * repository refused the write atomically before anything was modified,
+ * and the draft stays preserved for review-and-reapply — it is never
+ * auto-retried against the newer state.
+ */
+export type SaveOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly conflict: boolean; readonly message: string }
+
+/**
+ * Type guard for a submitted callback's failure value. The prop accepts
+ * `Promise<unknown>` (spies and navigation-only callbacks return no
+ * outcome at all), so only a value that is genuinely shaped like
+ * `SaveOutcome`'s failure arm is treated as one — anything else is the
+ * historical "no outcome" success path.
+ */
+function isFailureOutcome(outcome: unknown): outcome is Extract<SaveOutcome, { ok: false }> {
+  if (typeof outcome !== 'object' || outcome === null) return false
+  const candidate = outcome as { ok?: unknown; conflict?: unknown; message?: unknown }
+  return (
+    candidate.ok === false &&
+    typeof candidate.conflict === 'boolean' &&
+    typeof candidate.message === 'string'
+  )
 }
 
 interface TargetDraft {
@@ -391,7 +429,14 @@ export function DrugForm({
 }: {
   /** Absent = create mode. */
   drug?: Drug
-  onSave: (input: DrugInput) => Promise<unknown>
+  /**
+   * Persist the submitted input. In edit mode it also receives the
+   * revision token this draft is based on (phase 20) — the exact stored
+   * state the form mounted from — and may report a typed failure back
+   * (`SaveOutcome`); an absent/undefined outcome counts as success, so a
+   * callback that only navigates away needs no return value.
+   */
+  onSave: (input: DrugInput, expectedRevision?: number) => Promise<unknown>
   onCancel: () => void
 }) {
   const editing = drug !== undefined
@@ -431,10 +476,32 @@ export function DrugForm({
           },
         },
   )
+  /**
+   * Phase 20 (audit GAP-4): the revision token this edit session's
+   * draft is based on — the record's `Drug.revision` as of mount,
+   * captured with the baseline above and submitted back with the save.
+   * The repository compares it against the stored revision atomically
+   * with the write (ADR-21), so a draft based on a superseded state is
+   * rejected instead of silently overwriting the newer record. It is
+   * deliberately never refreshed after a conflict: re-saving the same
+   * stale draft keeps conflicting until the user reloads the current
+   * record (the form never auto-retries a stale full snapshot).
+   */
+  const expectedRevision = useRef(drug?.revision)
   const [targets, setTargets] = useState<TargetDraft[]>(() =>
     drug !== undefined ? draftsFromDrug(drug) : [],
   )
   const [errors, setErrors] = useState<readonly FormError[]>([])
+  /** In-flight guard: a double submit must never fire two saves. */
+  const [submitting, setSubmitting] = useState(false)
+  /**
+   * The last failed save attempt (phase 20), shown above the buttons
+   * while the draft stays fully intact. `conflict` distinguishes the
+   * stale-write rejection from ordinary persistence failures and brings
+   * its own recovery actions; both kinds stay until dismissed or until
+   * the next submit clears them.
+   */
+  const [saveFailure, setSaveFailure] = useState<Extract<SaveOutcome, { ok: false }> | null>(null)
   // Focus destination after a row is removed: the button that performed
   // the removal disappears together with its row, which would otherwise
   // drop keyboard focus back to the top of the document. The nonce keeps
@@ -501,12 +568,19 @@ export function DrugForm({
   }
 
   async function submit(): Promise<void> {
+    // In-flight guard (phase 20): a double activation (Enter + click,
+    // impatient re-click) must never fire two saves — the second is
+    // dropped while the first is pending.
+    if (submitting) return
     const { errors: validationErrors, cleaned } = validate(name, targets)
     if (validationErrors.length > 0) {
       setErrors(validationErrors)
       return
     }
     setErrors([])
+    // A new attempt supersedes the previous failure display; the draft
+    // itself is never touched by either.
+    setSaveFailure(null)
     // Untouched-field rule (data-integrity audit DI-03): a draft still at
     // its mount-time baseline submits the stored source value verbatim —
     // embedded commas, duplicate entries, edge whitespace and the
@@ -538,7 +612,16 @@ export function DrugForm({
       new Date().toISOString(),
       drug,
     )
-    await onSave(input)
+    setSubmitting(true)
+    try {
+      // The mount-time revision token rides along (create mode: absent —
+      // there is no stored state to be stale against). A typed failure —
+      // the conflict above all — keeps the form open with this draft.
+      const outcome: unknown = await onSave(input, expectedRevision.current)
+      if (isFailureOutcome(outcome)) setSaveFailure(outcome)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -760,9 +843,63 @@ export function DrugForm({
         </Alert>
       )}
 
+      {saveFailure !== null && (
+        <Alert
+          variant="destructive"
+          data-testid={saveFailure.conflict ? 'save-conflict' : 'save-failed'}
+        >
+          <AlertTitle>
+            {saveFailure.conflict ? 'Record changed elsewhere' : 'Save failed'}
+          </AlertTitle>
+          <AlertDescription className="space-y-2">
+            <p>
+              {saveFailure.conflict
+                ? 'Another tab or window saved changes to this record while you were editing, so your save was rejected and nothing was overwritten. Your draft below is unchanged — review the latest record, then re-apply your edits here.'
+                : saveFailure.message}
+            </p>
+            {saveFailure.conflict && (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  data-testid="conflict-open-latest"
+                  // Review without losing the draft: the current record
+                  // opens alongside this form for manual comparison.
+                  onClick={() => window.open(window.location.pathname, '_blank')}
+                >
+                  Open latest record (keeps this draft)
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  data-testid="conflict-reload"
+                  // Explicit recovery by replacement: reloading discards
+                  // this draft — the label says so; nothing discards it
+                  // silently.
+                  onClick={() => window.location.reload()}
+                >
+                  Reload record (discards this draft)
+                </Button>
+              </div>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              data-testid="save-failure-dismiss"
+              onClick={() => setSaveFailure(null)}
+            >
+              {saveFailure.conflict ? 'Keep editing' : 'Dismiss'}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div className="flex gap-2">
-        <Button type="submit" data-testid="save-drug">
-          Save
+        <Button type="submit" data-testid="save-drug" disabled={submitting}>
+          {submitting ? 'Saving…' : 'Save'}
         </Button>
         <Button type="button" variant="outline" onClick={onCancel} data-testid="cancel-drug">
           Cancel

@@ -1,19 +1,28 @@
 import { useNavigate } from 'react-router-dom'
 import { PageHeader } from '@/app/layout/PageHeader'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { useLibraryStore } from '@/app/libraryStore'
-import { DrugForm } from '@/features/drug-library/DrugForm'
+import { DrugForm, type SaveOutcome } from '@/features/drug-library/DrugForm'
 import type { DrugInput } from '@/data/repositories/repository'
 
 /** Create flow: validate in the form, persist via the repository, navigate back. */
 export function DrugNewPage() {
   const navigate = useNavigate()
   const createDrug = useLibraryStore((s) => s.createDrug)
-  const error = useLibraryStore((s) => s.error)
 
-  async function handleSave(input: DrugInput): Promise<void> {
+  async function handleSave(input: DrugInput): Promise<SaveOutcome> {
     const created = await createDrug(input)
-    if (created !== null) navigate(`/library/${created.id}`)
+    if (created !== null) {
+      navigate(`/library/${created.id}`)
+      return { ok: true }
+    }
+    // Create can never conflict (a new id has no stored state to be
+    // stale against); a failure is reported back so the form shows it
+    // above the preserved draft — same recovery shape as an edit save.
+    return {
+      ok: false,
+      conflict: false,
+      message: useLibraryStore.getState().error ?? 'The record could not be saved.',
+    }
   }
 
   return (
@@ -21,12 +30,6 @@ export function DrugNewPage() {
       title="New Drug Record"
       description="Entered values are stored locally with user-entry provenance — no source is ever invented for them."
     >
-      {error !== null && (
-        <Alert variant="destructive" data-testid="create-error">
-          <AlertTitle>Could not save</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
       <DrugForm onCancel={() => navigate('/library')} onSave={handleSave} />
     </PageHeader>
   )

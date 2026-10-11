@@ -1381,3 +1381,124 @@ describe('DrugForm — negative-zero parameter preservation on edit', () => {
     expect(Object.is(input.targets?.[1]?.ic50?.value, 0)).toBe(true)
   })
 })
+
+describe('DrugForm — save outcomes: conflict recovery (phase 20, audit GAP-4)', () => {
+  const DRAFT_NAME = 'My Draft Rename'
+
+  function conflictSaver() {
+    return vi.fn<(input: DrugInput, expectedRevision?: number) => Promise<unknown>>(
+      async () => ({ ok: false, conflict: true, message: 'record changed elsewhere' }),
+    )
+  }
+
+  async function submitEdit(onSave: ReturnType<typeof conflictSaver>): Promise<void> {
+    render(<DrugForm drug={syntheticDrug()} onSave={onSave} onCancel={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('drug-name'), { target: { value: DRAFT_NAME } })
+    fireEvent.click(screen.getByTestId('save-drug'))
+    await screen.findByTestId('save-conflict')
+  }
+
+  it('submits the mount-captured revision token with the edit', async () => {
+    const onSave = vi.fn<(input: DrugInput, expectedRevision?: number) => Promise<unknown>>(
+      async () => ({ ok: true }),
+    )
+    render(
+      <DrugForm drug={{ ...syntheticDrug(), revision: 42 }} onSave={onSave} onCancel={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByTestId('save-drug'))
+    await vi.waitFor(() => expect(onSave.mock.calls).toHaveLength(1))
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject({ identifiers: { name: 'Fixture Compound A' } })
+    // The token is the drug's revision as of mount — the state the draft
+    // was based on, not a value read back at submit time.
+    expect(onSave.mock.calls[0]?.[1]).toBe(42)
+  })
+
+  it('create mode submits no token (there is no stored state to be stale against)', async () => {
+    const onSave = vi.fn<(input: DrugInput, expectedRevision?: number) => Promise<unknown>>(
+      async () => ({ ok: true }),
+    )
+    render(<DrugForm onSave={onSave} onCancel={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('drug-name'), { target: { value: 'New Probe' } })
+    fireEvent.click(screen.getByTestId('save-drug'))
+    await vi.waitFor(() => expect(onSave.mock.calls).toHaveLength(1))
+    expect(onSave.mock.calls[0]?.[1]).toBeUndefined()
+  })
+
+  it('a conflict keeps the form open with the draft intact, names the conflict, and offers recovery', async () => {
+    const onSave = conflictSaver()
+    await submitEdit(onSave)
+
+    // The alert names the conflict distinctly from an ordinary failure…
+    expect(screen.getByTestId('save-conflict')).toHaveTextContent('Record changed elsewhere')
+    expect(screen.queryByTestId('save-failed')).not.toBeInTheDocument()
+    // …the edit session is still open with the user's draft untouched…
+    expect(screen.getByTestId('drug-form')).toBeInTheDocument()
+    expect(screen.queryByTestId('drug-detail')).not.toBeInTheDocument()
+    expect((screen.getByTestId('drug-name') as HTMLInputElement).value).toBe(DRAFT_NAME)
+    // …and both recovery paths are offered: review the latest record
+    // without losing the draft, or reload (explicitly labeled as
+    // discarding it).
+    expect(screen.getByTestId('conflict-open-latest')).toBeInTheDocument()
+    expect(screen.getByTestId('conflict-reload')).toHaveTextContent(/discards this draft/i)
+    // Exactly one save attempt: the form never auto-retries the stale
+    // full-snapshot write.
+    expect(onSave.mock.calls).toHaveLength(1)
+    expect(screen.getByTestId('save-drug')).not.toBeDisabled()
+  })
+
+  it('dismissing the conflict clears only the alert — the draft survives', async () => {
+    const onSave = conflictSaver()
+    await submitEdit(onSave)
+
+    fireEvent.click(screen.getByTestId('save-failure-dismiss'))
+    expect(screen.queryByTestId('save-conflict')).not.toBeInTheDocument()
+    expect(screen.getByTestId('drug-form')).toBeInTheDocument()
+    expect((screen.getByTestId('drug-name') as HTMLInputElement).value).toBe(DRAFT_NAME)
+    // The mount-time token is unchanged too: re-saving the same stale
+    // draft keeps conflicting until the user reloads the record.
+    fireEvent.click(screen.getByTestId('save-drug'))
+    await vi.waitFor(() => expect(onSave.mock.calls).toHaveLength(2))
+    expect(onSave.mock.calls[1]?.[1]).toBe(onSave.mock.calls[0]?.[1])
+  })
+
+  it('an ordinary failure surfaces as save-failed without conflict recovery actions', async () => {
+    const onSave = vi.fn<(input: DrugInput, expectedRevision?: number) => Promise<unknown>>(
+      async () => ({ ok: false, conflict: false, message: 'storage unavailable' }),
+    )
+    render(
+      <DrugForm drug={{ ...syntheticDrug(), revision: 3 }} onSave={onSave} onCancel={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByTestId('save-drug'))
+    const failure = await screen.findByTestId('save-failed')
+    expect(failure).toHaveTextContent('Save failed')
+    expect(failure).toHaveTextContent('storage unavailable')
+    expect(screen.queryByTestId('save-conflict')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('conflict-open-latest')).not.toBeInTheDocument()
+    // The draft and the form stay put for a retry.
+    expect((screen.getByTestId('drug-name') as HTMLInputElement).value).toBe('Fixture Compound A')
+    expect(screen.getByTestId('drug-form')).toBeInTheDocument()
+  })
+
+  it('drops a duplicate submit while a save is in flight', async () => {
+    let release: ((value: unknown) => void) | undefined
+    const onSave = vi.fn<(input: DrugInput, expectedRevision?: number) => Promise<unknown>>(
+      () =>
+        new Promise<unknown>((resolve) => {
+          release = resolve
+        }),
+    )
+    render(<DrugForm drug={syntheticDrug()} onSave={onSave} onCancel={vi.fn()} />)
+    const saveButton = screen.getByTestId('save-drug')
+
+    fireEvent.click(saveButton)
+    // While the first save is pending the button is disabled and a second
+    // activation is dropped — never two saves from one draft.
+    await vi.waitFor(() => expect(saveButton).toBeDisabled())
+    fireEvent.click(saveButton)
+    expect(onSave.mock.calls).toHaveLength(1)
+
+    release?.({ ok: true })
+    await vi.waitFor(() => expect(saveButton).not.toBeDisabled())
+    expect(onSave.mock.calls).toHaveLength(1)
+  })
+})

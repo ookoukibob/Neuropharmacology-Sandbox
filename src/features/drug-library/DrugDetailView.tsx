@@ -105,9 +105,22 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
       <DrugForm
         drug={drug}
         onCancel={() => setEditing(false)}
-        onSave={async (changes) => {
-          const saved = await updateDrug(drug.id, changes)
-          if (saved !== null) setEditing(false)
+        onSave={async (changes, expectedRevision) => {
+          // Phase 20: the form submits the revision token it captured at
+          // mount — the exact stored state its draft is based on. A
+          // conflict keeps edit mode open with the draft intact (the
+          // repository rejected the write, so storage is unchanged) and
+          // the form surfaces it; success closes the form as before.
+          const result = await updateDrug(drug.id, changes, expectedRevision ?? 0)
+          if (result.status === 'ok') {
+            setEditing(false)
+            return { ok: true }
+          }
+          return {
+            ok: false,
+            conflict: result.status === 'conflict',
+            message: result.message,
+          }
         }}
       />
     )

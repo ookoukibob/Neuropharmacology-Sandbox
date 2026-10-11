@@ -170,14 +170,67 @@ describe('createLibraryStore — CRUD refreshes from storage', () => {
       await store.getState().hydrate()
       store.getState().selectDrug(created.id)
 
-      const updated = await store.getState().updateDrug(created.id, { tags: ['edited'] })
-      expect(updated?.tags).toEqual(['edited'])
+      // Phase 20: the store submits the token of the session state the
+      // edit is based on (the hydrated drug's own revision).
+      const base = store.getState().drugs.find((candidate) => candidate.id === created.id)
+      const updated = await store
+        .getState()
+        .updateDrug(created.id, { tags: ['edited'] }, base?.revision ?? 0)
+      expect(updated.status).toBe('ok')
+      if (updated.status !== 'ok') return
+      expect(updated.drug.tags).toEqual(['edited'])
       expect(store.getState().drugs[0]?.tags).toEqual(['edited'])
 
       const removed = await store.getState().deleteDrug(created.id)
       expect(removed).toBe(true)
       expect(store.getState().drugs).toEqual([])
       expect(store.getState().selectedDrugId).toBeNull()
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('reports a stale-token save as a typed conflict without touching the session', async () => {
+    const { db, repo, store } = await makeStore()
+    try {
+      const created = await repo.createDrug({
+        identifiers: { name: 'Fixture Compound Conflict', synonyms: [] },
+        notes: 'original',
+      })
+      await store.getState().hydrate()
+      store.getState().selectDrug(created.id)
+
+      // Another session commits a rename (advancing the revision) after
+      // this session hydrated — exactly a second tab's save.
+      await repo.updateDrug(
+        created.id,
+        { identifiers: { name: 'Renamed Elsewhere', synonyms: [] } },
+        created.revision ?? 0,
+      )
+
+      // The stale save is rejected: typed conflict, distinct from `error`.
+      const result = await store
+        .getState()
+        .updateDrug(created.id, { tags: ['stale-tags'] }, created.revision ?? 0)
+      expect(result.status).toBe('conflict')
+      // The session error banner is untouched (the conflict belongs to the
+      // edit form that owns recovery), and the session keeps its previous
+      // contents — no refresh, no silent adoption of either version.
+      expect(store.getState().error).toBeNull()
+      expect(store.getState().drugs[0]?.identifiers.name).toBe('Fixture Compound Conflict')
+      // Storage kept the OTHER session's rename; the stale tags were
+      // never written anywhere.
+      const stored = await repo.getDrug(created.id)
+      expect(stored?.identifiers.name).toBe('Renamed Elsewhere')
+      expect(stored?.tags).toEqual([])
+
+      // A fresh token (the current revision) commits normally.
+      const retry = await store
+        .getState()
+        .updateDrug(created.id, { tags: ['reapplied'] }, stored?.revision ?? 0)
+      expect(retry.status).toBe('ok')
+      expect(store.getState().drugs[0]?.tags).toEqual(['reapplied'])
+      expect(store.getState().drugs[0]?.identifiers.name).toBe('Renamed Elsewhere')
     } finally {
       await db.delete()
     }
