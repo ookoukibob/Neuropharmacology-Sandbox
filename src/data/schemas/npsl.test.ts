@@ -184,15 +184,19 @@ describe('npslFileSchema — target source references (phase 18I)', () => {
     licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
   }
 
-  function withReference(reference: unknown): unknown {
+  function withReferences(references: unknown[]): unknown {
     const input = structuredClone(fixture) as Record<string, unknown>
     const drug = (input['drugs'] as Record<string, unknown>[])[0]
     if (!drug) throw new Error('fixture must contain at least one drug')
     const targets = drug['targets'] as Record<string, unknown>[]
     const target = targets[0]
     if (!target) throw new Error('fixture must contain at least one target')
-    target['sourceReferences'] = [reference]
+    target['sourceReferences'] = references
     return input
+  }
+
+  function withReference(reference: unknown): unknown {
+    return withReferences([reference])
   }
 
   it('accepts a complete reference and keeps every field verbatim', () => {
@@ -257,6 +261,48 @@ describe('npslFileSchema — target source references (phase 18I)', () => {
     const refs = targets?.[0]?.['sourceReferences'] as Record<string, unknown>[] | undefined
     const ref = refs?.[0]
     expect(ref?.['futureReferenceField']).toBe('kept')
+  })
+
+  // --- Phase 18I.1: at most one reference per exact source identifier ---
+
+  it('rejects two references with the same source even when their target ids match (18I.1)', () => {
+    const issues = parseFails(withReferences([CHEMBL_REF, { ...CHEMBL_REF }]))
+    const duplicate = issues.find((issue) => issue.message.includes('duplicate source reference'))
+    // The issue names the offending duplicate ENTRY's field, not just the target.
+    expect(duplicate?.path.join('.')).toBe('drugs.0.targets.0.sourceReferences.1.source')
+  })
+
+  it('rejects two references with the same source and different target ids — no winner picked (18I.1)', () => {
+    const conflicting = {
+      ...CHEMBL_REF,
+      sourceTargetId: 'CHEMBL99991999',
+      url: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991999',
+    }
+    const issues = parseFails(withReferences([CHEMBL_REF, conflicting]))
+    const duplicate = issues.find((issue) => issue.message.includes('duplicate source reference'))
+    expect(duplicate?.path.join('.')).toBe('drugs.0.targets.0.sourceReferences.1.source')
+    // Neither id is chosen: the message states duplicates are rejected outright.
+    expect(duplicate?.message).toContain('never merged or deduplicated')
+  })
+
+  it('compares source identifiers exactly — no case folding or trimming (18I.1)', () => {
+    // Under the documented equality rule 'chembl' and 'ChEMBL' are different
+    // exact strings, so they coexist as distinct sources instead of colliding.
+    const parsed = parseOk(withReferences([CHEMBL_REF, { ...CHEMBL_REF, source: 'ChEMBL' }]))
+    expect(
+      parsed.drugs[0]?.targets[0]?.sourceReferences?.map((reference) => reference.source),
+    ).toEqual(['chembl', 'ChEMBL'])
+  })
+
+  it('keeps different sources valid together with unknown extension fields intact (18I.1)', () => {
+    const other = {
+      source: 'pubchem',
+      sourceName: 'PubChem',
+      sourceTargetId: '12345',
+      futureField: 'kept',
+    }
+    const parsed = parseOk(withReferences([CHEMBL_REF, other]))
+    expect(parsed.drugs[0]?.targets[0]?.sourceReferences).toEqual([CHEMBL_REF, other])
   })
 })
 

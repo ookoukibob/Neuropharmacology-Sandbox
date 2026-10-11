@@ -268,6 +268,58 @@ describe('DexieDrugRepository — recovery preview and restore', () => {
     }
   })
 
+  it('preserves a duplicate-source reference row verbatim — raw recovery ignores schema rules (18I.1)', async () => {
+    const db = freshDb()
+    try {
+      const referenceA = {
+        source: 'chembl',
+        sourceName: 'ChEMBL',
+        sourceTargetId: 'CHEMBL99991001',
+        name: 'TEST-R',
+      }
+      const referenceB = {
+        source: 'chembl',
+        sourceName: 'ChEMBL',
+        sourceTargetId: 'CHEMBL99991002',
+        name: 'TEST-R',
+      }
+      const base = syntheticDrug()
+      const first = base.targets[0]
+      if (first === undefined) throw new Error('fixture needs a target')
+      const record = toRecord({ ...base, targets: [{ ...first, sourceReferences: [referenceA] }] })
+      // Malformed under the 18I.1 invariant: two references from the SAME
+      // source. The archive is a raw snapshot — it must keep them verbatim.
+      const malformed = {
+        ...record,
+        targets: record.targets.map((target, index) =>
+          index === 0 ? { ...target, sourceReferences: [referenceA, referenceB] } : target,
+        ),
+      }
+      await db.drugs.put(malformed)
+
+      const repo = new DexieDrugRepository(db)
+      const exported = await repo.exportRecoveryArchive()
+      if (!exported.ok) throw new Error(JSON.stringify(exported.issues))
+      await db.drugs.clear()
+
+      const restored = await repo.restoreRecoveryArchive(exported.text)
+      if (!restored.ok) throw new Error(JSON.stringify(restored.issues))
+      // No schema pass, no deduplication, no repair — byte-identical rows;
+      // the archive's own report classifies the row for the current build.
+      expect(restored.report.currentBuild).toEqual({ readable: 0, quarantined: 1 })
+      expect(await db.drugs.get(record.id)).toEqual(malformed)
+      // The normal validator explains the problem at hydration instead…
+      const loaded = await repo.getAllDrugs()
+      expect(loaded.quarantine).toHaveLength(1)
+      expect(loaded.quarantine[0]?.id).toBe(record.id)
+      expect(loaded.quarantine[0]?.errors.join(' ')).toContain('duplicate source reference')
+      // …and still leaves the stored row untouched afterwards.
+      expect(await db.drugs.get(record.id)).toEqual(malformed)
+    } finally {
+      await db.delete()
+    }
+  })
+
   it('rejects an invalid archive before opening any write transaction', async () => {
     const { db } = await seededDb()
     try {
