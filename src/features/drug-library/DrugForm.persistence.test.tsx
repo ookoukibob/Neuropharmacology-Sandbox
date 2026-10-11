@@ -4,9 +4,10 @@
  * chain writes unchanged parameters with their whole provenance (citation,
  * DOI, URL, unknown extension keys included) into the stored record, stamps
  * user provenance only on the parameter that actually changed, keeps the
- * supported target-level metadata (`gene`, `action`, `species`, `notes`)
- * of every surviving target in the raw stored row — matched by stable
- * target id, never by position or name — keeps the stored-only
+ * supported target-level metadata (`gene`, `action`, `species`, `notes`,
+ * `sourceReferences`) of every surviving target in the raw stored row —
+ * matched by stable target id, never by position or name — keeps the
+ * stored-only
  * identifier metadata (`description`, `casNumber`) the form cannot edit
  * (data-integrity audit DI-01), keeps untouched list/text fields
  * (`synonyms`, `tags`, name, top-level `notes`) byte-identical through
@@ -81,6 +82,21 @@ beforeEach(async () => {
         species: 'synthetic',
         notes: 'Synthetic target metadata — not pharmacological information.',
         kd: { value: 12.4, unit: 'nM', provenance: LITERATURE },
+        // Phase 18I: an external source identity — like gene/action/
+        // species/notes, the form cannot edit it and an unrelated edit or
+        // a row removal must never drop it or migrate it to another row.
+        sourceReferences: [
+          {
+            source: 'chembl',
+            sourceName: 'ChEMBL',
+            sourceTargetId: 'CHEMBL99991001',
+            name: 'TEST-R',
+            organism: 'synthetic',
+            url: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
+            licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+            licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
+          },
+        ],
       },
       {
         id: 'fixture-target-2',
@@ -206,6 +222,20 @@ describe('DrugForm — edit persistence (real repository)', () => {
     })
     expect(raw?.targets[0]?.kd?.value).toBe(12.4)
     expect(raw?.targets[0]?.kd?.provenance).toEqual(LITERATURE)
+    // Phase 18I: the external source identity survives the unrelated edit
+    // complete and verbatim (id, URL, license terms).
+    expect(raw?.targets[0]?.sourceReferences).toEqual([
+      {
+        source: 'chembl',
+        sourceName: 'ChEMBL',
+        sourceTargetId: 'CHEMBL99991001',
+        name: 'TEST-R',
+        organism: 'synthetic',
+        url: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
+        licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+        licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
+      },
+    ])
 
     // The second target keeps only its own gene: no field migrated over
     // and nothing was fabricated (an explicit `undefined` key would fail
@@ -214,6 +244,7 @@ describe('DrugForm — edit persistence (real repository)', () => {
     expect(raw?.targets[1]).not.toHaveProperty('action')
     expect(raw?.targets[1]).not.toHaveProperty('species')
     expect(raw?.targets[1]).not.toHaveProperty('notes')
+    expect(raw?.targets[1]).not.toHaveProperty('sourceReferences')
     expect(raw?.targets[1]?.kd?.provenance).toEqual(USER_PROVENANCE)
     expect(raw?.targets[1]?.ic50?.provenance).toEqual(USER_PROVENANCE)
 
@@ -227,10 +258,12 @@ describe('DrugForm — edit persistence (real repository)', () => {
       notes: 'Synthetic target metadata — not pharmacological information.',
     })
     expect(reloaded?.targets[0]?.kd?.provenance).toEqual(LITERATURE)
+    expect(reloaded?.targets[0]?.sourceReferences?.[0]?.sourceTargetId).toBe('CHEMBL99991001')
     expect(reloaded?.targets[1]).toMatchObject({ id: 'fixture-target-2', gene: 'SYNTH-P2' })
     expect(reloaded?.targets[1]).not.toHaveProperty('action')
     expect(reloaded?.targets[1]).not.toHaveProperty('species')
     expect(reloaded?.targets[1]).not.toHaveProperty('notes')
+    expect(reloaded?.targets[1]).not.toHaveProperty('sourceReferences')
   })
 
   it('never migrates removed metadata onto survivors or recreated targets in storage', async () => {
@@ -259,17 +292,20 @@ describe('DrugForm — edit persistence (real repository)', () => {
     expect(raw?.targets).toHaveLength(2)
 
     // The survivor shifted from position 1 to position 0: it keeps its own
-    // gene and provenance — never the removed target's action/species/notes.
+    // gene and provenance — never the removed target's action/species/
+    // notes/sourceReferences.
     expect(raw?.targets[0]).toMatchObject({ id: 'fixture-target-2', gene: 'SYNTH-P2' })
     expect(raw?.targets[0]).not.toHaveProperty('action')
     expect(raw?.targets[0]).not.toHaveProperty('species')
     expect(raw?.targets[0]).not.toHaveProperty('notes')
+    expect(raw?.targets[0]).not.toHaveProperty('sourceReferences')
     expect(raw?.targets[0]?.kd?.provenance).toEqual(USER_PROVENANCE)
     expect(raw?.targets[0]?.ic50?.provenance).toEqual(USER_PROVENANCE)
 
     // The recreated target is a new identity: the repository assigned it a
     // fresh id, it carries no metadata (name matching never reattaches the
-    // removed target's fields), and its parameter is a normal user entry.
+    // removed target's fields — source identities included), and its
+    // parameter is a normal user entry.
     const recreated = raw?.targets[1]
     expect(recreated?.name).toBe('TEST-R')
     expect(typeof recreated?.id).toBe('string')
@@ -279,6 +315,7 @@ describe('DrugForm — edit persistence (real repository)', () => {
     expect(recreated).not.toHaveProperty('action')
     expect(recreated).not.toHaveProperty('species')
     expect(recreated).not.toHaveProperty('notes')
+    expect(recreated).not.toHaveProperty('sourceReferences')
     expect(recreated?.kd?.value).toBe(12.4)
     expect(recreated?.kd?.provenance).toMatchObject({ type: 'user' })
     const freshStamp = recreated?.kd?.provenance as { recordedAt?: unknown } | undefined

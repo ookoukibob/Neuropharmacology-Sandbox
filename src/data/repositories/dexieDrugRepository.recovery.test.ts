@@ -15,6 +15,7 @@ import {
   syntheticMetadata,
   syntheticNpslText,
 } from '../../tests/fixtures'
+import type { Drug } from '../../domain/drug/drug'
 import { SandboxDatabase } from '../db/database'
 import { toRecord } from '../mappers/records'
 import { DexieDrugRepository } from './dexieDrugRepository'
@@ -225,6 +226,43 @@ describe('DexieDrugRepository — recovery preview and restore', () => {
       expect(await db.meta.count()).toBe(1)
       const meta = await db.meta.get('fixture-library')
       expect(meta?.name).toBe('Recovery fixture library')
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('restores target source references verbatim — lossless through export/restore', async () => {
+    const db = freshDb()
+    try {
+      const reference = {
+        source: 'chembl',
+        sourceName: 'ChEMBL',
+        sourceTargetId: 'CHEMBL99991001',
+        name: 'TEST-R',
+        organism: 'synthetic',
+        url: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
+        licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+        licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
+      }
+      const base = syntheticDrug()
+      const first = base.targets[0]
+      if (first === undefined) throw new Error('fixture needs a target')
+      const drug: Drug = { ...base, targets: [{ ...first, sourceReferences: [reference] }] }
+      const record = toRecord(drug)
+      await db.drugs.put(record)
+
+      const repo = new DexieDrugRepository(db)
+      const exported = await repo.exportRecoveryArchive()
+      if (!exported.ok) throw new Error(JSON.stringify(exported.issues))
+      await db.drugs.clear()
+
+      const restored = await repo.restoreRecoveryArchive(exported.text)
+      if (!restored.ok) throw new Error(JSON.stringify(restored.issues))
+      // Phase 18I: the reference rides the raw-row guarantee exactly —
+      // no schema pass, no rewrite, byte-level round trip.
+      expect(await db.drugs.get(record.id)).toEqual(record)
+      const reread = await repo.getDrug(record.id)
+      expect(reread?.targets[0]?.sourceReferences).toEqual([reference])
     } finally {
       await db.delete()
     }

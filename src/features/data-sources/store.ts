@@ -20,11 +20,19 @@
  *   `applyObservation`, which refuses endpoint substitution, qualifiers
  *   other than an exact reported value, missing/non-concentration units,
  *   occupied slots without an explicit `overwrite`, and target rows whose
- *   name/species contradict the observation without an explicit
- *   `confirmTargetMismatch` acknowledgement.
+ *   name/species contradict the observation or whose stored source
+ *   reference carries a different same-source target id (phase 18I)
+ *   without an explicit `confirmTargetMismatch` acknowledgement.
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
-import type { Drug, DrugId, ReceptorTarget, TargetId } from '../../domain/drug/drug'
+import type {
+  Drug,
+  DrugId,
+  ReceptorTarget,
+  TargetId,
+  TargetSourceReference,
+} from '../../domain/drug/drug'
+import { findSourceReference, mergeSourceReferences } from '../../domain/drug/drug'
 import type { ScientificValue } from '../../domain/pharmacology/scientific-value'
 import { unitCatalog } from '../../domain/pharmacology/unit-catalog'
 import type { Compound, RemoteCompound } from '../../domain/sources/compound'
@@ -292,6 +300,20 @@ export function importPreviewOf(state: DataSourcesState): ImportPreview {
   }
 }
 
+/** Structured detail of a same-source external-identity conflict. */
+export interface TargetSourceIdConflict {
+  /** Adapter id whose reported target id conflicts. */
+  readonly source: string
+  /** Display name of that source. */
+  readonly sourceName: string
+  /** Target id the observation reports from that source. */
+  readonly observationTargetId: string
+  /** Target id the selected row ALREADY stores from that same source. */
+  readonly storedTargetId: string
+  /** The stored reference's target-record URL, when one was recorded. */
+  readonly storedUrl?: string
+}
+
 export interface TargetMismatch {
   /** What the observation reports as its target (name, or an honest placeholder). */
   readonly observationTarget: string
@@ -302,7 +324,9 @@ export interface TargetMismatch {
   /** Species recorded on the chosen row, or null when unrecorded. */
   readonly selectedSpecies: string | null
   /** Which reported fields do not line up with the chosen row. */
-  readonly differences: readonly ('name' | 'species')[]
+  readonly differences: readonly ('name' | 'species' | 'source-id')[]
+  /** Present exactly when `differences` contains `'source-id'`. */
+  readonly sourceIdConflict?: TargetSourceIdConflict
 }
 
 function compared(value: string | undefined): string | null {
@@ -328,6 +352,17 @@ function sameText(a: string, b: string): boolean {
  * observation does not report is missing information, not a difference:
  * only reported contradictions count. Returns null when nothing reported
  * contradicts the row.
+ *
+ * Phase 18I adds source-identity awareness: when the observation carries
+ * an external target id (e.g. a ChEMBL target) and the selected row
+ * ALREADY stores a reference from that same source with a DIFFERENT
+ * target id, that is reported as a `'source-id'` conflict even when the
+ * displayed names and species match — the two records identify different
+ * authoritative targets in the same source system. Conversely, a missing
+ * reference (on either side) is missing information, never a fabricated
+ * conflict, and a reference from a *different* source never creates a
+ * false same-source conflict. An exact source + id match is an identity
+ * match on that dimension (the name/species policy above is unchanged).
  */
 export function findTargetMismatch(
   observation: ExperimentalObservation,
@@ -336,11 +371,13 @@ export function findTargetMismatch(
   const reportedName = compared(observation.target.name)
   const reportedSpecies = compared(observation.species ?? observation.target.organism)
   const rowSpecies = compared(target.species)
-  const differences: ('name' | 'species')[] = []
+  const differences: ('name' | 'species' | 'source-id')[] = []
   if (reportedName !== null && !sameText(reportedName, target.name)) differences.push('name')
   if (reportedSpecies !== null && rowSpecies !== null && !sameText(reportedSpecies, rowSpecies)) {
     differences.push('species')
   }
+  const sourceIdConflict = findSourceIdConflict(observation, target)
+  if (sourceIdConflict !== null) differences.push('source-id')
   if (differences.length === 0) return null
   return {
     observationTarget: reportedName ?? '(no target name reported)',
@@ -348,6 +385,26 @@ export function findTargetMismatch(
     selectedTarget: target.name,
     selectedSpecies: rowSpecies,
     differences,
+    ...(sourceIdConflict !== null ? { sourceIdConflict } : {}),
+  }
+}
+
+/** Same-source external-identity conflict, or null when there is none. */
+function findSourceIdConflict(
+  observation: ExperimentalObservation,
+  target: ReceptorTarget,
+): TargetSourceIdConflict | null {
+  const observationTargetId = compared(observation.target.sourceTargetId)
+  if (observationTargetId === null) return null // no external id reported
+  const stored = findSourceReference(target.sourceReferences, observation.provenance.source)
+  if (stored === undefined) return null // no reference to contradict
+  if (stored.sourceTargetId === observationTargetId) return null // exact identity match
+  return {
+    source: observation.provenance.source,
+    sourceName: observation.provenance.sourceName,
+    observationTargetId,
+    storedTargetId: stored.sourceTargetId,
+    ...(stored.url !== undefined ? { storedUrl: stored.url } : {}),
   }
 }
 
@@ -364,7 +421,42 @@ function mismatchMessage(mismatch: TargetMismatch): string {
       `the observation reports species "${mismatch.observationSpecies ?? '(unreported)'}" while the row records "${mismatch.selectedSpecies ?? '(unrecorded)'}"`,
     )
   }
-  return `Target mismatch: ${parts.join('; ')} — differing reports do not establish that these are the same target. Confirm the mismatch explicitly to link this measurement to the existing row, or create a new target from the observation instead.`
+  if (mismatch.differences.includes('source-id') && mismatch.sourceIdConflict !== undefined) {
+    const conflict = mismatch.sourceIdConflict
+    parts.push(
+      `the observation identifies the target as ${conflict.sourceName} id "${conflict.observationTargetId}" while the row already stores ${conflict.sourceName} target id "${conflict.storedTargetId}"`,
+    )
+  }
+  return `Target mismatch: ${parts.join('; ')} — differing reports do not establish that these are the same target. Confirm the mismatch explicitly to link this measurement to the existing row (the stored source identity is never overwritten by the acknowledgement), or create a new target from the observation instead.`
+}
+
+/**
+ * The target-source reference an observation can honestly supply — null
+ * when it reports no external target id (nothing is invented). License
+ * terms travel with the identity: a source that requires attribution
+ * (e.g. ChEMBL, CC BY-SA) keeps its notice on the reference so the
+ * obligation survives alongside the id.
+ */
+function referenceFromObservation(
+  observation: ExperimentalObservation,
+): TargetSourceReference | null {
+  const sourceTargetId = compared(observation.target.sourceTargetId)
+  if (sourceTargetId === null) return null
+  const provenance = observation.provenance
+  return {
+    source: provenance.source,
+    sourceName: provenance.sourceName,
+    sourceTargetId,
+    ...(observation.target.name !== undefined ? { name: observation.target.name } : {}),
+    ...(observation.target.organism !== undefined
+      ? { organism: observation.target.organism }
+      : {}),
+    ...(observation.target.sourceTargetUrl !== undefined
+      ? { url: observation.target.sourceTargetUrl }
+      : {}),
+    ...(provenance.licenseNotice !== undefined ? { licenseNotice: provenance.licenseNotice } : {}),
+    ...(provenance.licenseUrl !== undefined ? { licenseUrl: provenance.licenseUrl } : {}),
+  }
 }
 
 /** Parameter slot assignment without ever substituting one kind for another. */
@@ -1035,6 +1127,10 @@ export function createDataSourcesStore(
 
       const attribution = observation.provenance
       const baseNotes = `Applied from stored observation (endpoint ${observation.endpoint}${observation.qualifier !== undefined ? `, reported '${observation.qualifier}'` : ''}).`
+      const conflictNote =
+        mismatch?.sourceIdConflict !== undefined
+          ? ` Source identity conflict acknowledged: ${mismatch.sourceIdConflict.sourceName} reports target id "${mismatch.sourceIdConflict.observationTargetId}" while the row keeps its stored ${mismatch.sourceIdConflict.sourceName} target id "${mismatch.sourceIdConflict.storedTargetId}" — the stored reference was not overwritten.`
+          : ''
       const parameter: ScientificValue = {
         value: observation.value,
         unit,
@@ -1055,19 +1151,30 @@ export function createDataSourcesStore(
           observationId: observation.id,
           notes:
             mismatch !== null
-              ? `${baseNotes} Target mismatch acknowledged: the observation reports target "${mismatch.observationTarget}"${mismatch.observationSpecies !== null ? ` (species "${mismatch.observationSpecies}")` : ''}, linked to the existing row "${targetName}".`
+              ? `${baseNotes} Target mismatch acknowledged: the observation reports target "${mismatch.observationTarget}"${mismatch.observationSpecies !== null ? ` (species "${mismatch.observationSpecies}")` : ''}, linked to the existing row "${targetName}".${conflictNote}`
               : baseNotes,
         },
       }
 
+      // The target-source reference the observation can honestly supply
+      // (null when it reports no external target id).
+      const observationReference = referenceFromObservation(observation)
       let nextTargets: readonly TargetInput[]
       if (existingTarget !== undefined) {
         const selected = existingTarget
-        nextTargets = drug.targets.map((candidate) =>
-          candidate.id === selected.id
-            ? { ...candidate, ...withParameter(kind, parameter) }
-            : candidate,
-        )
+        nextTargets = drug.targets.map((candidate) => {
+          if (candidate.id !== selected.id) return candidate
+          const withValue = { ...candidate, ...withParameter(kind, parameter) }
+          if (observationReference === null) return withValue
+          const merged = mergeSourceReferences(candidate.sourceReferences, observationReference)
+          // A conflicting same-source identity (already acknowledged as a
+          // mismatch above) is NEVER merged, overwritten or relabelled —
+          // the stored reference stays exactly as it was.
+          if (merged.conflict !== undefined) return withValue
+          // Idempotent attach: an identical reference is a no-op, so
+          // repeated applications never create duplicates.
+          return { ...withValue, sourceReferences: merged.references }
+        })
       } else {
         const species = observation.species
         nextTargets = [
@@ -1076,6 +1183,9 @@ export function createDataSourcesStore(
             // No id: the repository assigns one, as for any created target.
             name: targetName,
             ...(species !== undefined ? { species } : {}),
+            // Phase 18I: a target created from a sourced observation keeps
+            // the source's own target identity (id, URL, license terms).
+            ...(observationReference !== null ? { sourceReferences: [observationReference] } : {}),
             ...withParameter(kind, parameter),
           },
         ]

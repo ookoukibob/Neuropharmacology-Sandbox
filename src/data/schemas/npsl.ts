@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { httpsUrl } from './sources'
 
 /**
  * NPSL — Neuropharmacology Sandbox Library format.
@@ -131,6 +132,25 @@ export const targetActionSchema = z.enum([
   'unknown',
 ])
 
+/**
+ * One external source's identity for a target (phase 18I): which source
+ * system, which authoritative target id in it, the reported name and
+ * organism, the target-record URL and the source's licensing terms.
+ * URLs follow the established source-attribution rule (absolute HTTPS,
+ * validated with the platform URL parser — see schemas/sources.ts).
+ * Loose object: unknown keys from future minor versions round-trip.
+ */
+export const targetSourceReferenceSchema = z.looseObject({
+  source: z.string().min(1),
+  sourceName: z.string().min(1),
+  sourceTargetId: z.string().min(1),
+  name: z.string().min(1).optional(),
+  organism: z.string().min(1).optional(),
+  url: httpsUrl.optional(),
+  licenseNotice: z.string().min(1).optional(),
+  licenseUrl: httpsUrl.optional(),
+})
+
 export const receptorTargetSchema = z.looseObject({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -144,6 +164,12 @@ export const receptorTargetSchema = z.looseObject({
   ec50: scientificValueSchema.optional(),
   ic50: scientificValueSchema.optional(),
   notes: z.string().optional(),
+  /**
+   * External source identities (phase 18I). Optional: records without
+   * any (all pre-18I data) simply omit the key — never written as an
+   * empty array or explicit undefined.
+   */
+  sourceReferences: z.array(targetSourceReferenceSchema).optional(),
 })
 
 export const pharmacokineticsSchema = z.looseObject({

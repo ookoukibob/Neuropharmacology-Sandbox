@@ -308,6 +308,55 @@ function ApplyCard({
               Selected row: “{target.name}”
               {target.species !== undefined && `, species “${target.species}”`}
             </p>
+            {observation.target.sourceTargetId !== undefined && (
+              <p className="text-xs text-muted-foreground" data-testid="apply-observation-source-id">
+                {observation.provenance.sourceName} target id: “
+                {observation.target.sourceTargetId}”
+                {observation.target.sourceTargetUrl !== undefined && (
+                  <>
+                    {' '}
+                    (
+                    <a
+                      href={observation.target.sourceTargetUrl}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="underline"
+                    >
+                      source target record
+                      <span className="sr-only"> (opens in a new tab)</span>
+                    </a>
+                    )
+                  </>
+                )}
+              </p>
+            )}
+            {target.sourceReferences !== undefined && target.sourceReferences.length > 0 && (
+              <p className="text-xs text-muted-foreground" data-testid="apply-stored-source-refs">
+                Stored row source {target.sourceReferences.length === 1 ? 'identity' : 'identities'}
+                :{' '}
+                {target.sourceReferences.map((reference, index) => (
+                  <span key={reference.source}>
+                    {index > 0 ? ' · ' : ''}
+                    {reference.sourceName} id “{reference.sourceTargetId}”
+                    {reference.url !== undefined && (
+                      <>
+                        {' '}
+                        (
+                        <a
+                          href={reference.url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="underline"
+                        >
+                          record<span className="sr-only"> (opens in a new tab)</span>
+                        </a>
+                        )
+                      </>
+                    )}
+                  </span>
+                ))}
+              </p>
+            )}
           </div>
         )}
 
@@ -315,6 +364,16 @@ function ApplyCard({
           <Alert data-testid="apply-target-mismatch">
             <AlertTitle>The reported target differs from the selected row</AlertTitle>
             <AlertDescription>
+              {mismatch.sourceIdConflict !== undefined && (
+                <p data-testid="apply-source-id-conflict">
+                  The observation identifies this target as “{mismatch.sourceIdConflict.sourceName}”
+                  id “{mismatch.sourceIdConflict.observationTargetId}”, while the selected row
+                  already stores “{mismatch.sourceIdConflict.sourceName}” target id “
+                  {mismatch.sourceIdConflict.storedTargetId}”. Linking keeps the stored identity
+                  exactly as it is — it is never overwritten or merged — and acknowledging this
+                  mismatch is not proof that the two targets are the same.
+                </p>
+              )}
               <p>
                 A differing name or species does not establish that these are the same target —
                 linking them is a user judgement, and it is recorded in the parameter's

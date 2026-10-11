@@ -33,6 +33,7 @@ import type {
   DrugOrigin,
   Pharmacokinetics,
   ReceptorTarget,
+  TargetSourceReference,
 } from '../../domain/drug/drug'
 import type { LibraryMetadata } from '../../domain/library/library'
 import type {
@@ -103,6 +104,17 @@ const TARGET_KEYS = new Set([
   'ec50',
   'ic50',
   'notes',
+  'sourceReferences',
+])
+const REFERENCE_KEYS = new Set([
+  'source',
+  'sourceName',
+  'sourceTargetId',
+  'name',
+  'organism',
+  'url',
+  'licenseNotice',
+  'licenseUrl',
 ])
 const PARAMETER_KEYS = new Set(['value', 'unit', 'provenance'])
 const PROVENANCE_KEYS = new Set([
@@ -133,7 +145,14 @@ const PK_KEYS = new Set([
   'notes',
 ])
 
-type Level = 'root' | 'identifiers' | 'target' | 'parameter' | 'provenance' | 'pharmacokinetics'
+type Level =
+  | 'root'
+  | 'identifiers'
+  | 'target'
+  | 'reference'
+  | 'parameter'
+  | 'provenance'
+  | 'pharmacokinetics'
 
 function keysOf(level: Level): Set<string> {
   switch (level) {
@@ -143,6 +162,8 @@ function keysOf(level: Level): Set<string> {
       return IDENTIFIER_KEYS
     case 'target':
       return TARGET_KEYS
+    case 'reference':
+      return REFERENCE_KEYS
     case 'parameter':
       return PARAMETER_KEYS
     case 'provenance':
@@ -212,6 +233,26 @@ export function preserveUnknownFields(
           preserveUnknownFields(prevTarget, nextTarget, 'target')
         }
       }
+    } else if (
+      key === 'sourceReferences' &&
+      Array.isArray(prevValue) &&
+      Array.isArray(nextValue)
+    ) {
+      // References are matched by their stable identity — the source id
+      // (at most one reference per source), never array position — so a
+      // reordered or extended list can never transplant unknown fields
+      // onto the wrong source's reference.
+      for (const nextRef of nextValue) {
+        if (!isPlainObject(nextRef)) continue
+        const source = nextRef['source']
+        if (typeof source !== 'string') continue
+        const prevRef = prevValue.find(
+          (candidate) => isPlainObject(candidate) && candidate['source'] === source,
+        )
+        if (isPlainObject(prevRef)) {
+          preserveUnknownFields(prevRef, nextRef, 'reference')
+        }
+      }
     }
   }
 }
@@ -219,6 +260,19 @@ export function preserveUnknownFields(
 function parameterToRecord(value: MaybeScientificValue): ScientificValue | undefined {
   if (value === undefined) return undefined
   return { value: value.value, unit: value.unit, provenance: value.provenance }
+}
+
+function referenceToRecord(reference: TargetSourceReference): TargetSourceReference {
+  return {
+    source: reference.source,
+    sourceName: reference.sourceName,
+    sourceTargetId: reference.sourceTargetId,
+    ...(reference.name !== undefined ? { name: reference.name } : {}),
+    ...(reference.organism !== undefined ? { organism: reference.organism } : {}),
+    ...(reference.url !== undefined ? { url: reference.url } : {}),
+    ...(reference.licenseNotice !== undefined ? { licenseNotice: reference.licenseNotice } : {}),
+    ...(reference.licenseUrl !== undefined ? { licenseUrl: reference.licenseUrl } : {}),
+  }
 }
 
 function targetToRecord(target: ReceptorTarget): ReceptorTarget {
@@ -234,6 +288,12 @@ function targetToRecord(target: ReceptorTarget): ReceptorTarget {
     ...(target.ec50 !== undefined ? { ec50: parameterToRecord(target.ec50) } : {}),
     ...(target.ic50 !== undefined ? { ic50: parameterToRecord(target.ic50) } : {}),
     ...(target.notes !== undefined ? { notes: target.notes } : {}),
+    // Phase 18I: source identities are a known domain field now — the
+    // mapper, not unknown-field preservation, owns writing them. An
+    // empty list stays absent (never written as `[]`).
+    ...(target.sourceReferences !== undefined && target.sourceReferences.length > 0
+      ? { sourceReferences: target.sourceReferences.map(referenceToRecord) }
+      : {}),
   }
 }
 

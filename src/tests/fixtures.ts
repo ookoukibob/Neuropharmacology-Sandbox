@@ -151,6 +151,7 @@ export function syntheticObservation(
     target: {
       name: 'Synthetic Target A',
       sourceTargetId: 'CHEMBL99991001',
+      sourceTargetUrl: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
       organism: 'Homo sapiens',
     },
     endpoint: 'IC50',

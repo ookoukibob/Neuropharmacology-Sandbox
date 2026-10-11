@@ -188,6 +188,39 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
                 {target.notes !== undefined && (
                   <p className="text-xs text-muted-foreground">{target.notes}</p>
                 )}
+                {target.sourceReferences !== undefined && target.sourceReferences.length > 0 && (
+                  <ul className="space-y-1" data-testid={`target-source-references-${target.id}`}>
+                    {target.sourceReferences.map((reference) => (
+                      <li
+                        key={reference.source}
+                        className="text-xs text-muted-foreground"
+                        data-testid="target-source-reference"
+                      >
+                        Source identity: {reference.sourceName} target “{reference.sourceTargetId}”
+                        {reference.name !== undefined ? ` (“${reference.name}”)` : ''}
+                        {reference.organism !== undefined ? `, ${reference.organism}` : ''} — the
+                        source's own identifier, not a claim of biological identity.
+                        {reference.url !== undefined && (
+                          <>
+                            {' '}
+                            <a
+                              href={reference.url}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              className="underline"
+                            >
+                              {reference.sourceName} target record
+                              <span className="sr-only"> (opens in a new tab)</span>
+                            </a>
+                          </>
+                        )}
+                        {reference.licenseNotice !== undefined && (
+                          <span className="block">{reference.licenseNotice}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             ))
           )}

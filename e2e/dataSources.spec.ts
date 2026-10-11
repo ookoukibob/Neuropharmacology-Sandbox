@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { mockChEMBL, mockPubChem } from './sourceMocks.js'
+import { mockChEMBL, mockChEMBLWithConflictingTarget, mockPubChem } from './sourceMocks.js'
 
 /**
  * Data sources (on-demand retrieval) end-to-end workflows.
@@ -140,6 +140,89 @@ test('data sources: an imported measurement can supply a parameter, provenance i
     'title',
     /Source: ChEMBL/,
   )
+})
+
+test('data sources: a source target identity is stored, shown on conflict and never merged', async ({
+  page,
+}) => {
+  await mockChEMBLWithConflictingTarget(page)
+
+  // 1. An identity-only drug record, created through the real form.
+  await page.goto('/library')
+  await page.getByTestId('new-drug').click()
+  await page.getByTestId('drug-name').fill('Synthetic Identity Drug')
+  await page.getByTestId('save-drug').click()
+  await expect(page.getByTestId('drug-detail')).toBeVisible()
+
+  // 2. Import the IC50 measurement for Synthetic Target A.
+  await page.goto('/data-sources')
+  await page.getByTestId('source-select').selectOption('chembl')
+  await page.getByTestId('scope-targets').click()
+  await page.getByTestId('query-input').fill('synthetic target')
+  await page.getByTestId('search-button').click()
+  await page.getByTestId('target-select-CHEMBL99991001').click()
+  await page.getByTestId('fetch-observations-button').click()
+  await expect(page.getByTestId('observation-row').first()).toBeVisible()
+  await page.getByTestId('observation-select-chembl:99000001').check()
+  await page.getByTestId('confirm-import-button').click()
+  await expect(page.getByTestId('import-report')).toContainText('1 new measurement record')
+
+  // 3. Applied to a NEW target: the created row keeps the source's own
+  //    target identity (id, record URL, license notice), read-only in the
+  //    target detail with an accessible source link.
+  await page.getByTestId('apply-to-parameter-chembl:99000001').click()
+  await page.getByTestId('apply-drug-select').selectOption({ label: 'Synthetic Identity Drug' })
+  await page.getByTestId('apply-confirm').click()
+  await expect(page.getByTestId('apply-notice')).toContainText('Applied IC50')
+  await page.goto('/library')
+  await page.getByRole('link', { name: 'Synthetic Identity Drug' }).click()
+  const storedRef = page.getByTestId('target-source-reference')
+  await expect(storedRef).toHaveCount(1)
+  await expect(storedRef).toContainText('ChEMBL target')
+  await expect(storedRef).toContainText('CHEMBL99991001')
+  await expect(storedRef.locator('a')).toHaveAttribute(
+    'href',
+    /chembl\/explore\/target\/CHEMBL99991001/,
+  )
+  await expect(storedRef).toContainText('CC BY-SA 3.0')
+
+  // 4. Import a synthetic conflicting measurement: same reported target
+  //    name and organism, different ChEMBL target id.
+  await page.goto('/data-sources')
+  await page.getByTestId('source-select').selectOption('chembl')
+  await page.getByTestId('scope-targets').click()
+  await page.getByTestId('query-input').fill('synthetic target')
+  await page.getByTestId('search-button').click()
+  await page.getByTestId('target-select-CHEMBL99991001').click()
+  await page.getByTestId('fetch-observations-button').click()
+  await page.getByTestId('observation-select-chembl:99000008').check()
+  await page.getByTestId('confirm-import-button').click()
+  await expect(page.getByTestId('import-report')).toContainText('1 new measurement record')
+
+  // 5. The confirmation names both identities before any link is made, and
+  //    application stays blocked until the mismatch is acknowledged.
+  await page.getByTestId('apply-to-parameter-chembl:99000008').click()
+  await page.getByTestId('apply-drug-select').selectOption({ label: 'Synthetic Identity Drug' })
+  await page.getByTestId('apply-target-select').selectOption({ index: 1 })
+  await expect(page.getByTestId('apply-observation-source-id')).toContainText('CHEMBL99991099')
+  await expect(page.getByTestId('apply-stored-source-refs')).toContainText('CHEMBL99991001')
+  const conflict = page.getByTestId('apply-source-id-conflict')
+  await expect(conflict).toContainText('CHEMBL99991099')
+  await expect(conflict).toContainText('CHEMBL99991001')
+  await expect(conflict).toContainText('never overwritten')
+  await expect(page.getByTestId('apply-confirm')).toBeDisabled()
+  await page.getByTestId('apply-target-mismatch-ack').check()
+  await expect(page.getByTestId('apply-confirm')).toBeEnabled()
+  await page.getByTestId('apply-confirm').click()
+  await expect(page.getByTestId('apply-notice')).toContainText('Applied Ki')
+
+  // 6. The stored identity is unchanged: the conflicting id was never
+  //    merged, replaced or relabelled.
+  await page.goto('/library')
+  await page.getByRole('link', { name: 'Synthetic Identity Drug' }).click()
+  await expect(page.getByTestId('target-source-reference')).toHaveCount(1)
+  await expect(page.getByTestId('target-source-reference')).toContainText('CHEMBL99991001')
+  await expect(page.getByTestId('drug-detail')).not.toContainText('CHEMBL99991099')
 })
 
 test('data sources: a failed search explains itself and writes nothing', async ({ page }) => {
