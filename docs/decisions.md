@@ -449,6 +449,66 @@ change (the domain model is not hard-coded to ChEMBL).
 
 ---
 
+## ADR-21 · Optimistic concurrency for drug writes: per-record revisions, compare-and-write in one transaction
+
+**Context.** Phase 19 confirmed the audit GAP-4 defect in a real
+two-tab browser test: `DrugForm` submits a full snapshot of its
+editable groups, so a tab whose form mounted before another tab's
+commit silently reverts that commit on save — reporting success. The
+repository's transaction re-read (`applyChanges`) composes only for
+groups the caller *omits*; the form omits nothing. Cross-tab
+refresh mechanisms (BroadcastChannel, storage events) were explicitly
+insufficient: they shrink the stale window but do not close it — any
+refresh is itself asynchronous, so a compare at write time is still
+required to make stale writes impossible rather than unlikely. A fix
+must not corrupt the byte-identical row contract (ADR-5/ADR-14), the
+NPSL round-trip identity, quarantine/recovery paths, or `DrugChanges`
+merge semantics for API callers.
+**Decision.** Optimistic concurrency with a per-record monotonic
+revision token, stored in a new additive Dexie table `revisions`
+(`{ id, revision }`, absent row = 0) — never inside the drug row, so
+rows stay byte-clean of it and exports/imports stay identity-preserving.
+`Drug.revision?` is storage bookkeeping attached by repository reads
+(`getAllDrugs`/`getDrug` read drugs+revisions in ONE read transaction
+for a consistent token view) and stripped everywhere a domain value
+becomes a row, a record or an exported document. `updateDrug(id,
+changes, expectedRevision)` takes the token as a required third
+argument and performs compare-and-bump **inside one read-write
+transaction** over drugs+meta+revisions — no TOCTOU: a stale token
+rejects before any write, a matching token commits and bumps, and the
+bump rides the same transaction as the data write. A stale token raises
+`RepositoryError('CONFLICT')` — a typed code alongside `NOT_FOUND`,
+`VALIDATION`, `STORAGE` — with the stored record untouched. Every
+mutation path that writes drug rows (create, import both modes,
+replace, recovery restore) bumps the ids it writes inside its own
+transaction; deletion keeps the tombstone so delete→recreate→restore
+cannot mint a token that revives a stale form (ABA-safe). The UI layer
+receives a discriminated `UpdateDrugResult` (`ok` / `conflict` /
+`error`); the form captures its token once at mount, never
+auto-refreshes it after a conflict (no silent retry), keeps the draft
+and the edit session open, names the conflict distinctly from ordinary
+failures, and offers explicit recovery: open the latest record in a
+new tab (draft kept) or reload (draft discarded, labeled as such).
+Rejected alternatives: a `revision` column in the drug row (breaks the
+byte-identical row contract and import/export identity); a parallel
+revision map in store state (drifts from storage); content-hash tokens
+(identical content defeats ABA safety, and hashes are data, not
+identity); cross-tab refresh alone (timing-dependent, still racy).
+**Consequences.** A stale write is rejected atomically and visibly —
+never silently; conflicting tabs converge by the user explicitly
+re-basing on the current record. `DrugChanges` merge semantics for
+omitted groups are preserved (API callers still compose; the
+full-snapshot form simply cannot be stale without detection), and
+validation/uniqueness failures stay distinguishable from conflicts by
+code. Documented bypass: a hypothetical direct Dexie write that skips
+the repository would neither compare nor bump — no such path exists in
+app code, and the repository is the single enforced write gate
+(`compositionRoot` injects the one instance). Cross-tab *display*
+refresh remains out of scope (a stale display is safe; a stale write
+is not).
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with
