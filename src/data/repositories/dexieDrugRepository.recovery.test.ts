@@ -320,6 +320,144 @@ describe('DexieDrugRepository — recovery preview and restore', () => {
     }
   })
 
+  it('repairs a quarantined duplicate-reference row through a deliberately edited archive (18I.2)', async () => {
+    const db = freshDb()
+    try {
+      // Seed: a malformed row (two references with the same exact source,
+      // unknown fields at drug, target and reference level), one separate
+      // valid row, and library metadata (with an unknown field).
+      const validRecord = toRecord(syntheticDrug())
+      const retainedReference = {
+        source: 'chembl',
+        sourceName: 'ChEMBL',
+        sourceTargetId: 'CHEMBL99991001',
+        name: 'TEST-R',
+        futureReferenceField: 'kept',
+      }
+      const duplicateReference = {
+        source: 'chembl',
+        sourceName: 'ChEMBL',
+        sourceTargetId: 'CHEMBL99991002',
+        name: 'TEST-R',
+      }
+      const base = syntheticDrug({
+        id: 'fixture-drug-dup',
+        identifiers: { name: 'Fixture Compound Repair', synonyms: [] },
+      })
+      const first = base.targets[0]
+      if (first === undefined) throw new Error('fixture needs a target')
+      const malformedRow = {
+        ...toRecord({
+          ...base,
+          targets: [{ ...first, sourceReferences: [retainedReference, duplicateReference] }],
+        }),
+        futureDrugField: 'kept',
+      }
+      const metadataRow = {
+        ...syntheticMetadata({ name: 'Repair fixture library' }),
+        futureMetaField: 'kept',
+      }
+      await db.drugs.put(validRecord)
+      await db.drugs.put(malformedRow)
+      await db.meta.put(metadataRow)
+
+      const repo = new DexieDrugRepository(db)
+      // Hydration quarantines the malformed row and leaves it unchanged.
+      const quarantined = await repo.getAllDrugs()
+      expect(quarantined.drugs.map((d) => d.id)).toEqual(['fixture-drug-1'])
+      expect(quarantined.quarantine.map((q) => q.id)).toEqual(['fixture-drug-dup'])
+      expect(await db.drugs.get('fixture-drug-dup')).toEqual(malformedRow)
+
+      // The `.npsb` export is a raw snapshot: it carries the quarantined
+      // row too. The original text is the user's untouched backup copy.
+      const exported = await repo.exportRecoveryArchive()
+      if (!exported.ok) throw new Error(JSON.stringify(exported.issues))
+      const originalText = exported.text
+      expect(exported.counts).toMatchObject({
+        drugRows: 2,
+        readableAtExport: 1,
+        quarantinedAtExport: 1,
+        metaRows: 1,
+      })
+
+      // The deliberate, explicit user-choice edit: retain ONE reference and
+      // remove the duplicate from that target's sourceReferences array —
+      // located via the archive contract (drugs entries keyed by the row's
+      // own id). No production code performs this choice: the schema never
+      // deduplicates and the restore path never rewrites rows.
+      const archive = JSON.parse(originalText) as {
+        readonly drugs: { key: string; value: Record<string, unknown> }[]
+      }
+      const entry = archive.drugs.find((candidate) => candidate.key === 'fixture-drug-dup')
+      if (entry === undefined) throw new Error('the archive must carry the quarantined row')
+      const targets = entry.value['targets'] as Record<string, unknown>[]
+      const target = targets[0]
+      if (target === undefined) throw new Error('the row must carry a target')
+      target['sourceReferences'] = [retainedReference]
+      const editedText = JSON.stringify(archive, null, 2)
+      expect(editedText).not.toBe(originalText)
+
+      // A structurally broken edit is still rejected before any write —
+      // acceptance follows the normal §8.2 validation, nothing else.
+      const broken = JSON.parse(editedText) as {
+        readonly drugs: { key: string; value: Record<string, unknown> }[]
+      }
+      const brokenEntry = broken.drugs.find((candidate) => candidate.key === 'fixture-drug-dup')
+      if (brokenEntry === undefined) throw new Error('the edited archive lost the row')
+      brokenEntry.key = 'fixture-drug-gone' // key must equal the value's own id
+      const rejected = await repo.restoreRecoveryArchive(JSON.stringify(broken, null, 2))
+      expect(rejected.ok).toBe(false)
+      if (!rejected.ok) expect(rejected.issues[0]?.code).toBe('ARCHIVE_KEY_MISMATCH')
+      expect(await db.drugs.get('fixture-drug-dup')).toEqual(malformedRow)
+
+      // Preview is honest about the edit: the archive recorded a quarantined
+      // row, this build classifies the repaired one as readable.
+      const preview = await repo.previewRecoveryArchive(editedText)
+      if (!preview.ok) throw new Error(JSON.stringify(preview.issues))
+      expect(preview.report.counts.quarantinedAtExport).toBe(1)
+      expect(preview.report.currentBuild).toEqual({ readable: 2, quarantined: 0 })
+      expect(preview.report.warnings.map((w) => w.code)).toContain('RECLASSIFICATION_DIFFERS')
+
+      const restored = await repo.restoreRecoveryArchive(editedText)
+      if (!restored.ok) throw new Error(JSON.stringify(restored.issues))
+      expect(restored.report.counts).toEqual(exported.counts)
+      expect(restored.report.currentBuild).toEqual({ readable: 2, quarantined: 0 })
+
+      // The repaired drug is readable with exactly the retained reference —
+      // its values and unknown extension fields intact — and only the
+      // deliberate change was applied to the row.
+      const expectedRepairedRow = {
+        ...malformedRow,
+        targets: malformedRow.targets.map((target2, index) =>
+          index === 0 ? { ...target2, sourceReferences: [retainedReference] } : target2,
+        ),
+      }
+      expect(await db.drugs.get('fixture-drug-dup')).toEqual(expectedRepairedRow)
+      const repaired = await repo.getDrug('fixture-drug-dup')
+      expect(repaired?.targets[0]?.sourceReferences).toEqual([retainedReference])
+
+      // Everything else survived the full-snapshot round trip: the unrelated
+      // valid row and all metadata (unknown field included) are unchanged,
+      // with no silent row loss or unexpected row creation.
+      expect(await db.drugs.get('fixture-drug-1')).toEqual(validRecord)
+      expect(await db.meta.get('fixture-library')).toEqual(metadataRow)
+      expect((await repo.getLibraryMetadata()).name).toBe('Repair fixture library')
+      expect(await db.drugs.count()).toBe(2)
+      const after = await repo.getAllDrugs()
+      expect(after.drugs).toHaveLength(2)
+      // The quarantine report agrees with the restore report (0 quarantined).
+      expect(after.quarantine).toEqual([])
+
+      // The original exported archive string is unchanged and still previews
+      // as the pre-repair snapshot (1 readable / 1 quarantined).
+      const untouched = await repo.previewRecoveryArchive(originalText)
+      if (!untouched.ok) throw new Error(JSON.stringify(untouched.issues))
+      expect(untouched.report.currentBuild).toEqual({ readable: 1, quarantined: 1 })
+    } finally {
+      await db.delete()
+    }
+  })
+
   it('rejects an invalid archive before opening any write transaction', async () => {
     const { db } = await seededDb()
     try {
