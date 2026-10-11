@@ -757,6 +757,55 @@ point; quarantine rows remain visible in the existing quarantine report
 (`DrugLibraryView.tsx`). Everything is local: no backend, telemetry,
 cloud upload or remote storage (consistent with ADR-11/ADR-12).
 
+**Manual repair of a quarantined row through your own archive (phase
+18I.2).** Ordinary `.npsl`, `.json` and CSV exports deliberately
+**exclude** quarantined records (§2 — the Export tab warns whenever the
+quarantine list is non-empty), so exporting the library as `.npsl` and
+editing that file can never repair a quarantined row: the row is not in
+the file. While a validation rule (e.g. the phase 18I.1
+one-reference-per-source uniqueness invariant) quarantines the row, a
+normal NPSL import cannot reintroduce the same malformed row either —
+the shared schema rejects it before any write.
+
+The one route that can repair such a row is the one this format already
+provides: `.npsb` archives snapshot raw storage **including quarantined
+rows**, and restore writes rows back verbatim after structural
+validation only. Editing your own archive to fix a malformed row is
+therefore a **supported manual recovery technique** — the deliberate
+"user resolves the row" path the format was built around — under strict
+conditions:
+
+- The archive is a **full local-storage snapshot**, not a single
+  record: restore **replaces the entire library** (every drug row and
+  all metadata rows, §8) with the archive's contents. Export a fresh
+  backup and keep the untouched original, so you can always return to
+  the state you started from.
+- Change only what you intend (for a duplicate-reference row: remove
+  exactly the one duplicate entry from that target's
+  `sourceReferences` array, keeping the reference you chose) and leave
+  everything else alone — every other row, the `counts`, the entry
+  `key` (it must keep matching the row's own `id`), and any
+  `specialNumbers` sidecar annotations. The archive has no checksum: a
+  structurally valid but careless edit restores just as verbatim as a
+  careful one.
+- Verify the edited JSON parses and says what you intend, then read
+  the restore preview closely: it shows the counts recorded at export,
+  **this build's** classification of every row, and any warnings. An
+  archive whose edited row used to be quarantined normally shows a
+  non-blocking `RECLASSIFICATION_DIFFERS` warning (the export recorded
+  the row as quarantined; this build now reads it). Confirm only when
+  the numbers match your expectation — the acknowledgement checkbox
+  gates the full-replacement write.
+- `.npsb` is **not authenticated and not checksummed** (§12/§13):
+  restoring a hand-edited archive proves nothing about authenticity or
+  integrity — it is your own local data, edited by you, restored
+  exactly as edited.
+
+The application never performs this repair itself: hydration reports
+quarantine without rewriting rows (ADR-15), the drug schema never
+deduplicates or normalizes references, and no quarantine editor exists
+— the edit, and the choice of which reference to keep, are yours.
+
 ---
 
 ## 12. Resource limits and security
@@ -902,6 +951,7 @@ fixtures); no real pharmacology. The matrix below is implemented by:
 | Ordinary paths unaffected | `importLibrary` on `.npsb` text → `SCHEMA`/`PARSE` error, zero writes; `replaceLibrary` still rejects invalid rows; `exportLibrary` still excludes quarantine; full existing suites unchanged |
 | All meta rows | Restored verbatim; `getLibraryMetadata()` returns the first row by key order; extra rows present in storage |
 | Snapshot consistency | Counts in archive ≡ entries even when a concurrent `put` lands after the snapshot (§7 fallback under test) |
+| Hand-edited repair of a quarantined row (phase 18I.2) | Seed a duplicate-source-reference row (unknown fields at drug, target and reference level) + a valid row + metadata → hydration quarantines it unchanged → export (counts 1 readable / 1 quarantined) → deliberate JSON edit, located via the entry's `key` ≡ row id, retaining one reference and removing the duplicate → a structurally broken edit still rejected (`ARCHIVE_KEY_MISMATCH`, storage untouched) → edited archive previews with `RECLASSIFICATION_DIFFERS` (this build 2 readable / 0 quarantined) and restores verbatim; the repaired row is readable with exactly the retained reference (values + unknown fields intact), unrelated rows and metadata are byte-identical, no row loss or creation, the quarantine report agrees with the restore report, and the untouched original export text still previews as the pre-repair snapshot |
 
 ### 15.3 Component tests (store + Import/Export view)
 
