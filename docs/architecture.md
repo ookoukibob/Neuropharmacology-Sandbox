@@ -253,6 +253,76 @@ wholesale and `identifiers` still carries the form's `name`/`synonyms`
 (the repository contract is unchanged), and this adds no editing controls,
 no schema field and no interchange format change.
 
+#### Multi-tab write semantics (phase 19 — audit GAP-4)
+
+Two layers, verified separately in a real browser and in repository
+tests; they must not be conflated.
+
+**1. Repository API (`DrugChanges`) — per-call merge against a fresh
+read.** `updateDrug(id, changes)` opens one read-write transaction,
+re-reads the stored row *inside* it, and applies `changes` to that fresh
+row (`dexieDrugRepository.ts` `applyChanges`):
+
+- A group absent from `changes` (`identifiers`, `tags`, `targets`,
+  `pharmacokinetics`, `notes`) keeps the freshly read value — an API
+  caller that omits groups therefore composes with a write another
+  connection committed in between (repository test: "composes an
+  omitted group with an interleaved committed write").
+- A supplied group replaces the stored group **wholesale**:
+  `identifiers` and `targets` are replacement groups, never deep-merged
+  — fields the replacement omits do not survive (repository test:
+  "replaces a supplied group wholesale").
+- `notes` is the one key where presence carries a second meaning:
+  absent keeps the stored value, an explicit `undefined` clears it.
+- Every committed update restamps `updatedAt`; `createdAt`, origin and
+  unknown extension fields are preserved.
+
+This is a per-call merge with no version check and no conflict
+detection. It is *not* an application-wide concurrency guarantee.
+
+**2. The edit form submits a full snapshot, not a delta.**
+`DrugForm.buildInput` always emits all four editable groups —
+`identifiers`, `tags`, `targets`, `notes` — even when the user changed
+only one of them: untouched fields submit the values of the record as
+it was when the form mounted. `pharmacokinetics` is the only group the
+form never emits, so it alone survives via the repository's re-read.
+Because the repository replaces supplied groups wholesale, its
+transaction re-read **cannot** preserve another tab's changes when the
+stale form explicitly supplies the old values for those groups.
+
+**Observed two-tab behavior (real browser, two pages in one context —
+`e2e/multitab.spec.ts`):** with one record open in edit mode in both
+tabs, tab A renaming and saving, then tab B (no reload) saving a
+tags-only change, the final stored record carries B's tags and A's
+rename **silently reverted** to the pre-edit value; B's save reports
+success with no error or warning. A second scenario confirms the same
+at group level: B's stale `targets` snapshot (B edited only the name)
+reverts A's committed parameter change wholesale (9.9 nM back to
+4.2 nM). Last-writer-wins therefore applies **per submitted group** —
+and since the form's snapshot granularity is "all editable groups of
+the record", a later stale save is effectively last-writer-wins for the
+whole record except `pharmacokinetics`. This is a confirmed limitation
+of the current UI, recorded deliberately (audit GAP-4); this phase adds
+no lock, version check or automatic merge.
+
+**Cross-tab refresh: none.** A tab refreshes its Zustand session only
+after its *own* mutations or a manual hydrate/reload (`store.ts`
+`refresh`, `AppLayout.tsx`); there is no storage event, live query,
+`BroadcastChannel` or focus/visibility re-hydration. After another tab
+commits, a tab keeps displaying its stale session state — including
+inside an open edit form, and in the opposite direction after its own
+save — until the user reloads.
+
+**Practical precaution (mitigation, not prevention):** reload the page
+(or reopen the record after a reload) so the edit form mounts from the
+current stored state, and do not keep the same record open for editing
+in two tabs at once. This shrinks the exposure window to the time
+between form mount and save, but it cannot *prevent* the overwrite:
+any change another tab commits inside that window is still silently
+reverted on save. A behavioral fix (e.g. optimistic versioning or
+delta-submitting forms) would be a separate proposed follow-up, not
+part of this phase.
+
 ### 4.3 Calculation
 
 ```
