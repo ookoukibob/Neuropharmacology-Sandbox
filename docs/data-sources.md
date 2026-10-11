@@ -168,12 +168,19 @@ mirrored; only individually requested records are stored.
 ## 5. Transport, validation and failure handling
 
 - One shared `fetchJson` (`src/data/sources/http.ts`): 10 s timeout
-  per attempt, one retry on network failure / 5xx / HTTP 429 (never on
-  other 4xx), typed `SourceRequestError` codes (`network`, `timeout`,
-  `http`, `invalid-response`, `aborted`) that the UI maps to
-  human-readable, code-specific messages — including a distinct
-  "source is limiting request rate" (429) and "source is temporarily
-  unavailable" (503/504) wording.
+  per attempt — covering the fetch AND the response-body read, but
+  deliberately NOT the wait for a `beforeAttempt` permit (that wait is
+  bounded by the pacer's FIFO spacing and by cancellation) — one retry
+  on network failure / 5xx / HTTP 429 (never on other 4xx), typed
+  `SourceRequestError` codes (`network`, `timeout`, `http`,
+  `invalid-response`, `aborted`) that the UI maps to human-readable,
+  code-specific messages — including a distinct "source is limiting
+  request rate" (429) and "source is temporarily unavailable" (503/504)
+  wording. Cancellation and the timeout budget keep their typed codes
+  even when they strike while a response body is being read (success or
+  error body) — never downgraded to `invalid-response` or to a plain
+  HTTP status; a genuine parse failure stays `invalid-response`, and a
+  failed error-body parse never erases the HTTP status.
 - **Retry waits are cancellation-aware**: cancelling during the wait
   between attempts rejects immediately with `aborted` and never starts
   another network request.
@@ -184,16 +191,22 @@ mirrored; only individually requested records are stored.
   the UI. Unparseable headers fall back to the fixed 300 ms delay.
 - **PubChem pacing** (`src/data/sources/limiter.ts`): one in-memory
   rate limiter per `createSourceAdapters()` call (one per application
-  runtime) spaces every PubChem PUG REST request start ≥ 250 ms apart
+  runtime) spaces every PubChem PUG REST attempt start ≥ 250 ms apart
   (4/second — below PubChem's documented ≤ 5 requests/second policy).
-  It covers concurrent searches, sequential multi-request lookups and
-  retries (retries re-enter through the same paced path); requests
-  cancelled while queued reject with `aborted` and never reach the
-  network. Honest scope: the limiter coordinates only the callers that
-  share its instance — it does **not** coordinate other browser tabs,
-  independent profiles, or other devices, and it keeps no persistent
-  state. ChEMBL publishes no per-second limit, so it keeps the plain
-  bounded transport.
+  The limiter is injected as the transport's per-attempt hook, so it
+  covers **every actual attempt** — concurrent searches, sequential
+  multi-request lookups and automatic retries alike (a retry with no
+  transport-level delay, e.g. `Retry-After: 0`, still queues for its
+  permit). An attempt whose permit never arrives (cancelled while
+  queued) never reaches the network; a mid-queue cancellation settles
+  promptly with `aborted` without waiting for earlier entries and
+  without consuming a permit or shifting the survivors' spacing; an
+  attempt that failed AFTER starting keeps its interval — it was a real
+  request start. Honest scope: the limiter coordinates only the callers
+  that share its instance — it does **not** coordinate other browser
+  tabs, independent profiles, or other devices, and it keeps no
+  persistent state. ChEMBL publishes no per-second limit, so it keeps
+  the plain bounded transport.
 - **PubChem synonym lookup** stays best-effort: a genuine failure
   returns valid identity records with empty synonym lists, but
   cancellation is never downgraded to a synonym failure — an aborted
