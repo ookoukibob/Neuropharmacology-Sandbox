@@ -53,3 +53,20 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+
+  # NV-1 crash durability (phase 21, docs/testing.md): a SEPARATE job
+  # because the test owns its browser-process lifecycle — it launches
+  # and kills supervised Chromium processes against disposable
+  # user-data directories (never the ordinary E2E browser profile).
+  crash-durability:
+    name: NV-1 crash durability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:crash
