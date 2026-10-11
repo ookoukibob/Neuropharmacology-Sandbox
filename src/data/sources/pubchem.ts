@@ -113,7 +113,7 @@ export interface PubChemAdapterOptions {
   /** Clock for retrieval/record timestamps (injected for tests). */
   readonly now?: () => string
   /** Transport overrides (timeouts/retries) — defaults are the policy. */
-  readonly http?: Omit<FetchJsonOptions, 'fetchFn' | 'signal'>
+  readonly http?: Omit<FetchJsonOptions, 'fetchFn' | 'signal' | 'beforeAttempt'>
   /**
    * Shared request pacer. The registry injects one limiter so every
    * PubChem request of the runtime is paced together; adapters created
@@ -129,14 +129,16 @@ export function createPubChemAdapter(options: PubChemAdapterOptions = {}): Sourc
   const limiter = options.limiter ?? createRateLimiter({ minIntervalMs: PUBCHEM_MIN_INTERVAL_MS })
 
   async function request(url: string, signal?: AbortSignal): Promise<unknown> {
-    // One shared limiter covers every PUG REST call of this adapter —
-    // searches, sequential multi-request lookups and retries alike.
-    // A request cancelled while queued never reaches the network.
-    await limiter.acquire(signal)
+    // The shared limiter is the transport's per-attempt hook, so EVERY
+    // PUG REST attempt of this adapter takes a permit — the first call
+    // and each automatic retry alike. An attempt cancelled while queued
+    // for its permit never reaches the network; an attempt that failed
+    // after starting keeps its interval (it was a real request start).
     return await fetchJson(url, {
       ...http,
       ...(fetchFn !== undefined ? { fetchFn } : {}),
       ...(signal !== undefined ? { signal } : {}),
+      beforeAttempt: (attemptSignal) => limiter.acquire(attemptSignal),
     })
   }
 

@@ -5,11 +5,18 @@
  * uniform and testable:
  *
  * - **timeout** — each attempt has a fixed budget (default 10 s) so a
- *   hung endpoint cannot stall the UI indefinitely;
+ *   hung endpoint cannot stall the UI indefinitely; the budget covers
+ *   the fetch and the response-body read, but NOT the wait for a
+ *   `beforeAttempt` permit (that wait is bounded by the pacer's FIFO
+ *   spacing and by cancellation, not by this timer);
  * - **cancellation** — a caller-supplied AbortSignal aborts the in-flight
  *   request immediately and rejects with code `aborted` (used for stale
  *   searches and unmounts). The wait between retries is cancellation-aware
  *   too: a cancelled request never starts another attempt;
+ * - **per-attempt hook** — `beforeAttempt` is awaited before EVERY attempt
+ *   (the initial one and every automatic retry), so a pacer injected
+ *   through it spaces actual request starts; an attempt whose hook
+ *   rejects (e.g. cancelled while queued) never reaches the network;
  * - **controlled retries** — network failures, 5xx answers and HTTP 429
  *   (throttling) are retried once (default) after a short delay; every
  *   other 4xx answer, timeout and cancellation is never retried, so a bad
@@ -21,7 +28,10 @@
  *   stalling the UI;
  * - **honest errors** — non-2xx statuses carry their status code (and the
  *   source's own fault message when the body has one); a body that is not
- *   JSON is `invalid-response`, never a generic failure.
+ *   JSON is `invalid-response`, never a generic failure. Cancellation and
+ *   the timeout budget keep their typed codes (`aborted` / `timeout`) even
+ *   when they strike while a response body is being read, and a body-read
+ *   cancellation never degrades into a plain HTTP or parsing error.
  *
  * No request is ever issued by this module on its own — callers pass the
  * URL, so startup and navigation paths stay network-free.
@@ -47,6 +57,13 @@ export interface FetchJsonOptions {
   readonly maxRetryAfterMs?: number
   /** Injected wait between attempts — deterministic tests. */
   readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
+  /**
+   * Awaited before EVERY attempt (initial and each retry), before the
+   * attempt's timeout budget starts — e.g. a rate-limiter permit
+   * acquisition. A rejection (typically `aborted`) prevents that attempt
+   * from reaching the network and surfaces as the typed error.
+   */
+  readonly beforeAttempt?: (signal?: AbortSignal) => Promise<void>
 }
 
 const defaultFetch: FetchLike = (input, init) => globalThis.fetch(input, init)
@@ -76,12 +93,41 @@ export function parseRetryAfterMs(header: string | null, now: () => number = Dat
   return Math.max(0, atMs - now())
 }
 
+/**
+ * Who aborted a body read: the caller (cancel/stale) or the timeout
+ * budget — or nobody (`undefined`, a genuine parse failure).
+ */
+function bodyReadInterrupt(
+  cancelled: boolean,
+  timedOut: boolean,
+  timeoutMs: number,
+): SourceRequestError | undefined {
+  if (cancelled) return new SourceRequestError('aborted', 'request was cancelled')
+  if (timedOut) return new SourceRequestError('timeout', `request exceeded ${timeoutMs} ms`)
+  return undefined
+}
+
+/** `signal?.aborted`, immune to control-flow narrowing across awaits. */
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true
+}
+
 async function attemptOnce(url: string, options: FetchJsonOptions): Promise<unknown> {
   const fetchFn = options.fetchFn ?? defaultFetch
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const external = options.signal
 
-  if (external?.aborted === true) {
+  if (isAborted(external)) {
+    throw new SourceRequestError('aborted', 'request was cancelled')
+  }
+
+  // Per-attempt pacing/permit hook — deliberately OUTSIDE the attempt's
+  // timeout budget: waiting for a rate-limit slot is bounded by the
+  // pacer's FIFO spacing and by cancellation, not by this timer.
+  await options.beforeAttempt?.(external)
+  if (isAborted(external)) {
+    // The permit may have been granted just as the caller cancelled —
+    // never start the network request after that.
     throw new SourceRequestError('aborted', 'request was cancelled')
   }
 
@@ -108,12 +154,8 @@ async function attemptOnce(url: string, options: FetchJsonOptions): Promise<unkn
     } catch (error) {
       // Distinguish who aborted: the caller (cancel/stale), the timeout
       // budget, or an honest network failure.
-      if (cancelled) {
-        throw new SourceRequestError('aborted', 'request was cancelled')
-      }
-      if (timedOut) {
-        throw new SourceRequestError('timeout', `request exceeded ${timeoutMs} ms`)
-      }
+      const interrupt = bodyReadInterrupt(cancelled, timedOut, timeoutMs)
+      if (interrupt !== undefined) throw interrupt
       throw new SourceRequestError(
         'network',
         error instanceof Error ? error.message : String(error),
@@ -124,7 +166,13 @@ async function attemptOnce(url: string, options: FetchJsonOptions): Promise<unkn
       let detail: string | undefined
       try {
         detail = faultDetail(await response.json())
-      } catch {
+      } catch (error) {
+        // Cancellation or timeout while reading the error body keep
+        // their typed codes — they are not "just" an HTTP error and are
+        // never downgraded to the status or to a parsing failure.
+        const interrupt = bodyReadInterrupt(cancelled, timedOut, timeoutMs)
+        if (interrupt !== undefined) throw interrupt
+        if (error instanceof SourceRequestError) throw error
         // Non-JSON error body — the status code alone carries the meaning.
       }
       const retryAfterMs = parseRetryAfterMs(response.headers.get('Retry-After')) ?? undefined
@@ -138,7 +186,13 @@ async function attemptOnce(url: string, options: FetchJsonOptions): Promise<unkn
 
     try {
       return (await response.json()) as unknown
-    } catch {
+    } catch (error) {
+      // Same classification for the success path: a cancelled or timed
+      // out body read keeps its typed code; only a genuine parse
+      // failure is invalid-response.
+      const interrupt = bodyReadInterrupt(cancelled, timedOut, timeoutMs)
+      if (interrupt !== undefined) throw interrupt
+      if (error instanceof SourceRequestError) throw error
       throw new SourceRequestError('invalid-response', 'response body was not valid JSON')
     }
   } finally {
@@ -151,8 +205,9 @@ async function attemptOnce(url: string, options: FetchJsonOptions): Promise<unkn
  * GET `url` and parse the JSON body, applying the timeout / retry /
  * cancellation policy above. Rejects only with `SourceRequestError`, so
  * callers can map every failure to an explained, source-specific message.
- * Retried attempts re-enter through `attemptOnce`, so any pacing applied
- * around `fetchFn` (e.g. the PubChem limiter) covers retries as well.
+ * `options.beforeAttempt` is invoked for every attempt — the initial one
+ * and each automatic retry — so an injected pacer (e.g. the PubChem
+ * limiter) spaces actual request starts, retries included.
  */
 export async function fetchJson(url: string, options: FetchJsonOptions = {}): Promise<unknown> {
   const retries = options.retries ?? DEFAULT_RETRIES

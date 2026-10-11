@@ -4,7 +4,7 @@
  * response is scripted through an injected fake fetch.
  * All URLs and payloads here are synthetic test data.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fetchJson, parseRetryAfterMs } from './http'
 import { SourceRequestError, type FetchLike } from './types'
 
@@ -13,6 +13,54 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   })
+}
+
+/**
+ * A Response whose `json()` settles only when the test says so — lets a
+ * test interrupt (cancel / time out / fail) DURING the body read.
+ */
+function controllableJson(status = 200): {
+  readonly response: Response
+  readonly succeedJson: (body: unknown) => void
+  readonly failJson: (error: unknown) => void
+} {
+  let succeed: (body: unknown) => void = () => {}
+  let fail: (error: unknown) => void = () => {}
+  const body = new Promise<unknown>((resolve, reject) => {
+    succeed = resolve
+    fail = reject
+  })
+  const response = {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers(),
+    json: () => body,
+  } as unknown as Response
+  return {
+    response,
+    succeedJson: (value) => {
+      succeed(value)
+    },
+    failJson: (error) => {
+      fail(error)
+    },
+  }
+}
+
+/** A fetch that delivers `response` and signals when it has been called. */
+function gatedFetch(response: Response): {
+  readonly fetchFn: FetchLike
+  readonly called: Promise<void>
+} {
+  let mark: () => void = () => {}
+  const called = new Promise<void>((resolve) => {
+    mark = resolve
+  })
+  const fetchFn: FetchLike = async () => {
+    mark()
+    return response
+  }
+  return { fetchFn, called }
 }
 
 function recorder(handler: (url: string) => Response | Promise<Response>): {
@@ -294,5 +342,82 @@ describe('parseRetryAfterMs', () => {
     expect(parseRetryAfterMs('soon', now)).toBeNull()
     expect(parseRetryAfterMs('', now)).toBeNull()
     expect(parseRetryAfterMs(null, now)).toBeNull()
+  })
+})
+
+describe('fetchJson — interruptions during response-body reads', () => {
+  it('rejects as aborted when cancelled while reading a successful response body', async () => {
+    const controller = new AbortController()
+    const { response, failJson } = controllableJson(200)
+    const { fetchFn, called } = gatedFetch(response)
+    const pending = fetchJson('https://source.test/data', {
+      fetchFn,
+      signal: controller.signal,
+      retryDelayMs: 0,
+    })
+    await called // the response arrived; the body read is in flight
+    controller.abort()
+    failJson(new DOMException('The operation was aborted.', 'AbortError'))
+    const error = await rejection(pending)
+    expect(error.code).toBe('aborted') // not invalid-response
+  })
+
+  it('rejects as timeout when the attempt budget expires during a successful body read', async () => {
+    vi.useFakeTimers()
+    try {
+      const { response, failJson } = controllableJson(200)
+      const { fetchFn, called } = gatedFetch(response)
+      const pending = fetchJson('https://source.test/data', {
+        fetchFn,
+        timeoutMs: 10,
+        retryDelayMs: 0,
+      })
+      await called // the body read is in flight
+      vi.advanceTimersByTime(10) // the attempt budget expires mid-read
+      failJson(new DOMException('The operation was aborted.', 'AbortError'))
+      const error = await rejection(pending)
+      expect(error.code).toBe('timeout') // not invalid-response
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps aborted (not http) when cancelled while reading an error body', async () => {
+    const controller = new AbortController()
+    const { response, failJson } = controllableJson(404) // not retryable — the
+    const { fetchFn, called } = gatedFetch(response) //  final error must be the interruption
+    const pending = fetchJson('https://source.test/data', {
+      fetchFn,
+      signal: controller.signal,
+      retryDelayMs: 0,
+    })
+    await called // the 404 arrived; its error body read is in flight
+    controller.abort()
+    failJson(new DOMException('The operation was aborted.', 'AbortError'))
+    const error = await rejection(pending)
+    expect(error.code).toBe('aborted') // never downgraded to http 404
+    expect(error.status).toBeUndefined()
+  })
+
+  it('keeps invalid-response when a successful body read genuinely fails', async () => {
+    const { response, failJson } = controllableJson(200)
+    const { fetchFn, called } = gatedFetch(response)
+    const pending = fetchJson('https://source.test/data', { fetchFn, retryDelayMs: 0 })
+    await called
+    failJson(new SyntaxError('Unexpected token < in JSON'))
+    const error = await rejection(pending)
+    expect(error.code).toBe('invalid-response')
+  })
+
+  it('keeps the HTTP status when the error body cannot be parsed', async () => {
+    let calls = 0
+    const fetchFn: FetchLike = async () => {
+      calls += 1
+      return new Response('<html>gateway</html>', { status: 404 })
+    }
+    const error = await rejection(fetchJson('https://source.test/x', { fetchFn }))
+    expect(error.code).toBe('http')
+    expect(error.status).toBe(404)
+    expect(calls).toBe(1)
   })
 })

@@ -281,4 +281,143 @@ describe('PubChem adapter — request pacing', () => {
     await first
     expect(urls).toHaveLength(2) // the first search's own two requests — no third
   })
+
+  it('paces the automatic retry of a failed attempt through the same limiter', async () => {
+    const clock = { value: 0 }
+    const waits: number[] = []
+    const limiter = createRateLimiter({
+      minIntervalMs: 250,
+      now: () => clock.value,
+      delay: async (ms) => {
+        waits.push(ms)
+        clock.value += ms
+      },
+    })
+    let propertyCalls = 0
+    const fetchFn: FetchLike = async (url) => {
+      if (url.includes('/property/')) {
+        propertyCalls += 1
+        return propertyCalls === 1 ? json({}, 503) : json(propertiesFixture)
+      }
+      return json(synonymsFixture)
+    }
+    const adapter = createPubChemAdapter({
+      fetchFn,
+      now: () => NOW,
+      limiter,
+      // No transport-level retry delay: the retry's spacing can only
+      // come from the limiter if retries really re-enter it.
+      http: { retryDelayMs: 0 },
+    })
+
+    const results = await adapter.searchCompounds('90000001', {})
+    expect(results).toHaveLength(1)
+    expect(propertyCalls).toBe(2) // initial attempt + its automatic retry
+    expect(waits).toEqual([250, 250]) // retry permit + synonyms permit, both paced
+  })
+
+  it('keeps the minimum interval across concurrent searches interleaved with a retry', async () => {
+    const clock = { value: 0 }
+    const waits: number[] = []
+    const limiter = createRateLimiter({
+      minIntervalMs: 250,
+      now: () => clock.value,
+      delay: async (ms) => {
+        waits.push(ms)
+        clock.value += ms
+      },
+    })
+    let propertyCalls = 0
+    const fetchFn: FetchLike = async (url) => {
+      if (url.includes('/property/')) {
+        propertyCalls += 1
+        return propertyCalls === 1 ? json({}, 503) : json(propertiesFixture) // first search fails once
+      }
+      return json(synonymsFixture)
+    }
+    const a = createPubChemAdapter({ fetchFn, now: () => NOW, limiter, http: { retryDelayMs: 0 } })
+    const b = createPubChemAdapter({ fetchFn, now: () => NOW, limiter, http: { retryDelayMs: 0 } })
+
+    const [first, second] = await Promise.all([
+      a.searchCompounds('90000001', {}),
+      b.searchCompounds('90000001', {}),
+    ])
+    expect(first).toHaveLength(1)
+    expect(second).toHaveLength(1)
+    expect(propertyCalls).toBe(3) // a's failed attempt, its retry, and b's
+    // Five actual attempt starts across the shared limiter; the first was
+    // free, the other four each waited a full interval — retries included.
+    expect(waits).toEqual([250, 250, 250, 250])
+  })
+
+  it('does not let a zero-delay retry (Retry-After: 0) bypass the limiter', async () => {
+    const clock = { value: 0 }
+    const waits: number[] = []
+    const limiter = createRateLimiter({
+      minIntervalMs: 250,
+      now: () => clock.value,
+      delay: async (ms) => {
+        waits.push(ms)
+        clock.value += ms
+      },
+    })
+    let propertyCalls = 0
+    const fetchFn: FetchLike = async (url) => {
+      if (url.includes('/property/')) {
+        propertyCalls += 1
+        return propertyCalls === 1
+          ? new Response('{}', { status: 429, headers: { 'Retry-After': '0' } })
+          : json(propertiesFixture)
+      }
+      return json(synonymsFixture)
+    }
+    const adapter = createPubChemAdapter({ fetchFn, now: () => NOW, limiter })
+
+    const results = await adapter.searchCompounds('90000001', {})
+    expect(results).toHaveLength(1)
+    expect(propertyCalls).toBe(2)
+    // The retry had no transport-level wait at all (Retry-After: 0) yet
+    // still queued for its permit — no bypass.
+    expect(waits).toEqual([250, 250])
+  })
+
+  it('a retry cancelled while waiting for its permit never calls fetch', async () => {
+    const pendingWaits: { readonly resolve: () => void }[] = []
+    const clock = { value: 0 }
+    const limiter = createRateLimiter({
+      minIntervalMs: 250,
+      now: () => clock.value,
+      delay: () =>
+        new Promise<void>((resolve) => {
+          pendingWaits.push({ resolve })
+        }),
+    })
+    let propertyCalls = 0
+    const controller = new AbortController()
+    const fetchFn: FetchLike = async (url) => {
+      if (url.includes('/property/')) {
+        propertyCalls += 1
+        return json({}, 503) // the first attempt fails; a retry will follow
+      }
+      return json(synonymsFixture)
+    }
+    const adapter = createPubChemAdapter({
+      fetchFn,
+      now: () => NOW,
+      limiter,
+      http: { retryDelayMs: 0 },
+    })
+
+    const search = adapter.searchCompounds('90000001', { signal: controller.signal })
+    // Wait until the retry is queued for its permit.
+    for (let i = 0; i < 50 && pendingWaits.length === 0; i += 1) {
+      await Promise.resolve()
+    }
+    expect(pendingWaits).toHaveLength(1) // the retry is waiting for its permit…
+    expect(propertyCalls).toBe(1) // …and has not reached fetch yet
+    controller.abort()
+    await expect(search).rejects.toMatchObject({ code: 'aborted' })
+    expect(propertyCalls).toBe(1) // the cancelled retry never reached fetch
+    pendingWaits[0]?.resolve() // a stale wait resolution must change nothing
+  })
 })
