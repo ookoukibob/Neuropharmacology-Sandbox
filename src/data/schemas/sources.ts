@@ -33,7 +33,7 @@ const isoDateTime = z.iso.datetime({
  * (`javascript:`, `file:`, ...) are rejected with a message that names
  * the offending field. Validation never fetches or navigates.
  */
-const httpsUrl = z
+export const httpsUrl = z
   .string()
   .min(1, 'must be an absolute HTTPS URL')
   .refine(
@@ -89,6 +89,7 @@ export const observationRecordSchema = z.looseObject({
   target: z.looseObject({
     name: z.string().min(1).optional(),
     sourceTargetId: z.string().min(1).optional(),
+    sourceTargetUrl: httpsUrl.optional(),
     organism: z.string().min(1).optional(),
   }),
   endpoint: z.string().min(1),

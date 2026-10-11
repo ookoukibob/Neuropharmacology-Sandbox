@@ -149,3 +149,30 @@ export async function mockChEMBL(page: Page): Promise<void> {
     return route.fulfill({ status: 404, json: { detail: 'not mocked' } })
   })
 }
+
+/**
+ * The ChEMBL fixtures plus one synthetic activity whose target id
+ * CONFLICTS with Synthetic Target A: same reported target name and
+ * organism, different `target_chembl_id` (phase 18I identity workflow).
+ */
+export async function mockChEMBLWithConflictingTarget(page: Page): Promise<void> {
+  const activities = {
+    ...CHEMBL_ACTIVITIES,
+    activities: [
+      ...CHEMBL_ACTIVITIES.activities,
+      activity({
+        activity_id: 99000008,
+        standard_type: 'Ki',
+        standard_value: '2.2',
+        target_chembl_id: 'CHEMBL99991099', // conflicts with CHEMBL99991001
+      }),
+    ],
+  }
+  await page.route(/ebi\.ac\.uk\/chembl\/api\/data\//, async (route) => {
+    const url = route.request().url()
+    if (url.includes('/target/search')) return route.fulfill({ json: CHEMBL_TARGETS })
+    if (url.includes('/activity.json')) return route.fulfill({ json: activities })
+    if (url.includes('/molecule.json')) return route.fulfill({ json: CHEMBL_MOLECULES })
+    return route.fulfill({ status: 404, json: { detail: 'not mocked' } })
+  })
+}

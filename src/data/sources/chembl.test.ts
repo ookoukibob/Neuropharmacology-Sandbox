@@ -159,6 +159,9 @@ describe('ChEMBL adapter — observations', () => {
       target: {
         name: 'Synthetic Target A',
         sourceTargetId: 'CHEMBL99991001',
+        // Phase 18I: the target-record URL travels alongside the id so a
+        // promoted parameter can carry the source's own target identity.
+        sourceTargetUrl: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
         organism: 'Homo sapiens',
       },
       endpoint: 'IC50',
@@ -221,6 +224,43 @@ describe('ChEMBL adapter — observations', () => {
     expect(limited?.dataValidityNote).toBe('Potentially invalid (synthetic marker)')
     expect(limited?.compoundName).toBeUndefined()
     expect(limited?.compoundId).toBe('chembl:CHEMBL99990002')
+  })
+
+  it('retains the target id and target-record URL when the source supplies one', async () => {
+    const { adapter } = adapterWith(ACTIVITIES)
+    const page = await adapter.fetchObservations?.('CHEMBL99990001')
+    const observed = page?.items.find((item) => item.id === 'chembl:99000001')
+    expect(observed?.target.sourceTargetId).toBe('CHEMBL99991001')
+    expect(observed?.target.sourceTargetUrl).toBe(
+      'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
+    )
+  })
+
+  it('leaves the target id and URL absent when the source reports no target id', async () => {
+    const { adapter } = adapterWith([
+      {
+        match: 'activity.json',
+        respond: () =>
+          json({
+            activities: [
+              {
+                activity_id: 99000009,
+                molecule_chembl_id: 'CHEMBL99990001',
+                standard_type: 'IC50',
+                standard_value: '4.2',
+                standard_units: 'nM',
+                standard_relation: '=',
+              },
+            ],
+            page_meta: { total_count: 1, limit: 25, offset: 0 },
+          }),
+      },
+    ])
+    const page = await adapter.fetchObservations?.('CHEMBL99990001')
+    const observed = page?.items[0]
+    // No target id was reported — neither id nor URL is fabricated.
+    expect(observed?.target.sourceTargetId).toBeUndefined()
+    expect(observed?.target.sourceTargetUrl).toBeUndefined()
   })
 
   it('drops the parameter-endpoint filter for the "all" scope', async () => {

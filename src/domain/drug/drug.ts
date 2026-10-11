@@ -33,6 +33,42 @@ export type TargetAction =
   | 'unknown'
 
 /**
+ * External source identity of a target — a portable reference record
+ * attached when a target association was established through a data
+ * source.
+ *
+ * Honest semantics: this records *what the source calls the target* —
+ * its own authoritative identifier, the reported name/organism, the
+ * target-record URL and the source's licensing/attribution terms. It is
+ * NOT proof of biological identity: two targets sharing a source id are
+ * the same record *in that source system*, and acknowledging a mismatch
+ * never claims the targets are biologically identical.
+ *
+ * Internal vs external identity: `ReceptorTarget.id` is this
+ * application's opaque row identity; a source reference never replaces
+ * it, and different source systems may each carry their own reference on
+ * the same local target (none silently replaces another).
+ */
+export interface TargetSourceReference {
+  /** Adapter id that supplied the target identity (e.g. 'chembl'). */
+  readonly source: string
+  /** Display name of that source (e.g. 'ChEMBL'). */
+  readonly sourceName: string
+  /** Authoritative target identifier within that source system. */
+  readonly sourceTargetId: string
+  /** Target name as reported by that source, when supplied. */
+  readonly name?: string
+  /** Organism as reported by that source, when supplied. */
+  readonly organism?: string
+  /** URL identifying this target record at the source (absolute HTTPS). */
+  readonly url?: string
+  /** Source licensing/attribution notice, verbatim. */
+  readonly licenseNotice?: string
+  /** Link to the source's licensing/terms page (absolute HTTPS). */
+  readonly licenseUrl?: string
+}
+
+/**
  * One drug -> one target relationship with its binding/pharmacodynamic
  * parameters.
  *
@@ -57,6 +93,13 @@ export interface ReceptorTarget {
   /** Concentration for half-maximal inhibition. Unit: molar concentration. */
   readonly ic50?: MaybeScientificValue
   readonly notes?: string
+  /**
+   * External source identities reported for this target (see
+   * `TargetSourceReference`). Optional: records without any stay without
+   * the key. At most one reference per source — see
+   * `mergeSourceReferences` for the enforced merge rule.
+   */
+  readonly sourceReferences?: readonly TargetSourceReference[]
 }
 
 /**
@@ -87,4 +130,38 @@ export interface Drug {
   /** ISO 8601. Absent for legacy imports; the importer fills it. */
   readonly createdAt?: string
   readonly updatedAt?: string
+}
+
+/** The reference this target carries from `source`, if any. */
+export function findSourceReference(
+  references: readonly TargetSourceReference[] | undefined,
+  source: string,
+): TargetSourceReference | undefined {
+  return references?.find((reference) => reference.source === source)
+}
+
+/**
+ * Attach `reference` to a target's reference list under the identity
+ * rules of phase 18I:
+ * - an identical reference (same source + same sourceTargetId) is a
+ *   no-op — repeated applications never create duplicates;
+ * - a reference from a different source system is appended — no source's
+ *   identity ever silently replaces another's;
+ * - a CONFLICT (same source, different sourceTargetId) is never merged
+ *   or overwritten here: the list is returned unchanged and the stored
+ *   conflicting reference is reported so the caller handles it
+ *   explicitly (acknowledgement, refusal), never silently.
+ */
+export function mergeSourceReferences(
+  existing: readonly TargetSourceReference[] | undefined,
+  reference: TargetSourceReference,
+): {
+  readonly references: readonly TargetSourceReference[]
+  readonly conflict?: TargetSourceReference
+} {
+  const current = existing ?? []
+  const same = findSourceReference(current, reference.source)
+  if (same === undefined) return { references: [...current, reference] }
+  if (same.sourceTargetId === reference.sourceTargetId) return { references: current }
+  return { references: current, conflict: same }
 }

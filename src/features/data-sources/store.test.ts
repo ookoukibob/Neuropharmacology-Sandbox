@@ -26,11 +26,13 @@ import {
   type RequestOptions,
   type SourceAdapter,
 } from '../../data/sources/types'
+import type { Drug, ReceptorTarget } from '../../domain/drug/drug'
 import type { RemoteCompound } from '../../domain/sources/compound'
 import type { RemoteObservation } from '../../domain/sources/observation'
 import {
   createDataSourcesStore,
   describeRequestError,
+  findTargetMismatch,
   importPreviewOf,
   type DataSourcesState,
 } from './store'
@@ -859,6 +861,19 @@ describe('data sources — applying an observation to a parameter (Layer C)', ()
       licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
       observationId: 'chembl:99000001',
     })
+    // Phase 18I: the target's source identity survives the same round trip.
+    expect(created?.sourceReferences).toEqual([
+      {
+        source: 'chembl',
+        sourceName: 'ChEMBL',
+        sourceTargetId: 'CHEMBL99991001',
+        name: 'Synthetic Target A',
+        organism: 'Homo sapiens',
+        url: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
+        licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+        licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
+      },
+    ])
   })
 
   it('refuses endpoints that do not map onto a parameter slot (no substitution)', async () => {
@@ -946,6 +961,186 @@ describe('data sources — applying an observation to a parameter (Layer C)', ()
       .applyObservation(applyRequest({ observationId: 'chembl:99000011' }))
     expect(result).toBe(false)
     expect(unnamed.getState().actionError).toContain('reports no target name')
+  })
+})
+
+describe('data sources — target source identity (phase 18I)', () => {
+  const CHEMBL_REF = {
+    source: 'chembl',
+    sourceName: 'ChEMBL',
+    sourceTargetId: 'CHEMBL99991001',
+    name: 'Synthetic Target A',
+    organism: 'Homo sapiens',
+    url: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
+    licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+    licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
+  }
+
+  function applyRequest(
+    overrides: Partial<Parameters<DataSourcesState['applyObservation']>[0]> = {},
+  ): Parameters<DataSourcesState['applyObservation']>[0] {
+    return {
+      observationId: OBSERVATION_A.id,
+      drugId: 'fixture-drug-1',
+      targetId: null,
+      overwrite: false,
+      ...overrides,
+    }
+  }
+
+  /** A library drug whose first target mirrors the observation's target. */
+  function drugWithFirstTarget(changes: Partial<ReceptorTarget>): Drug {
+    const base = syntheticDrug()
+    const [first, second] = [base.targets[0], base.targets[1]]
+    if (first === undefined || second === undefined) throw new Error('fixture needs two targets')
+    return {
+      ...base,
+      targets: [{ ...first, name: 'Synthetic Target A', species: 'Homo sapiens', ...changes }, second],
+    }
+  }
+
+  async function storeWithDrug(drug: Drug): Promise<Store> {
+    const store = makeStore()
+    await sourceRepo.importSourceRecords({ compounds: [COMPOUND_A], observations: [OBSERVATION_A] })
+    await drugRepo.replaceLibrary(syntheticLibrary([drug]))
+    await store.getState().hydrateStored()
+    return store
+  }
+
+  // --- structured comparison ------------------------------------------------
+
+  it('reports a source-id mismatch when the same source names a different target id', () => {
+    const target: ReceptorTarget = {
+      id: 'x',
+      name: 'Synthetic Target A',
+      species: 'Homo sapiens',
+      sourceReferences: [{ source: 'chembl', sourceName: 'ChEMBL', sourceTargetId: 'CHEMBL99991999' }],
+    }
+    const mismatch = findTargetMismatch(syntheticObservation(), target)
+    // Same displayed name and species — the ONLY difference is the identity.
+    expect(mismatch?.differences).toEqual(['source-id'])
+    expect(mismatch?.sourceIdConflict).toEqual({
+      source: 'chembl',
+      sourceName: 'ChEMBL',
+      observationTargetId: 'CHEMBL99991001',
+      storedTargetId: 'CHEMBL99991999',
+    })
+  })
+
+  it('treats an exact source + target-id match as an identity match', () => {
+    const target: ReceptorTarget = {
+      id: 'x',
+      name: 'Synthetic Target A',
+      species: 'Homo sapiens',
+      sourceReferences: [CHEMBL_REF],
+    }
+    expect(findTargetMismatch(syntheticObservation(), target)).toBeNull()
+    // The established name policy is preserved even with an id match:
+    // a source id match never waives a reported name contradiction.
+    const renamed: ReceptorTarget = { ...target, name: 'Something Else' }
+    expect(findTargetMismatch(syntheticObservation(), renamed)?.differences).toEqual(['name'])
+  })
+
+  it('a reference from a different source never creates a same-source conflict', () => {
+    const target: ReceptorTarget = {
+      id: 'x',
+      name: 'Synthetic Target A',
+      species: 'Homo sapiens',
+      sourceReferences: [{ source: 'pubchem', sourceName: 'PubChem', sourceTargetId: '90000001' }],
+    }
+    expect(findTargetMismatch(syntheticObservation(), target)).toBeNull()
+  })
+
+  it('missing reference information alone is never a fabricated mismatch', () => {
+    // Observation reports a source id; the row stores no references at all.
+    const bare: ReceptorTarget = { id: 'x', name: 'Synthetic Target A', species: 'Homo sapiens' }
+    expect(findTargetMismatch(syntheticObservation(), bare)).toBeNull()
+    // Observation reports no source id; the row stores one — still no conflict.
+    const observationWithoutId: RemoteObservation = {
+      ...syntheticObservation(),
+      target: { name: 'Synthetic Target A', organism: 'Homo sapiens' },
+    }
+    const referenced: ReceptorTarget = { ...bare, sourceReferences: [CHEMBL_REF] }
+    expect(findTargetMismatch(observationWithoutId, referenced)).toBeNull()
+  })
+
+  // --- apply behaviour ------------------------------------------------------
+
+  it('refuses an unacknowledged source-id mismatch before any write', async () => {
+    const store = await storeWithDrug(drugWithFirstTarget({ sourceReferences: [{ source: 'chembl', sourceName: 'ChEMBL', sourceTargetId: 'CHEMBL99991999' }] }))
+    const refused = await store
+      .getState()
+      .applyObservation(applyRequest({ targetId: 'fixture-target-1' }))
+    expect(refused).toBe(false)
+    expect(store.getState().actionError).toContain('Target mismatch')
+    expect(store.getState().actionError).toContain('CHEMBL99991001')
+    expect(store.getState().actionError).toContain('CHEMBL99991999')
+    const drug = await drugRepo.getDrug('fixture-drug-1')
+    expect(drug?.targets.find((t) => t.id === 'fixture-target-1')?.ic50).toBeUndefined()
+  })
+
+  it('an acknowledged source-id conflict never overwrites or merges the stored reference', async () => {
+    const conflicting = [{ source: 'chembl', sourceName: 'ChEMBL', sourceTargetId: 'CHEMBL99991999', url: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991999' }]
+    const store = await storeWithDrug(drugWithFirstTarget({ sourceReferences: conflicting }))
+    const ok = await store
+      .getState()
+      .applyObservation(applyRequest({ targetId: 'fixture-target-1', confirmTargetMismatch: true }))
+    expect(ok).toBe(true)
+    const drug = await drugRepo.getDrug('fixture-drug-1')
+    const target = drug?.targets.find((t) => t.id === 'fixture-target-1')
+    // The stored reference stays exactly as it was — no overwrite, no merge.
+    expect(target?.sourceReferences).toEqual(conflicting)
+    expect(target?.ic50?.value).toBe(3.5)
+    // The acknowledgement — including both ids — is recorded in the notes.
+    const provenance = target?.ic50?.provenance
+    const notes = provenance?.type === 'literature' ? (provenance.notes ?? '') : ''
+    expect(notes).toContain('Source identity conflict acknowledged')
+    expect(notes).toContain('CHEMBL99991001')
+    expect(notes).toContain('CHEMBL99991999')
+  })
+
+  it('creates a new target carrying the complete source reference', async () => {
+    const store = await storeWithDrug(syntheticDrug())
+    const ok = await store.getState().applyObservation(applyRequest())
+    expect(ok).toBe(true)
+    const drug = await drugRepo.getDrug('fixture-drug-1')
+    const created = drug?.targets.find((t) => t.name === 'Synthetic Target A')
+    expect(created?.sourceReferences).toEqual([CHEMBL_REF])
+  })
+
+  it('attaches the missing reference to an existing target, idempotently', async () => {
+    const store = await storeWithDrug(drugWithFirstTarget({}))
+    const first = await store
+      .getState()
+      .applyObservation(applyRequest({ targetId: 'fixture-target-1' }))
+    expect(first).toBe(true)
+    // Applying again (with the required overwrite) must not duplicate the ref.
+    const second = await store
+      .getState()
+      .applyObservation(applyRequest({ targetId: 'fixture-target-1', overwrite: true }))
+    expect(second).toBe(true)
+    const drug = await drugRepo.getDrug('fixture-drug-1')
+    const refs = drug?.targets.find((t) => t.id === 'fixture-target-1')?.sourceReferences
+    expect(refs).toEqual([CHEMBL_REF])
+    expect(refs).toHaveLength(1)
+  })
+
+  it('persists the reference in the raw IndexedDB row and a fresh repository read', async () => {
+    const store = await storeWithDrug(syntheticDrug())
+    await store.getState().applyObservation(applyRequest())
+    // Raw row: the reference is a first-class stored field.
+    const raw = (await db.drugs.get('fixture-drug-1')) as unknown as {
+      targets: Record<string, unknown>[]
+    }
+    const created = raw.targets.find(
+      (target) => target['name'] === 'Synthetic Target A',
+    )
+    expect(created?.['sourceReferences']).toEqual([CHEMBL_REF])
+    // Fresh repository read: same data, no in-session caching involved.
+    const fresh = new DexieDrugRepository(db)
+    const drug = await fresh.getDrug('fixture-drug-1')
+    const reread = drug?.targets.find((t) => t.name === 'Synthetic Target A')
+    expect(reread?.sourceReferences).toEqual([CHEMBL_REF])
   })
 })
 

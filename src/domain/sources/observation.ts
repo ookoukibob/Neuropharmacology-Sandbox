@@ -35,6 +35,13 @@ export interface ObservationTargetRef {
   readonly name?: string
   /** Source's target identifier (e.g. ChEMBL target id). */
   readonly sourceTargetId?: string
+  /**
+   * URL identifying this target record at the source (absolute HTTPS),
+   * when the adapter can honestly construct one from the source's own
+   * identifier — used to carry the target identity onto a drug record
+   * (phase 18I). Absent when the source supplies no target id.
+   */
+  readonly sourceTargetUrl?: string
   /** Organism the measurement applies to, as reported. */
   readonly organism?: string
 }

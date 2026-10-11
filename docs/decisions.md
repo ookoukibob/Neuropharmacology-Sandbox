@@ -406,6 +406,43 @@ deployment, ADR-12).
 
 ---
 
+## ADR-20 · External target identity: optional per-source references, never auto-merged
+
+**Context.** ChEMBL activities carry a `target_chembl_id`, but a
+`ReceptorTarget` had no typed place for it: applying an observation to
+a new target lost the source's stable target id, a selected row with
+the same name/species could hide a different source identity, and the
+acknowledgement flow had nothing honest to show. The field also
+crosses every reconstruction path (form edits, IndexedDB rows, NPSL),
+so silent loss was a real risk.
+**Decision.** `ReceptorTarget.sourceReferences?: TargetSourceReference[]`
+— one optional entry per source (`source`, `sourceName`,
+`sourceTargetId`, reported `name`/`organism`, HTTPS target-record
+`url`, verbatim `licenseNotice`/`licenseUrl`), validated by
+`targetSourceReferenceSchema` and written as a first-class known field
+by the persistence mapper (not left to unknown-field preservation).
+Semantics: internal `ReceptorTarget.id` and external source ids are
+distinct identity spaces; a new target created from an observation
+carries the reference; attaching to a compatible row attaches a
+missing reference idempotently (identical = no-op; a different
+source's reference never conflicts); a same-source id conflict is a
+`TargetMismatch` (`'source-id'` with structured `sourceIdConflict`
+detail) that refuses without `confirmTargetMismatch` and — after
+acknowledgement — keeps the stored reference verbatim with the
+acknowledgement recorded in provenance notes; `mergeSourceReferences`
+never merges a conflict. **No version bump**: the field is optional and
+additive — old files load unchanged, and older builds (loose objects)
+carry the key through unknown-field preservation (reference-level
+unknown keys are matched by `source`, never position).
+**Consequences.** Target identity survives edits, storage and NPSL
+round trips; the UI can show a conflict honestly instead of hiding it.
+The reference is the source's claim, not verified biological identity —
+and an acknowledgement records a *linking decision*, never an identity
+proof. A future second source attaches its reference without any schema
+change (the domain model is not hard-coded to ChEMBL).
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

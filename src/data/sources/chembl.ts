@@ -50,6 +50,7 @@ import {
 
 const CHEMBL_BASE = 'https://www.ebi.ac.uk/chembl/api/data'
 const COMPOUND_PAGE_BASE = 'https://www.ebi.ac.uk/chembl/explore/compound/'
+const TARGET_PAGE_BASE = 'https://www.ebi.ac.uk/chembl/explore/target/'
 const ACTIVITY_RECORD_BASE = 'https://www.ebi.ac.uk/chembl/api/data/activity.json?activity_id='
 
 /** Attribution stamped onto every ChEMBL record (CC BY-SA 3.0 obligation). */
@@ -237,6 +238,10 @@ function mapActivity(raw: unknown, stamp: string): RemoteObservation | null {
     target: {
       ...(targetName !== undefined ? { name: targetName } : {}),
       ...(targetId !== undefined ? { sourceTargetId: targetId } : {}),
+      // The target-record URL is honestly constructible exactly when the
+      // source supplies its target id (same explore-page convention as
+      // COMPOUND_PAGE_BASE); without an id neither id nor URL is invented.
+      ...(targetId !== undefined ? { sourceTargetUrl: `${TARGET_PAGE_BASE}${encodeURIComponent(targetId)}` } : {}),
       ...(organism !== undefined ? { organism } : {}),
     },
     endpoint,

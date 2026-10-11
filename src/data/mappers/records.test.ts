@@ -225,3 +225,106 @@ describe('preserveUnknownFields — documented key contract', () => {
     expect(next.identifiers).toEqual({ name: 'a', mystery: [1, 2] })
   })
 })
+
+describe('sourceReferences — known target field (phase 18I)', () => {
+  const CHEMBL_REF = {
+    source: 'chembl',
+    sourceName: 'ChEMBL',
+    sourceTargetId: 'CHEMBL99991001',
+    name: 'Synthetic Target A',
+    organism: 'Homo sapiens',
+    url: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
+    licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+    licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
+  }
+  const PUBCHEM_REF = { source: 'pubchem', sourceName: 'PubChem', sourceTargetId: '12345' }
+
+  function drugWithReferences(): Drug {
+    const base = syntheticDrug()
+    const [first, second] = [base.targets[0], base.targets[1]]
+    if (first === undefined || second === undefined) throw new Error('fixture needs two targets')
+    return {
+      ...base,
+      targets: [
+        { ...first, sourceReferences: [CHEMBL_REF, PUBCHEM_REF] },
+        second, // unchanged target: no references at all
+      ],
+    }
+  }
+
+  it('round-trips references through the record mapper without loss', () => {
+    const drug = drugWithReferences()
+    const record = toRecord(drug)
+    // Written by the mapper (known field), not by unknown-field tricks.
+    expect(record.targets[0]?.sourceReferences).toEqual([CHEMBL_REF, PUBCHEM_REF])
+    const back = drugOf(record)
+    expect(back).toEqual(drug)
+  })
+
+  it('omits the key for targets without references — never [] or undefined', () => {
+    const record = toRecord(drugWithReferences())
+    expect('sourceReferences' in (record.targets[1] ?? {})).toBe(false)
+    // An empty domain array is also stored as absent.
+    const base = syntheticDrug()
+    const first = base.targets[0]
+    if (first === undefined) throw new Error('fixture needs a target')
+    const emptied = toRecord({ ...base, targets: [{ ...first, sourceReferences: [] }] })
+    expect('sourceReferences' in (emptied.targets[0] ?? {})).toBe(false)
+  })
+
+  it('rejects a malformed reference at validation — before any write', () => {
+    const record = toRecord(drugWithReferences()) as unknown as {
+      targets: Record<string, unknown>[]
+    }
+    const refsList = record.targets[0]?.['sourceReferences'] as
+      | Record<string, unknown>[]
+      | undefined
+    const refs = refsList?.[0]
+    if (refs !== undefined) refs['url'] = 'http://insecure.example/x'
+    const result = fromRecord(record)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('sourceReferences.0.url')
+    }
+  })
+
+  it('matches preserved reference extensions by source, not position', () => {
+    const drug = drugWithReferences()
+    const existing = toRecord(drug) as unknown as {
+      targets: Record<string, unknown>[]
+    }
+    const refs = existing.targets[0]?.['sourceReferences'] as Record<string, unknown>[]
+    if (refs[0] !== undefined) refs[0]['futureChEMBLField'] = 'kept-with-chembl'
+    // The domain value now lists the references in the opposite order.
+    const swapped = { ...drug, targets: swappedReferenceOrder(drug) }
+    const stored = toStoredRecord(existing as unknown as DrugRecord, swapped) as unknown as {
+      targets: Record<string, unknown>[]
+    }
+    const storedRefs = stored.targets[0]?.['sourceReferences'] as Record<string, unknown>[]
+    expect(storedRefs.map((reference) => reference['source'])).toEqual(['pubchem', 'chembl'])
+    expect(storedRefs[0]?.['futureChEMBLField']).toBeUndefined()
+    expect(storedRefs[1]?.['futureChEMBLField']).toBe('kept-with-chembl')
+  })
+
+  it('keeps references on their own target when targets are reordered', () => {
+    const drug = drugWithReferences()
+    const reversed: Drug = { ...drug, targets: [...drug.targets].reverse() }
+    const stored = toRecord(reversed)
+    const testS = stored.targets.find((target) => target.name === 'TEST-S')
+    const testR = stored.targets.find((target) => target.name === 'TEST-R')
+    expect('sourceReferences' in (testS ?? {})).toBe(false) // TEST-S never had any
+    expect(testR?.sourceReferences?.map((reference) => reference.source)).toEqual([
+      'chembl',
+      'pubchem',
+    ])
+  })
+
+  function swappedReferenceOrder(drug: Drug): Drug['targets'] {
+    const [first, second] = [drug.targets[0], drug.targets[1]]
+    if (first === undefined || second === undefined) throw new Error('fixture needs two targets')
+    return [
+      { ...first, sourceReferences: [PUBCHEM_REF, CHEMBL_REF] },
+      second,
+    ]
+  }
+})

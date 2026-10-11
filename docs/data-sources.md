@@ -97,13 +97,19 @@ requires, in this order:
 4. a unit is present and its dimension is `molar-concentration`;
 5. the target drug exists; attaching to an existing target row requires
    its id — and, when the observation's reported target name or species
-   contradicts that row, the explicit `confirmTargetMismatch`
-   acknowledgement. The UI always shows the observation's reported
-   target next to the selected row; a differing name or species never
+   contradicts that row **or** the observation carries an external
+   target id that conflicts with the row's stored reference from the
+   same source, the explicit `confirmTargetMismatch` acknowledgement.
+   The UI always shows the observation's reported target next to the
+   selected row — including the observation's source + target id and
+   the row's stored reference; a differing name or species never
    pretends to be established identity (a field the observation does
-   not report is missing information, not a difference). Creating a new
-   target from the observation's reported name remains available
-   (refused when the source reported none);
+   not report is missing information, not a difference), and a
+   name/species match with a *different* same-source target id is
+   itself a mismatch (`'source-id'` in `TargetMismatch.differences`,
+   details in `sourceIdConflict`). Creating a new target from the
+   observation's reported name remains available (refused when the
+   source reported none);
 6. an occupied slot requires the explicit overwrite acknowledgement.
 
 The written `ScientificValue` keeps a `literature` provenance with
@@ -116,6 +122,36 @@ attributable **without** exporting the compound/observation stores; an
 acknowledged target mismatch is recorded in the provenance `notes`.
 Backward compatible: only optional provenance fields were added
 (serialization-tested; older files load unchanged).
+
+**Target source identity (phase 18I).** When an observation reports an
+external target id (ChEMBL's `target_chembl_id`), applying it stores
+that identity on the target as an optional `sourceReferences` entry
+(`TargetSourceReference`: `source`, `sourceName`, `sourceTargetId`, the
+reported `name`/`organism`, the target-record `url`, and the source's
+`licenseNotice`/`licenseUrl` — the same honest-fields-only rule as
+Layer B; a field the source cannot supply stays absent):
+
+- a **new target** created from the observation carries the reference;
+- attaching to an existing row **without** a conflicting reference
+  attaches a missing one — idempotently (an identical reference is a
+  no-op, so repeated applications never create duplicates; a different
+  source's reference never conflicts and is never replaced);
+- a **conflicting** reference (same source, different target id) is
+  reported as a mismatch; after an explicit acknowledgement the stored
+  reference is kept **exactly** as it was — never overwritten, merged or
+  relabelled — and the acknowledgement (with both ids) is recorded in
+  the parameter's provenance notes;
+- at most one reference per source per target; different source systems
+  may sit side by side.
+
+This is the *source's own claim* about which of its records the target
+is — an internal-vs-external identity link, **not** verified biological
+identity, and an acknowledgement never asserts the targets are the
+same. References are read-only in the UI (no editing control can mutate
+imported identity or license metadata), shown with an accessible source
+link where a validated URL exists, and survive drug edits, IndexedDB
+round trips and `.npsl` export/import (optional key: records without
+references simply omit it — see ADR-20).
 
 "Add to drug library" on a stored compound is deliberately weaker: it
 creates an identity-only drug record (name, synonyms, CAS) whose notes

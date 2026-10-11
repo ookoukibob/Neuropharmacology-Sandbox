@@ -154,19 +154,22 @@ function storedProvenance(drug: Drug | undefined): Map<string, Map<ParamKind, Sc
 }
 
 /** Target-level fields the form preserves but has no editing control for. */
-type TargetMetadata = Pick<ReceptorTarget, 'gene' | 'action' | 'species' | 'notes'>
+type TargetMetadata = Pick<ReceptorTarget, 'gene' | 'action' | 'species' | 'notes' | 'sourceReferences'>
 
 /**
  * Supported target-level metadata for edit mode, keyed by stable target id
  * — the same identity basis as `storedProvenance`, never array position or
  * display name: removing a row shifts positions and names are editable, so
- * neither may decide which stored `gene` / `action` / `species` / `notes`
- * belongs to which target. A target without a stored id cannot establish
- * identity, so it is deliberately absent — the form never guesses which
- * original target a row represents (the repository assigns a fresh id to
- * rows that arrive without one). Each entry carries only the fields the
- * record actually has; nothing is defaulted or synthesized, so absent
- * metadata stays absent.
+ * neither may decide which stored `gene` / `action` / `species` / `notes` /
+ * `sourceReferences` belongs to which target. A target without a stored id
+ * cannot establish identity, so it is deliberately absent — the form never
+ * guesses which original target a row represents (the repository assigns a
+ * fresh id to rows that arrive without one). Each entry carries only the
+ * fields the record actually has; nothing is defaulted or synthesized, so
+ * absent metadata stays absent. `sourceReferences` (phase 18I external
+ * source identities) are reattached exactly as stored — the form has no
+ * editor for them and can never mutate imported identity or license
+ * metadata.
  */
 function storedTargetMetadata(drug: Drug | undefined): Map<string, TargetMetadata> {
   const byTarget = new Map<string, TargetMetadata>()
@@ -178,6 +181,9 @@ function storedTargetMetadata(drug: Drug | undefined): Map<string, TargetMetadat
       ...(target.action !== undefined ? { action: target.action } : {}),
       ...(target.species !== undefined ? { species: target.species } : {}),
       ...(target.notes !== undefined ? { notes: target.notes } : {}),
+      ...(target.sourceReferences !== undefined
+        ? { sourceReferences: target.sourceReferences }
+        : {}),
     })
   }
   return byTarget
@@ -331,6 +337,12 @@ function buildInput(
       ...(meta?.action !== undefined ? { action: meta.action } : {}),
       ...(meta?.species !== undefined ? { species: meta.species } : {}),
       ...(meta?.notes !== undefined ? { notes: meta.notes } : {}),
+      // External source identities (phase 18I): preserved verbatim from
+      // the stored row — this form cannot edit them, so imported target
+      // identity and license metadata survive an unrelated edit intact.
+      ...(meta?.sourceReferences !== undefined
+        ? { sourceReferences: meta.sourceReferences }
+        : {}),
       ...(byKind.kd !== undefined ? { kd: byKind.kd } : {}),
       ...(byKind.ki !== undefined ? { ki: byKind.ki } : {}),
       ...(byKind.ec50 !== undefined ? { ec50: byKind.ec50 } : {}),

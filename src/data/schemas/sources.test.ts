@@ -83,6 +83,49 @@ describe('sourceAttributionSchema — URL integrity', () => {
   })
 })
 
+describe('observation target sourceTargetUrl — URL integrity (phase 18I)', () => {
+  function withTargetUrl(url: unknown): Record<string, unknown> {
+    return {
+      ...syntheticObservation(),
+      target: { sourceTargetId: 'CHEMBL99991001', sourceTargetUrl: url },
+    }
+  }
+
+  it('accepts an absolute HTTPS target URL and keeps it', () => {
+    const parsed = observationRecordSchema.safeParse(
+      withTargetUrl('https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001'),
+    )
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect((parsed.data.target as Record<string, unknown>)['sourceTargetUrl']).toBe(
+        'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
+      )
+    }
+  })
+
+  it('keeps a missing target URL missing — nothing is invented', () => {
+    const parsed = observationRecordSchema.safeParse({
+      ...syntheticObservation(),
+      target: { sourceTargetId: 'CHEMBL99991001' },
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.target.sourceTargetUrl).toBeUndefined()
+  })
+
+  it.each([
+    ['plain http', 'http://www.ebi.ac.uk/chembl/explore/target/CHEMBL1'],
+    ['relative path', '/chembl/explore/target/CHEMBL1'],
+    ['javascript: scheme', 'javascript:alert(1)'],
+    ['whitespace only', '   '],
+  ])('rejects a %s as the target URL, naming the field', (_label, url) => {
+    const parsed = observationRecordSchema.safeParse(withTargetUrl(url))
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) {
+      expect(parsed.error.issues[0]?.path).toEqual(['target', 'sourceTargetUrl'])
+    }
+  })
+})
+
 describe('existing valid fixtures still validate', () => {
   it('accepts the synthetic compound fixture (https provenance)', () => {
     expect(compoundRecordSchema.safeParse(syntheticCompound()).success).toBe(true)
