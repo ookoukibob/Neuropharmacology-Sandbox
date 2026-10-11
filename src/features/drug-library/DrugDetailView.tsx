@@ -50,11 +50,26 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
   const error = useLibraryStore((s) => s.error)
   const updateDrug = useLibraryStore((s) => s.updateDrug)
   const deleteDrug = useLibraryStore((s) => s.deleteDrug)
+  const hydrate = useLibraryStore((s) => s.hydrate)
   const [editing, setEditing] = useState(false)
   // Deletion is irreversible, so it always goes through an explicit,
   // keyboard-operable acknowledgement step instead of one stray click.
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  // Phase 20 review fix: a delete rejected because the record changed
+  // since this page loaded. Nothing was deleted; the message is held
+  // locally until the user reloads/reviews — never a session-wide error.
+  const [deleteConflict, setDeleteConflict] = useState<string | null>(null)
   const wasConfirming = useRef(false)
+
+  // A record switch resets the delete flow entirely (a conflict message
+  // must never linger onto a different record's page) — render-phase
+  // state adjustment on prop change, not an effect.
+  const [prevDrugId, setPrevDrugId] = useState(drugId)
+  if (prevDrugId !== drugId) {
+    setPrevDrugId(drugId)
+    setConfirmingDelete(false)
+    setDeleteConflict(null)
+  }
 
   // Focus follows the acknowledgement step: into the confirmation when it
   // opens, back to the Delete button when it is cancelled (Escape or the
@@ -105,9 +120,22 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
       <DrugForm
         drug={drug}
         onCancel={() => setEditing(false)}
-        onSave={async (changes) => {
-          const saved = await updateDrug(drug.id, changes)
-          if (saved !== null) setEditing(false)
+        onSave={async (changes, expectedRevision) => {
+          // Phase 20: the form submits the revision token it captured at
+          // mount — the exact stored state its draft is based on. A
+          // conflict keeps edit mode open with the draft intact (the
+          // repository rejected the write, so storage is unchanged) and
+          // the form surfaces it; success closes the form as before.
+          const result = await updateDrug(drug.id, changes, expectedRevision ?? 0)
+          if (result.status === 'ok') {
+            setEditing(false)
+            return { ok: true }
+          }
+          return {
+            ok: false,
+            conflict: result.status === 'conflict',
+            message: result.message,
+          }
         }}
       />
     )
@@ -255,6 +283,32 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
         {drug.id}
       </p>
 
+      {deleteConflict !== null && (
+        <Alert variant="destructive" data-testid="delete-conflict">
+          <AlertTitle>Deletion did not happen</AlertTitle>
+          <AlertDescription className="space-y-2">
+            <p>{deleteConflict}</p>
+            <p>
+              The record changed elsewhere, so it was not deleted. Reload it to review its
+              current state before deleting again.
+            </p>
+            <div>
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="delete-conflict-reload"
+                onClick={() => {
+                  setDeleteConflict(null)
+                  void hydrate()
+                }}
+              >
+                Reload record
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div className="flex flex-wrap gap-2">
         {editable ? (
           <>
@@ -279,8 +333,21 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
                     data-testid="delete-drug-confirm"
                     aria-describedby="delete-confirm-text"
                     onClick={async () => {
-                      const done = await deleteDrug(drug.id)
-                      if (done) navigate('/library')
+                      // Revision-guarded (phase 20 review fix): the
+                      // delete is based on the record state this page
+                      // shows — a record changed in another tab since
+                      // then can never be deleted from this stale view.
+                      const result = await deleteDrug(drug.id, drug.revision ?? 0)
+                      if (result.status === 'ok') {
+                        navigate('/library')
+                      } else if (result.status === 'conflict') {
+                        // Nothing was deleted. Close the confirmation and
+                        // require an explicit reload/review before the
+                        // delete action becomes available again — never
+                        // an automatic retry.
+                        setDeleteConflict(result.message)
+                        setConfirmingDelete(false)
+                      }
                     }}
                   >
                     <Trash2 aria-hidden="true" className="size-4" />
@@ -310,6 +377,9 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
                   variant="destructive"
                   id="delete-drug"
                   data-testid="delete-drug"
+                  // A rejected delete locks the action until the user
+                  // reloads/reviews the record (phase 20 review fix).
+                  disabled={deleteConflict !== null}
                   onClick={() => setConfirmingDelete(true)}
                 >
                   <Trash2 aria-hidden="true" className="size-4" />

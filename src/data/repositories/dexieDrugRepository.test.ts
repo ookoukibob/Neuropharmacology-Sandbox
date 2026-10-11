@@ -94,11 +94,15 @@ describe('DexieDrugRepository — CRUD', () => {
         identifiers: { name: 'Fixture Compound D', synonyms: [] },
         notes: 'initial note',
       })
-      const updated = await repo.updateDrug(created.id, {
-        identifiers: { name: 'Fixture Compound D-1', synonyms: ['FCD'] },
-        notes: undefined, // explicit clear
-        tags: ['edited'],
-      })
+      const updated = await repo.updateDrug(
+        created.id,
+        {
+          identifiers: { name: 'Fixture Compound D-1', synonyms: ['FCD'] },
+          notes: undefined, // explicit clear
+          tags: ['edited'],
+        },
+        created.revision ?? 0,
+      )
       expect(updated.identifiers.name).toBe('Fixture Compound D-1')
       expect(updated.notes).toBeUndefined()
       expect(updated.tags).toEqual(['edited'])
@@ -107,7 +111,7 @@ describe('DexieDrugRepository — CRUD', () => {
       expect(updated.createdAt).toBe(created.createdAt)
       expect(updated.updatedAt).toBeDefined()
 
-      await expectRejected(repo.updateDrug('missing-id', { tags: [] }), 'NOT_FOUND')
+      await expectRejected(repo.updateDrug('missing-id', { tags: [] }, 0), 'NOT_FOUND')
     } finally {
       await db.delete()
     }
@@ -118,7 +122,8 @@ describe('DexieDrugRepository — CRUD', () => {
     try {
       const repo = new DexieDrugRepository(db)
       await db.drugs.put({ ...toRecord(syntheticDrug({ origin: 'imported' })) })
-      const edited = await repo.updateDrug('fixture-drug-1', { tags: ['edited'] })
+      // Raw-seeded row, no revisions row: the "never revised" token 0.
+      const edited = await repo.updateDrug('fixture-drug-1', { tags: ['edited'] }, 0)
       expect(edited.origin).toBe('imported')
       expect((await repo.getDrug('fixture-drug-1'))?.origin).toBe('imported')
     } finally {
@@ -140,7 +145,7 @@ describe('DexieDrugRepository — CRUD', () => {
         futureField: { keep: 'me' },
       }
       await db.drugs.put(withFuture)
-      await repo.updateDrug('fixture-drug-1', { notes: 'edited' })
+      await repo.updateDrug('fixture-drug-1', { notes: 'edited' }, 0)
       const raw = (await db.drugs.get('fixture-drug-1')) as unknown as Record<string, unknown>
       expect(raw['futureField']).toEqual({ keep: 'me' })
       expect(raw['notes']).toBe('edited')
@@ -154,9 +159,9 @@ describe('DexieDrugRepository — CRUD', () => {
     try {
       const repo = new DexieDrugRepository(db)
       await db.drugs.put(toRecord(syntheticDrug()))
-      await repo.deleteDrug('fixture-drug-1')
+      await repo.deleteDrug('fixture-drug-1', 0)
       expect(await db.drugs.count()).toBe(0)
-      await expectRejected(repo.deleteDrug('fixture-drug-1'), 'NOT_FOUND')
+      await expectRejected(repo.deleteDrug('fixture-drug-1', 0), 'NOT_FOUND')
     } finally {
       await db.delete()
     }
@@ -176,13 +181,22 @@ describe('DexieDrugRepository — partial DrugChanges merge semantics (audit GAP
       const repo = new DexieDrugRepository(db)
       await db.drugs.put(toRecord(syntheticDrug()))
       // Another connection commits a rename, as a second tab's save would.
+      // (Both sides hold the raw-seeded record's "never revised" token 0;
+      // the concurrency contract itself is exercised in the phase-20
+      // describe below — these tests pin the unchanged merge semantics.)
       const otherConnection = new DexieDrugRepository(db)
-      await otherConnection.updateDrug('fixture-drug-1', {
-        identifiers: { name: 'Concurrent Name', synonyms: ['CN'] },
-      })
+      await otherConnection.updateDrug(
+        'fixture-drug-1',
+        {
+          identifiers: { name: 'Concurrent Name', synonyms: ['CN'] },
+        },
+        0,
+      )
       // Our caller supplies ONLY tags: every omitted group must reflect
-      // the freshly re-read row, not any earlier snapshot.
-      const updated = await repo.updateDrug('fixture-drug-1', { tags: ['composed'] })
+      // the freshly re-read row, not any earlier snapshot. Its token is
+      // the revision the interleaved commit just produced — a *fresh*
+      // token, so the update is allowed to compose.
+      const updated = await repo.updateDrug('fixture-drug-1', { tags: ['composed'] }, 1)
       expect(updated.identifiers.name).toBe('Concurrent Name')
       expect(updated.tags).toEqual(['composed'])
       // Omitted groups come from the fresh read, byte-for-byte.
@@ -207,9 +221,13 @@ describe('DexieDrugRepository — partial DrugChanges merge semantics (audit GAP
       await db.drugs.put(toRecord(syntheticDrug()))
       // A supplied identifiers group REPLACES the stored one: fields the
       // replacement omits (the fixture's description) do not survive.
-      const afterIdentifiers = await repo.updateDrug('fixture-drug-1', {
-        identifiers: { name: 'Replaced Name', synonyms: [] },
-      })
+      const afterIdentifiers = await repo.updateDrug(
+        'fixture-drug-1',
+        {
+          identifiers: { name: 'Replaced Name', synonyms: [] },
+        },
+        0,
+      )
       expect(afterIdentifiers.identifiers).toEqual({ name: 'Replaced Name', synonyms: [] })
       expect(afterIdentifiers.identifiers.description).toBeUndefined()
       expect(afterIdentifiers.identifiers.casNumber).toBeUndefined()
@@ -221,14 +239,18 @@ describe('DexieDrugRepository — partial DrugChanges merge semantics (audit GAP
       // A supplied targets group REPLACES the whole stored list: the
       // fixture's two targets become exactly the one supplied row, and no
       // field of the dropped targets lingers anywhere in the raw record.
-      const afterTargets = await repo.updateDrug('fixture-drug-1', {
-        targets: [
-          {
-            name: 'REPLACED-R',
-            kd: { value: 1, unit: 'nM', provenance: { type: 'user' } },
-          },
-        ],
-      })
+      const afterTargets = await repo.updateDrug(
+        'fixture-drug-1',
+        {
+          targets: [
+            {
+              name: 'REPLACED-R',
+              kd: { value: 1, unit: 'nM', provenance: { type: 'user' } },
+            },
+          ],
+        },
+        1, // the identifiers update above committed revision 1
+      )
       expect(afterTargets.targets).toHaveLength(1)
       expect(afterTargets.targets[0]?.name).toBe('REPLACED-R')
       const raw = (await db.drugs.get('fixture-drug-1')) as unknown as Record<string, unknown>
@@ -249,13 +271,601 @@ describe('DexieDrugRepository — partial DrugChanges merge semantics (audit GAP
       const repo = new DexieDrugRepository(db)
       await db.drugs.put(toRecord(syntheticDrug()))
       // Absent key: the stored notes survive an unrelated group update.
-      const kept = await repo.updateDrug('fixture-drug-1', { tags: [] })
+      const kept = await repo.updateDrug('fixture-drug-1', { tags: [] }, 0)
       expect(kept.notes).toBe(FIXTURE_NOTE)
       // Explicit undefined: the one key whose presence means "clear".
-      const cleared = await repo.updateDrug('fixture-drug-1', { notes: undefined })
+      const cleared = await repo.updateDrug('fixture-drug-1', { notes: undefined }, 1)
       expect(cleared.notes).toBeUndefined()
       expect((await db.drugs.get('fixture-drug-1'))?.['notes']).toBeUndefined()
     } finally {
+      await db.delete()
+    }
+  })
+})
+
+describe('DexieDrugRepository — optimistic concurrency (phase 20, audit GAP-4)', () => {
+  it('rejects a stale token atomically: the row, its scientific values, its revision and the metadata all stay byte-identical', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Concurrency Probe', synonyms: ['CP'] },
+        targets: [
+          {
+            name: 'CONC-R1',
+            kd: {
+              value: 4.2,
+              unit: 'nM',
+              provenance: {
+                type: 'literature',
+                source: 'Synthetic test source',
+                citation: 'Invented for tests, 2026',
+              },
+            },
+          },
+        ],
+        notes: FIXTURE_NOTE,
+      })
+      expect(created.revision).toBe(1)
+
+      // Another session commits a rename — the winner of the race.
+      const winner = await repo.updateDrug(
+        created.id,
+        { identifiers: { name: 'Renamed Elsewhere', synonyms: ['CP'] } },
+        created.revision ?? 0,
+      )
+      expect(winner.revision).toBe(2)
+
+      // Byte-level snapshot of the winning state, across every store the
+      // rejected transaction could conceivably have touched.
+      const rowAfterWinner = structuredClone(await db.drugs.get(created.id))
+      const revisionAfterWinner = structuredClone(await db.revisions.get(created.id))
+      const metaAfterWinner = structuredClone((await db.meta.toArray())[0])
+
+      // A draft based on revision 1 submits its stale full snapshot —
+      // tags-only in this shape, exactly what the edit form sends.
+      const attempt = repo.updateDrug(created.id, { tags: ['stale-tags'] }, created.revision ?? 0)
+      await expectRejected(attempt, 'CONFLICT')
+
+      // Nothing moved anywhere: row, revision entry and library metadata
+      // are byte-identical to the winner's committed state.
+      expect(await db.drugs.get(created.id)).toEqual(rowAfterWinner)
+      expect(await db.revisions.get(created.id)).toEqual(revisionAfterWinner)
+      expect((await db.meta.toArray())[0]).toEqual(metaAfterWinner)
+      // And a fresh read shows the winner's name with no trace of the
+      // rejected tags.
+      const stored = await repo.getDrug(created.id)
+      expect(stored?.identifiers.name).toBe('Renamed Elsewhere')
+      expect(stored?.tags).toEqual([])
+      expect(stored?.targets[0]?.kd).toEqual({
+        value: 4.2,
+        unit: 'nM',
+        provenance: {
+          type: 'literature',
+          source: 'Synthetic test source',
+          citation: 'Invented for tests, 2026',
+        },
+      })
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('keeps failure codes distinguishable: CONFLICT vs NOT_FOUND vs VALIDATION', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Code Probe', synonyms: [] },
+        targets: [{ name: 'CODE-R1', kd: { value: 1, unit: 'nM', provenance: { type: 'user' } } }],
+      })
+      const token = created.revision ?? 0
+
+      // VALIDATION (invalid changes, FRESH token): rejected on its own
+      // code, with no revision advance.
+      await expectRejected(
+        repo.updateDrug(created.id, { identifiers: { name: '', synonyms: [] } }, token),
+        'VALIDATION',
+      )
+      expect((await repo.getDrug(created.id))?.revision).toBe(token)
+
+      // CONFLICT (same invalid changes, STALE token): the atomic revision
+      // check fires first — both are rejections, neither writes.
+      await expectRejected(
+        repo.updateDrug(created.id, { identifiers: { name: '', synonyms: [] } }, 0),
+        'CONFLICT',
+      )
+
+      // NOT_FOUND: a missing row reports on its own code for any token.
+      await expectRejected(repo.updateDrug('missing-id', { tags: [] }, 7), 'NOT_FOUND')
+
+      // The conflict is a typed RepositoryError, distinguishable by code.
+      const conflict: unknown = await repo
+        .updateDrug(created.id, { tags: [] }, 0)
+        .catch((error: unknown) => error)
+      expect(conflict).toBeInstanceOf(RepositoryError)
+      expect((conflict as RepositoryError).code).toBe('CONFLICT')
+      // The message carries both revisions for diagnostics: the stale
+      // token (0) and the stored one (still `token` — the rejected
+      // VALIDATION attempt above never advanced it).
+      expect((conflict as RepositoryError).message).toContain('revision 0')
+      expect((conflict as RepositoryError).message).toContain(`revision ${token}`)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('two concurrent writers sharing one stale token cannot both commit (one connection)', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Race Probe', synonyms: [] },
+        notes: 'original',
+      })
+      const token = created.revision ?? 0 // 1 — shared by both writers
+
+      // Both writers start from the same token, in one tick: the
+      // transaction scope overlaps, so IndexedDB serializes them and the
+      // comparison-then-write of each runs as one atomic step.
+      const [first, second] = await Promise.allSettled([
+        repo.updateDrug(created.id, { tags: ['writer-a'] }, token),
+        repo.updateDrug(
+          created.id,
+          { identifiers: { name: 'Writer B', synonyms: [] } },
+          token,
+        ),
+      ])
+
+      // Exactly one commit succeeded; the other rejected with CONFLICT.
+      const settled = [first, second]
+      const fulfilled = settled.filter((outcome) => outcome.status === 'fulfilled')
+      const rejected = settled.filter((outcome) => outcome.status === 'rejected')
+      expect(fulfilled).toHaveLength(1)
+      expect(rejected).toHaveLength(1)
+      expect(
+        (rejected[0] as PromiseRejectedResult & { reason: { code?: string } }).reason?.code,
+      ).toBe('CONFLICT')
+
+      // The revision advanced by exactly ONE commit — the loser wrote
+      // nothing, not even its token bump.
+      const stored = await repo.getDrug(created.id)
+      expect(stored?.revision).toBe(token + 1)
+      // The stored record is the winner's full state: whichever writer
+      // lost contributed nothing.
+      expect(stored?.tags).toEqual(first.status === 'fulfilled' ? ['writer-a'] : [])
+      expect(stored?.identifiers.name).toBe(
+        second.status === 'fulfilled' ? 'Writer B' : 'Race Probe',
+      )
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('two connections (two tabs) sharing one stale token cannot both commit', async () => {
+    const db = freshDb()
+    const dbOther = new SandboxDatabase(db.name)
+    try {
+      const repo = new DexieDrugRepository(db)
+      const repoOther = new DexieDrugRepository(dbOther)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Two-Tab Probe', synonyms: [] },
+        notes: 'original',
+      })
+      const token = created.revision ?? 0 // both tabs mounted from this state
+
+      // True cross-tab shape: two independent Dexie connections to the
+      // same database, both saving from the same stale token.
+      const [ours, theirs] = await Promise.allSettled([
+        repo.updateDrug(created.id, { tags: ['tab-a'] }, token),
+        repoOther.updateDrug(
+          created.id,
+          { identifiers: { name: 'Tab B', synonyms: [] } },
+          token,
+        ),
+      ])
+
+      const settled = [ours, theirs]
+      expect(settled.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+      const rejected = settled.filter((outcome) => outcome.status === 'rejected')
+      expect(rejected).toHaveLength(1)
+      expect(
+        (rejected[0] as PromiseRejectedResult & { reason: { code?: string } }).reason?.code,
+      ).toBe('CONFLICT')
+
+      // Exactly one revision step; the stored record is the winner's.
+      const stored = await repo.getDrug(created.id)
+      expect(stored?.revision).toBe(token + 1)
+      expect(stored?.tags).toEqual(ours.status === 'fulfilled' ? ['tab-a'] : [])
+      expect(stored?.identifiers.name).toBe(theirs.status === 'fulfilled' ? 'Tab B' : 'Two-Tab Probe')
+    } finally {
+      await dbOther.close()
+      await db.delete()
+    }
+  })
+
+  it('a fresh token commits after a conflict, and a successful write advances the token so it can never be replayed', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Retry Probe', synonyms: [] },
+        notes: 'original',
+      })
+      const mounted = created.revision ?? 0 // 1 — this session's token
+
+      // Another session commits first (rename), advancing the revision:
+      // this session's token is now genuinely stale.
+      await repo.updateDrug(
+        created.id,
+        { identifiers: { name: 'Retry Probe Renamed', synonyms: [] } },
+        mounted,
+      )
+      await expectRejected(repo.updateDrug(created.id, { tags: ['stale'] }, mounted), 'CONFLICT')
+
+      // Recovery: re-read the record (reload/reopen), take its CURRENT
+      // token, re-apply the same edit — the only sanctioned retry, and
+      // an explicit user act.
+      const fresh = await repo.getDrug(created.id)
+      expect(fresh?.revision).toBe(mounted + 1)
+      const committed = await repo.updateDrug(
+        created.id,
+        { tags: ['reapplied'] },
+        mounted + 1,
+      )
+      expect(committed.revision).toBe(mounted + 2)
+      expect(committed.tags).toEqual(['reapplied'])
+      expect(committed.identifiers.name).toBe('Retry Probe Renamed')
+
+      // Neither the pre-conflict token nor the commit's own token can be
+      // replayed afterwards.
+      await expectRejected(repo.updateDrug(created.id, { tags: ['replay'] }, mounted), 'CONFLICT')
+      await expectRejected(
+        repo.updateDrug(created.id, { tags: ['double-spend'] }, mounted + 1),
+        'CONFLICT',
+      )
+      expect((await repo.getDrug(created.id))?.tags).toEqual(['reapplied'])
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('delete → re-create cannot resurrect an old token: the tombstone keeps the sequence monotonic', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Recreate Probe', synonyms: [] },
+        notes: 'first life',
+      })
+      const oldToken = created.revision ?? 0 // 1
+      await repo.deleteDrug(created.id, oldToken)
+
+      // A merge import re-creates the SAME id (the only production path
+      // that can): the id's revision continues above the tombstone — 2,
+      // never restarting at 1.
+      const reimported = await repo.importLibrary(
+        syntheticNpslText([
+          syntheticDrug({ id: created.id, notes: 'second life' }),
+        ]),
+        { mode: 'merge' },
+      )
+      expect(reimported.ok).toBe(true)
+      const revived = await repo.getDrug(created.id)
+      expect(revived?.notes).toBe('second life')
+      expect(revived?.revision).toBe(oldToken + 1)
+
+      // The token from the record's FIRST life is rejected — no ABA
+      // replay through delete → re-create, even though the row exists
+      // again with a valid schema.
+      await expectRejected(
+        repo.updateDrug(created.id, { notes: 'resurrected edit' }, oldToken),
+        'CONFLICT',
+      )
+      expect((await repo.getDrug(created.id))?.notes).toBe('second life')
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('imports, replaces and restores invalidate every editor token issued before them', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Bulk Probe', synonyms: [] },
+        notes: 'original',
+      })
+      const token = created.revision ?? 0 // 1
+
+      // 1. Merge import over the same id: the row is rewritten, the token
+      //    issued before the import must conflict.
+      const merged = await repo.importLibrary(
+        syntheticNpslText([syntheticDrug({ id: created.id, notes: 'merged' })]),
+        { mode: 'merge' },
+      )
+      expect(merged.ok).toBe(true)
+      await expectRejected(repo.updateDrug(created.id, { tags: ['stale'] }, token), 'CONFLICT')
+      const afterMerge = await repo.getDrug(created.id)
+      expect(afterMerge?.notes).toBe('merged')
+
+      // 2. Replace library (same id survives): same invalidation.
+      await repo.replaceLibrary(
+        syntheticLibrary([syntheticDrug({ id: created.id, notes: 'replaced' })]),
+      )
+      const afterReplace = await repo.getDrug(created.id)
+      expect(afterReplace?.notes).toBe('replaced')
+      const tokenAfterReplace = afterReplace?.revision ?? 0
+
+      // 3. Recovery-archive restore: the archive carries the replaced
+      //    row verbatim; committing it rewrites the row and invalidates
+      //    the token issued before the restore, while a fresh read shows
+      //    the archive's own data.
+      const archive = await repo.exportRecoveryArchive()
+      expect(archive.ok).toBe(true)
+      if (!archive.ok) return
+      const restored = await repo.restoreRecoveryArchive(archive.text)
+      expect(restored.ok).toBe(true)
+      await expectRejected(
+        repo.updateDrug(created.id, { tags: ['stale'] }, tokenAfterReplace),
+        'CONFLICT',
+      )
+      const afterRestore = await repo.getDrug(created.id)
+      expect(afterRestore?.notes).toBe('replaced') // the archive's verbatim row
+      expect(afterRestore?.revision).toBe(tokenAfterReplace + 1)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('the token lives only in the revisions table: never in a drug row, an NPSL export, or an imported file', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Token-Boundary Probe', synonyms: [] },
+        notes: 'original',
+      })
+      await repo.updateDrug(created.id, { tags: ['edited'] }, created.revision ?? 0)
+
+      // Rows never carry the key — the token is beside them, so every
+      // row-level byte contract is untouched.
+      const raw = (await db.drugs.get(created.id)) as unknown as Record<string, unknown>
+      expect(Object.keys(raw)).not.toContain('revision')
+
+      // Exports never carry it either (round-trip identity).
+      const exported = await repo.exportLibrary()
+      expect(exported.drugs[0]?.revision).toBeUndefined()
+      const text = serializeNpslDocument(toNpslDocument(exported))
+      expect(text).not.toContain('"revision"')
+
+      // A hand-edited NPSL file smuggling a `revision` key cannot set the
+      // token: the key is dropped at the import boundary and the table
+      // stays authoritative (the import itself assigns revision 1).
+      const db2 = freshDb()
+      try {
+        const repo2 = new DexieDrugRepository(db2)
+        const report = await repo2.importLibrary(
+          syntheticNpslText([{ ...syntheticDrug(), revision: 7 }]),
+          { mode: 'merge' },
+        )
+        expect(report.ok).toBe(true)
+        const raw2 = (await db2.drugs.get('fixture-drug-1')) as unknown as Record<string, unknown>
+        expect(Object.keys(raw2)).not.toContain('revision')
+        expect((await repo2.getDrug('fixture-drug-1'))?.revision).toBe(1)
+      } finally {
+        await db2.delete()
+      }
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('hydration attaches the stored token: 0 for a never-revised record, the entry value afterwards', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      // Raw-seeded row: never written under the token scheme → 0.
+      await db.drugs.put(toRecord(syntheticDrug()))
+      expect((await repo.getDrug('fixture-drug-1'))?.revision).toBe(0)
+      expect((await repo.getAllDrugs()).drugs[0]?.revision).toBe(0)
+
+      // First edit: 0 → 1, visible to the next hydration.
+      await repo.updateDrug('fixture-drug-1', { tags: ['first'] }, 0)
+      expect((await repo.getDrug('fixture-drug-1'))?.revision).toBe(1)
+      expect((await repo.getAllDrugs()).drugs[0]?.revision).toBe(1)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('revision-guarded delete: a stale delete is rejected atomically — the record, its science and the metadata stay byte-identical', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      // A record carrying scientific values, provenance and an external
+      // source identity — everything a careless delete could destroy.
+      const created = await repo.createDrug({
+        identifiers: { name: 'Delete Guard Probe', synonyms: ['DGP'] },
+        targets: [
+          {
+            name: 'DGP-R1',
+            kd: {
+              value: 4.2,
+              unit: 'nM',
+              provenance: {
+                type: 'literature',
+                source: 'Synthetic test source',
+                citation: 'Invented for tests, 2026',
+              },
+            },
+            sourceReferences: [
+              { source: 'chembl', sourceName: 'ChEMBL', sourceTargetId: 'CHEMBL99991001' },
+            ],
+          },
+        ],
+        notes: FIXTURE_NOTE,
+      })
+      const staleToken = created.revision ?? 0 // 1
+
+      // Another session commits an edit — the record is now at revision 2.
+      const winner = await repo.updateDrug(created.id, { notes: 'winner edit' }, staleToken)
+      expect(winner.revision).toBe(2)
+
+      // Byte-level snapshot of the winning state, across every store the
+      // rejected deletion could conceivably have touched.
+      const rowAfterWinner = structuredClone(await db.drugs.get(created.id))
+      const revisionAfterWinner = structuredClone(await db.revisions.get(created.id))
+      const metaAfterWinner = structuredClone((await db.meta.toArray())[0])
+
+      // The stale page's delete (based on revision 1) is rejected inside
+      // the deletion's own transaction — nothing happens first.
+      await expectRejected(repo.deleteDrug(created.id, staleToken), 'CONFLICT')
+
+      // Nothing moved anywhere: row (name, values, provenance, source
+      // references), revision entry and library metadata byte-identical.
+      expect(await db.drugs.get(created.id)).toEqual(rowAfterWinner)
+      expect(await db.revisions.get(created.id)).toEqual(revisionAfterWinner)
+      expect((await db.meta.toArray())[0]).toEqual(metaAfterWinner)
+      const stored = await repo.getDrug(created.id)
+      expect(stored?.identifiers.name).toBe('Delete Guard Probe')
+      expect(stored?.targets[0]?.kd).toEqual({
+        value: 4.2,
+        unit: 'nM',
+        provenance: {
+          type: 'literature',
+          source: 'Synthetic test source',
+          citation: 'Invented for tests, 2026',
+        },
+      })
+      expect(stored?.targets[0]?.sourceReferences?.[0]).toEqual({
+        source: 'chembl',
+        sourceName: 'ChEMBL',
+        sourceTargetId: 'CHEMBL99991001',
+      })
+      expect(stored?.revision).toBe(2)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('delete with the CURRENT revision succeeds; the tombstone is kept and deliberately NOT advanced', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Delete Success Probe', synonyms: [] },
+        notes: 'to be deleted',
+      })
+      const token = created.revision ?? 0 // 1
+
+      await repo.deleteDrug(created.id, token)
+      expect(await db.drugs.count()).toBe(0)
+
+      // Documented decision (ADR-21): the tombstone stays at exactly the
+      // last committed revision — a delete is the absence of data, not a
+      // content mutation, and with the row gone every stale action
+      // already fails NOT_FOUND, so advancing would add no safety.
+      expect((await db.revisions.get(created.id))?.revision).toBe(token)
+
+      // The guard never masks "already gone": repeat deletes fail
+      // NOT_FOUND regardless of the token — and a stale save against the
+      // deleted row is NOT_FOUND too, never a false success.
+      await expectRejected(repo.deleteDrug(created.id, token), 'NOT_FOUND')
+      await expectRejected(repo.deleteDrug(created.id, token + 1), 'NOT_FOUND')
+      await expectRejected(repo.updateDrug(created.id, { tags: ['x'] }, token), 'NOT_FOUND')
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('delete → re-create: every pre-delete token (edit AND delete) is invalid forever', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Delete Recreate Probe', synonyms: [] },
+        notes: 'first life',
+      })
+      const oldToken = created.revision ?? 0 // 1
+      await repo.deleteDrug(created.id, oldToken)
+
+      // A merge import re-creates the SAME id (the only production path
+      // that can): the revision continues above the tombstone — 2.
+      const report = await repo.importLibrary(
+        syntheticNpslText([syntheticDrug({ id: created.id, notes: 'second life' })]),
+        { mode: 'merge' },
+      )
+      expect(report.ok).toBe(true)
+      expect((await repo.getDrug(created.id))?.revision).toBe(oldToken + 1)
+
+      // The old token can neither WRITE nor DELETE the new record.
+      await expectRejected(repo.updateDrug(created.id, { tags: ['stale'] }, oldToken), 'CONFLICT')
+      await expectRejected(repo.deleteDrug(created.id, oldToken), 'CONFLICT')
+
+      // The CURRENT token deletes normally — the guard is a token check,
+      // not a lock against deletion itself.
+      await repo.deleteDrug(created.id, oldToken + 1)
+      expect(await db.drugs.count()).toBe(0)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('two concurrent deletion attempts cannot both report success (one connection)', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Concurrent Delete Probe', synonyms: [] },
+        notes: 'original',
+      })
+      const token = created.revision ?? 0
+
+      // Both attempts hold the SAME valid token; the deletion
+      // transactions serialize, so the second re-reads the post-delete
+      // state inside its own transaction.
+      const results = await Promise.allSettled([
+        repo.deleteDrug(created.id, token),
+        repo.deleteDrug(created.id, token),
+      ])
+      expect(results.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+      const rejected = results.filter((outcome) => outcome.status === 'rejected')
+      expect(rejected).toHaveLength(1)
+      expect(
+        (rejected[0] as PromiseRejectedResult & { reason: { code?: string } }).reason?.code,
+      ).toBe('NOT_FOUND')
+      expect(await db.drugs.count()).toBe(0)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('two connections (two tabs) attempting the same delete: exactly one succeeds', async () => {
+    const db = freshDb()
+    const dbOther = new SandboxDatabase(db.name)
+    try {
+      const repo = new DexieDrugRepository(db)
+      const repoOther = new DexieDrugRepository(dbOther)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Two-Tab Delete Probe', synonyms: [] },
+        notes: 'original',
+      })
+      const token = created.revision ?? 0 // both tabs reviewed this state
+
+      const results = await Promise.allSettled([
+        repo.deleteDrug(created.id, token),
+        repoOther.deleteDrug(created.id, token),
+      ])
+      expect(results.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+      const rejected = results.filter((outcome) => outcome.status === 'rejected')
+      expect(rejected).toHaveLength(1)
+      expect(
+        (rejected[0] as PromiseRejectedResult & { reason: { code?: string } }).reason?.code,
+      ).toBe('NOT_FOUND')
+      expect(await db.drugs.count()).toBe(0)
+    } finally {
+      await dbOther.close()
       await db.delete()
     }
   })
@@ -614,18 +1224,29 @@ describe('DexieDrugRepository — target source-reference uniqueness (18I.1)', (
         targets: [{ name: 'TEST-R', kd: { value: 5, unit: 'nM', provenance: { type: 'user' } } }],
       })
       const stored = structuredClone(await db.drugs.get(created.id))
-      const attempt = repo.updateDrug(created.id, {
-        targets: [
-          {
-            name: 'TEST-R',
-            kd: { value: 5, unit: 'nM', provenance: { type: 'user' } },
-            // Even an IDENTICAL duplicate is malformed — never deduplicated.
-            sourceReferences: [DUP_REF_A, { ...DUP_REF_A }],
-          },
-        ],
-      })
+      const attempt = repo.updateDrug(
+        created.id,
+        {
+          targets: [
+            {
+              name: 'TEST-R',
+              kd: { value: 5, unit: 'nM', provenance: { type: 'user' } },
+              // Even an IDENTICAL duplicate is malformed — never deduplicated.
+              sourceReferences: [DUP_REF_A, { ...DUP_REF_A }],
+            },
+          ],
+        },
+        created.revision ?? 0,
+      )
+      // VALIDATION is its own failure code — distinct from CONFLICT — and,
+      // like it, aborts without touching the stored row.
       await expect(attempt).rejects.toMatchObject({ code: 'VALIDATION' })
       expect(await db.drugs.get(created.id)).toEqual(stored)
+      // Nor does a rejected write advance the revision token.
+      expect(await db.revisions.get(created.id)).toEqual({
+        id: created.id,
+        revision: created.revision,
+      })
     } finally {
       await db.delete()
     }
@@ -907,7 +1528,9 @@ describe('DexieDrugRepository — extension fields (unknown-field preservation)'
       })
       expect(imported.ok).toBe(true)
 
-      const updated = await repo.updateDrug('fixture-drug-1', { notes: 'edited' })
+      // The replace import advanced the id's revision (phase 20), so the
+      // first post-import edit carries the token hydration attaches to it.
+      const updated = await repo.updateDrug('fixture-drug-1', { notes: 'edited' }, 1)
       expect(updated.notes).toBe('edited')
       expectDrugExtensions(updated)
 
@@ -1235,23 +1858,28 @@ describe('GAP-1 — unknown target extensions under a targets-replacing update (
 
       // A targets-REPLACING update (the form path always supplies
       // `targets`): same stable ids, positions swapped, one recognized
-      // name changed, plus an unrelated drug-level edit.
-      await repo.updateDrug('gap1-drug-1', {
-        targets: [
-          {
-            id: 'gap1-target-b',
-            name: 'GAP1-B Renamed',
-            ic50: { value: 7.5, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
-          },
-          {
-            id: 'gap1-target-a',
-            name: 'GAP1-A',
-            gene: 'GAP1A',
-            kd: { value: 3.2, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
-          },
-        ],
-        notes: 'gap1 unrelated edit',
-      })
+      // name changed, plus an unrelated drug-level edit. Token 1 = the
+      // revision the replace import created (phase 20).
+      await repo.updateDrug(
+        'gap1-drug-1',
+        {
+          targets: [
+            {
+              id: 'gap1-target-b',
+              name: 'GAP1-B Renamed',
+              ic50: { value: 7.5, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
+            },
+            {
+              id: 'gap1-target-a',
+              name: 'GAP1-A',
+              gene: 'GAP1A',
+              kd: { value: 3.2, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
+            },
+          ],
+          notes: 'gap1 unrelated edit',
+        },
+        1,
+      )
 
       const raw: unknown = await db.drugs.get('gap1-drug-1')
       // The replacement governs the array: new order, stable ids.
@@ -1301,22 +1929,26 @@ describe('GAP-1 — unknown target extensions under a targets-replacing update (
       expect(report.ok).toBe(true)
 
       // Remove target A entirely; keep B (moved to position 0); add a
-      // brand-new stable id C.
-      await repo.updateDrug('gap1-drug-1', {
-        targets: [
-          {
-            id: 'gap1-target-b',
-            name: 'GAP1-B',
-            ic50: { value: 7.5, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
-          },
-          {
-            id: 'gap1-target-c',
-            name: 'GAP1-C',
-            kd: { value: 1.6, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
-          },
-        ],
-        notes: 'removed target a',
-      })
+      // brand-new stable id C. Token 1 = the replace import's revision.
+      await repo.updateDrug(
+        'gap1-drug-1',
+        {
+          targets: [
+            {
+              id: 'gap1-target-b',
+              name: 'GAP1-B',
+              ic50: { value: 7.5, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
+            },
+            {
+              id: 'gap1-target-c',
+              name: 'GAP1-C',
+              kd: { value: 1.6, unit: 'nM', provenance: { type: 'user', recordedAt: TS } },
+            },
+          ],
+          notes: 'removed target a',
+        },
+        1,
+      )
 
       const raw: unknown = await db.drugs.get('gap1-drug-1')
       expect(fieldAt(raw, 'targets')).toHaveLength(2)

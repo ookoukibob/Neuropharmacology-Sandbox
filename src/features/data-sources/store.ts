@@ -1192,7 +1192,14 @@ export function createDataSourcesStore(
       }
 
       try {
-        await drugRepository.updateDrug(drug.id, { targets: nextTargets })
+        // Phase 20: this apply path carries the same optimistic token as
+        // the edit form — the revision of the session-hydrated drug the
+        // user acted on — so an apply computed from a stale session is
+        // rejected (nothing written) instead of overwriting a newer
+        // record. `?? 0` is the documented "never revised" token: rows
+        // hydrated through `getAllDrugs` always carry a revision, and 0
+        // only matches a record no write has touched since hydration.
+        await drugRepository.updateDrug(drug.id, { targets: nextTargets }, drug.revision ?? 0)
       } catch (error) {
         return fail(`Could not update the drug record (${messageOf(error)}) — nothing was changed.`)
       }

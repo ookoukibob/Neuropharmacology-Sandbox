@@ -253,15 +253,67 @@ wholesale and `identifiers` still carries the form's `name`/`synonyms`
 (the repository contract is unchanged), and this adds no editing controls,
 no schema field and no interchange format change.
 
-#### Multi-tab write semantics (phase 19 — audit GAP-4)
+#### Multi-tab write semantics (phases 19–20 — audit GAP-4)
 
-Two layers, verified separately in a real browser and in repository
-tests; they must not be conflated.
+Phase 19 confirmed the defect in a real browser and documented it as a
+limitation; phase 20 remediated it with optimistic concurrency. Two
+layers, verified separately in repository tests and in a real two-tab
+browser test; they must not be conflated.
 
-**1. Repository API (`DrugChanges`) — per-call merge against a fresh
-read.** `updateDrug(id, changes)` opens one read-write transaction,
-re-reads the stored row *inside* it, and applies `changes` to that fresh
-row (`dexieDrugRepository.ts` `applyChanges`):
+**1. Revision tokens (phase 20).** Every drug record carries a
+monotonic per-id revision token, stored in the Dexie `revisions` table
+(`{ id, revision }`; an absent row means `0`) — never inside the drug
+row itself, so stored rows, NPSL documents and `.npsb` archives stay
+byte-clean of it (`Drug.revision` is read-only bookkeeping the
+repository attaches on `getAllDrugs`/`getDrug` — which read drugs and
+revisions in ONE read transaction, so a token always matches the row it
+was read with — and strips before any row/record/export write).
+
+- `updateDrug(id, changes, expectedRevision)` compares the token and
+  writes **inside one read-write transaction** over drugs, metadata and
+  revisions: a matching token commits and bumps the revision in the
+  same transaction as the data write; a stale token rejects before any
+  write with a typed `RepositoryError('CONFLICT')` (alongside
+  `NOT_FOUND`, `VALIDATION`, `STORAGE`) and alters nothing — there is
+  no compare-then-write window for a second writer to slip through
+  (repository tests: stale rejection leaving row, revision and
+  metadata byte-identical; two concurrent writers — one connection and
+  two connections — cannot both commit; a fresh token succeeds).
+- Every path that writes drug rows — `createDrug`, `importLibrary`
+  (merge and replace), `replaceLibrary`, `restoreRecoveryArchive` —
+  bumps every id it writes inside its own transaction; `deleteDrug`
+  keeps the revision tombstone, so delete→recreate, restore and import
+  can never revive a stale form's token (ABA-safe). `DrugChanges` merge
+  semantics for omitted groups are unchanged (see below), and
+  validation/uniqueness failures stay distinguishable from conflicts by
+  error code — a validation-rejected write does not advance the
+  revision.
+- **Deletion is revision-guarded (phase 20 review fix).**
+  `deleteDrug(id, expectedRevision)` compares the token with the stored
+  revision INSIDE the deletion's own read-write transaction
+  (drugs+meta+revisions): a stale token rejects with `CONFLICT` before
+  anything is deleted or stamped — a detail page that loaded before
+  another tab's commit can never delete the newer record (repository
+  tests; `e2e/multitab.spec.ts` scenario 3). A successful delete keeps
+  the tombstone and deliberately does NOT advance it — deletion is the
+  absence of data, not a content mutation, and with the row gone every
+  stale action already fails `NOT_FOUND`; concurrent deletes cannot
+  both succeed because the loser's transaction re-reads the
+  post-delete state (`NOT_FOUND`, never a masked conflict for a record
+  that still exists). In the UI, a delete conflict renders a distinct
+  alert ("Deletion did not happen… the record changed elsewhere"),
+  keeps the record's detail view open and locks the delete action
+  behind an explicit reload — the destructive confirmation step is
+  unchanged, and nothing retries automatically (`DeleteDrugResult` in
+  `store.ts`).
+- The write gate is the repository: application code reaches storage
+  only through the injected instance. A hypothetical direct Dexie write
+  would neither compare nor bump — a documented bypass for which no
+  path exists in app code.
+
+**2. The repository API (`DrugChanges`) — per-call merge against a
+fresh read.** `updateDrug` applies `changes` to the row re-read inside
+the transaction (`dexieDrugRepository.ts` `applyChanges`):
 
 - A group absent from `changes` (`identifiers`, `tags`, `targets`,
   `pharmacokinetics`, `notes`) keeps the freshly read value — an API
@@ -277,51 +329,48 @@ row (`dexieDrugRepository.ts` `applyChanges`):
 - Every committed update restamps `updatedAt`; `createdAt`, origin and
   unknown extension fields are preserved.
 
-This is a per-call merge with no version check and no conflict
-detection. It is *not* an application-wide concurrency guarantee.
+This per-call merge composes only for groups the caller omits — it is
+not a substitute for the token check, which is what makes a *stale*
+full-snapshot write impossible rather than merely unlikely.
 
-**2. The edit form submits a full snapshot, not a delta.**
+**3. The edit form submits a full snapshot, not a delta.**
 `DrugForm.buildInput` always emits all four editable groups —
 `identifiers`, `tags`, `targets`, `notes` — even when the user changed
 only one of them: untouched fields submit the values of the record as
 it was when the form mounted. `pharmacokinetics` is the only group the
 form never emits, so it alone survives via the repository's re-read.
-Because the repository replaces supplied groups wholesale, its
-transaction re-read **cannot** preserve another tab's changes when the
-stale form explicitly supplies the old values for those groups.
+The form captures the record's revision once, at mount, and submits it
+unchanged; it never re-reads or auto-refreshes the token, so a save
+whose draft is based on a superseded record state always conflicts
+instead of silently composing.
 
-**Observed two-tab behavior (real browser, two pages in one context —
-`e2e/multitab.spec.ts`):** with one record open in edit mode in both
-tabs, tab A renaming and saving, then tab B (no reload) saving a
-tags-only change, the final stored record carries B's tags and A's
-rename **silently reverted** to the pre-edit value; B's save reports
-success with no error or warning. A second scenario confirms the same
-at group level: B's stale `targets` snapshot (B edited only the name)
-reverts A's committed parameter change wholesale (9.9 nM back to
-4.2 nM). Last-writer-wins therefore applies **per submitted group** —
-and since the form's snapshot granularity is "all editable groups of
-the record", a later stale save is effectively last-writer-wins for the
-whole record except `pharmacokinetics`. This is a confirmed limitation
-of the current UI, recorded deliberately (audit GAP-4); this phase adds
-no lock, version check or automatic merge.
+**Conflict handling in the UI (phase 20).** `store.updateDrug` returns
+a discriminated `UpdateDrugResult` (`ok` / `conflict` / `error`); a
+conflict is a per-session outcome and does not touch the session error
+banner. In the edit form a conflict renders a distinct alert ("Record
+changed elsewhere") while the form stays open with the draft intact,
+offering exactly two explicit recovery paths: open the latest record
+in a new tab (draft kept) or reload the record (draft discarded,
+labeled as such). Dismissing the alert keeps the draft — and the stale
+token — so re-saving the same draft conflicts again until the user
+re-bases on the current record. There is no automatic retry, no false
+success, and target identity, provenance and source references are
+preserved verbatim by the winning commit and the recovery flow
+(`e2e/multitab.spec.ts` asserts both).
 
-**Cross-tab refresh: none.** A tab refreshes its Zustand session only
-after its *own* mutations or a manual hydrate/reload (`store.ts`
-`refresh`, `AppLayout.tsx`); there is no storage event, live query,
-`BroadcastChannel` or focus/visibility re-hydration. After another tab
-commits, a tab keeps displaying its stale session state — including
-inside an open edit form, and in the opposite direction after its own
-save — until the user reloads.
-
-**Practical precaution (mitigation, not prevention):** reload the page
-(or reopen the record after a reload) so the edit form mounts from the
-current stored state, and do not keep the same record open for editing
-in two tabs at once. This shrinks the exposure window to the time
-between form mount and save, but it cannot *prevent* the overwrite:
-any change another tab commits inside that window is still silently
-reverted on save. A behavioral fix (e.g. optimistic versioning or
-delta-submitting forms) would be a separate proposed follow-up, not
-part of this phase.
+**Phase 19 history (observed defect, now remediated).** Before the
+token check, the same two-tab interleaving silently reverted newer
+data: a stale tags-only save reverted a committed rename, and a stale
+name-only save reverted a committed parameter edit wholesale (targets
+group) — both reporting success with no error (audit GAP-4; pinned as
+a limitation in phase 19, replaced by the conflict contract in phase
+20). Cross-tab *display* refresh is still none — a tab refreshes its
+Zustand session only after its own mutations or a manual
+hydrate/reload (`store.ts` `refresh`, `AppLayout.tsx`); there is no
+storage event, live query, `BroadcastChannel` or focus/visibility
+re-hydration. That is now safe by design: a stale *display* is
+corrected at the next interaction, and a stale *write* is rejected via
+the conflict flow instead of being silently applied.
 
 ### 4.3 Calculation
 
@@ -507,8 +556,10 @@ Applying a stored observation onto a drug parameter (Layer C) is a
 separate one-way path: `applyObservation` checks endpoint→slot mapping,
 exact qualifier, a molar-concentration unit and an explicit overwrite
 for occupied slots, then `drugRepository.updateDrug` writes the drug with
-a `literature` provenance carrying `observationId` — the parameter stays
-traceable back to the source record. Mounting the page performs zero
+a `literature` provenance carrying `observationId` — validated against
+the drug's current revision token (phase 20 optimistic concurrency; a
+stale token surfaces as a failed apply, never an overwrite), and the
+parameter stays traceable back to the source record. Mounting the page performs zero
 network requests; nothing is ever downloaded, synced or seeded
 automatically (see `docs/data-sources.md`).
 

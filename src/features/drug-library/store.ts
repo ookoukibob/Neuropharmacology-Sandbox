@@ -13,6 +13,7 @@ import type { Drug, DrugId } from '../../domain/drug/drug'
 import type { LibraryMetadata } from '../../domain/library/library'
 import type { ImportIssue, ImportWarning } from '../../data/import/importPipeline'
 import type { RecoveryIssue } from '../../data/recovery/format'
+import { RepositoryError } from '../../data/repositories/repository'
 import type {
   DrugChanges,
   DrugInput,
@@ -79,6 +80,42 @@ export type LibraryRestoreOutcome =
       readonly message: string
     }
 
+/**
+ * Result of one guarded record update (phase 20, audit GAP-4):
+ * - `ok` — committed by the repository and the session re-read;
+ * - `conflict` — the record changed elsewhere since this edit session's
+ *   draft was based on it. The repository rejected the write inside its
+ *   transaction: NOTHING was modified (record, scientific values and
+ *   revision untouched) and the session is deliberately NOT refreshed —
+ *   the caller keeps its unsaved draft and can reload/reopen to review
+ *   the other change and re-apply. Never retried automatically;
+ * - `error` — not found, validation or storage failure; nothing was
+ *   committed (the transaction aborted) and the message is surfaced like
+ *   every other mutation failure.
+ */
+export type UpdateDrugResult =
+  | { readonly status: 'ok'; readonly drug: Drug }
+  | { readonly status: 'conflict'; readonly message: string }
+  | { readonly status: 'error'; readonly message: string }
+
+/**
+ * Outcome of a revision-guarded delete (phase 20 review fix):
+ * - `ok` — the record was deleted (the session was refreshed);
+ * - `conflict` — the record changed since the token the delete action was
+ *   based on: NOTHING was deleted, the session is deliberately NOT
+ *   refreshed (it still mirrors storage) and the error banner is
+ *   untouched — the delete-confirmation UI owns the recovery flow and
+ *   must send the user back through reload/review. Never retried
+ *   automatically;
+ * - `error` — not found (already deleted elsewhere) or storage failure;
+ *   nothing was committed and the message is surfaced like every other
+ *   mutation failure.
+ */
+export type DeleteDrugResult =
+  | { readonly status: 'ok' }
+  | { readonly status: 'conflict'; readonly message: string }
+  | { readonly status: 'error'; readonly message: string }
+
 export interface LibraryState {
   readonly status: LibraryStatus
   readonly drugs: readonly Drug[]
@@ -94,8 +131,26 @@ export interface LibraryState {
   selectDrug(id: DrugId | null): void
   setFilter(filter: string): void
   createDrug(input: DrugInput): Promise<Drug | null>
-  updateDrug(id: DrugId, changes: DrugChanges): Promise<Drug | null>
-  deleteDrug(id: DrugId): Promise<boolean>
+  /**
+   * Guarded partial update (phase 20): `expectedRevision` is the
+   * `Drug.revision` token the edit form captured when it mounted — the
+   * state its draft is based on. A conflict is a typed, per-session
+   * outcome (the draft stays with its caller; the session error state is
+   * untouched); every other failure sets `error` like all mutations.
+   */
+  updateDrug(
+    id: DrugId,
+    changes: DrugChanges,
+    expectedRevision: number,
+  ): Promise<UpdateDrugResult>
+  /**
+   * Revision-guarded delete (phase 20 review fix): `expectedRevision` is
+   * the `Drug.revision` token the delete action is based on — the record
+   * state the user reviewed before confirming. A conflict is a typed,
+   * per-session outcome (nothing deleted, session untouched); every
+   * other failure sets `error` like all mutations.
+   */
+  deleteDrug(id: DrugId, expectedRevision: number): Promise<DeleteDrugResult>
   /**
    * Transactional NPSL import. `ok` and `committed-refresh-failed` both
    * mean the database commit succeeded (the latter with a stale session);
@@ -171,26 +226,47 @@ export function createLibraryStore(
       }
     },
 
-    async updateDrug(id, changes) {
+    async updateDrug(id, changes, expectedRevision) {
       try {
-        const drug = await repo.updateDrug(id, changes)
+        const drug = await repo.updateDrug(id, changes, expectedRevision)
         await refresh(set)
-        return drug
+        return { status: 'ok', drug }
       } catch (error) {
-        set({ error: messageOf(error) })
-        return null
+        // Phase 20: a conflict is a typed, per-edit-session outcome. The
+        // repository rejected the write inside its transaction (nothing
+        // changed anywhere), so the session still mirrors storage and
+        // needs no refresh — and the shared error banner is deliberately
+        // left alone: the edit form that owns the recovery flow surfaces
+        // it, keeping the draft-visible lifetime of the message tied to
+        // the draft itself.
+        if (error instanceof RepositoryError && error.code === 'CONFLICT') {
+          return { status: 'conflict', message: error.message }
+        }
+        const message = messageOf(error)
+        set({ error: message })
+        return { status: 'error', message }
       }
     },
 
-    async deleteDrug(id) {
+    async deleteDrug(id, expectedRevision) {
       try {
-        await repo.deleteDrug(id)
+        await repo.deleteDrug(id, expectedRevision)
         await refresh(set)
         if (get().selectedDrugId === id) set({ selectedDrugId: null })
-        return true
+        return { status: 'ok' }
       } catch (error) {
-        set({ error: messageOf(error) })
-        return false
+        // Phase 20 review fix: same conflict taxonomy as updateDrug — a
+        // stale delete is a typed, per-session outcome. The repository
+        // rejected it inside its transaction (nothing was deleted), so
+        // the session still mirrors storage: no refresh, and the shared
+        // error banner stays untouched — the delete-confirmation UI owns
+        // the reload/review recovery flow.
+        if (error instanceof RepositoryError && error.code === 'CONFLICT') {
+          return { status: 'conflict', message: error.message }
+        }
+        const message = messageOf(error)
+        set({ error: message })
+        return { status: 'error', message }
       }
     },
 

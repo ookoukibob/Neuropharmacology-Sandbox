@@ -170,12 +170,21 @@ describe('createLibraryStore — CRUD refreshes from storage', () => {
       await store.getState().hydrate()
       store.getState().selectDrug(created.id)
 
-      const updated = await store.getState().updateDrug(created.id, { tags: ['edited'] })
-      expect(updated?.tags).toEqual(['edited'])
+      // Phase 20: the store submits the token of the session state the
+      // edit is based on (the hydrated drug's own revision).
+      const base = store.getState().drugs.find((candidate) => candidate.id === created.id)
+      const updated = await store
+        .getState()
+        .updateDrug(created.id, { tags: ['edited'] }, base?.revision ?? 0)
+      expect(updated.status).toBe('ok')
+      if (updated.status !== 'ok') return
+      expect(updated.drug.tags).toEqual(['edited'])
       expect(store.getState().drugs[0]?.tags).toEqual(['edited'])
 
-      const removed = await store.getState().deleteDrug(created.id)
-      expect(removed).toBe(true)
+      const removed = await store
+        .getState()
+        .deleteDrug(created.id, updated.drug.revision ?? 0)
+      expect(removed.status).toBe('ok')
       expect(store.getState().drugs).toEqual([])
       expect(store.getState().selectedDrugId).toBeNull()
     } finally {
@@ -183,12 +192,106 @@ describe('createLibraryStore — CRUD refreshes from storage', () => {
     }
   })
 
-  it('a failed delete reports false and the error message', async () => {
+  it('reports a stale-token save as a typed conflict without touching the session', async () => {
+    const { db, repo, store } = await makeStore()
+    try {
+      const created = await repo.createDrug({
+        identifiers: { name: 'Fixture Compound Conflict', synonyms: [] },
+        notes: 'original',
+      })
+      await store.getState().hydrate()
+      store.getState().selectDrug(created.id)
+
+      // Another session commits a rename (advancing the revision) after
+      // this session hydrated — exactly a second tab's save.
+      await repo.updateDrug(
+        created.id,
+        { identifiers: { name: 'Renamed Elsewhere', synonyms: [] } },
+        created.revision ?? 0,
+      )
+
+      // The stale save is rejected: typed conflict, distinct from `error`.
+      const result = await store
+        .getState()
+        .updateDrug(created.id, { tags: ['stale-tags'] }, created.revision ?? 0)
+      expect(result.status).toBe('conflict')
+      // The session error banner is untouched (the conflict belongs to the
+      // edit form that owns recovery), and the session keeps its previous
+      // contents — no refresh, no silent adoption of either version.
+      expect(store.getState().error).toBeNull()
+      expect(store.getState().drugs[0]?.identifiers.name).toBe('Fixture Compound Conflict')
+      // Storage kept the OTHER session's rename; the stale tags were
+      // never written anywhere.
+      const stored = await repo.getDrug(created.id)
+      expect(stored?.identifiers.name).toBe('Renamed Elsewhere')
+      expect(stored?.tags).toEqual([])
+
+      // A fresh token (the current revision) commits normally.
+      const retry = await store
+        .getState()
+        .updateDrug(created.id, { tags: ['reapplied'] }, stored?.revision ?? 0)
+      expect(retry.status).toBe('ok')
+      expect(store.getState().drugs[0]?.tags).toEqual(['reapplied'])
+      expect(store.getState().drugs[0]?.identifiers.name).toBe('Renamed Elsewhere')
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('a failed delete reports an error outcome and the error message', async () => {
     const { db, store } = await makeStore()
     try {
-      const removed = await store.getState().deleteDrug('missing-id')
-      expect(removed).toBe(false)
+      const removed = await store.getState().deleteDrug('missing-id', 0)
+      expect(removed.status).toBe('error')
+      if (removed.status === 'error') {
+        expect(removed.message).toContain('no drug with id')
+      }
       expect(store.getState().error).toBeTruthy()
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('reports a stale-token delete as a typed conflict without touching the session or storage', async () => {
+    const { db, repo, store } = await makeStore()
+    try {
+      const created = await repo.createDrug({
+        identifiers: { name: 'Delete Conflict Probe', synonyms: [] },
+        notes: 'original',
+      })
+      await store.getState().hydrate()
+      store.getState().selectDrug(created.id)
+
+      // Another session commits after this session hydrated — the stored
+      // record is now at a higher revision than the session's token.
+      await repo.updateDrug(
+        created.id,
+        { identifiers: { name: 'Renamed Elsewhere', synonyms: [] } },
+        created.revision ?? 0,
+      )
+
+      // The stale delete is rejected: typed conflict, distinct from
+      // `error`.
+      const result = await store.getState().deleteDrug(created.id, created.revision ?? 0)
+      expect(result.status).toBe('conflict')
+      if (result.status === 'conflict') {
+        expect(result.message).toContain('nothing was deleted')
+      }
+      // The session error banner is untouched (the conflict belongs to
+      // the delete-confirmation UI that owns recovery), the session keeps
+      // its previous contents — no refresh — and the record is STILL
+      // THERE in storage: deletion did not happen anywhere.
+      expect(store.getState().error).toBeNull()
+      expect(store.getState().drugs).toHaveLength(1)
+      expect(store.getState().drugs[0]?.identifiers.name).toBe('Delete Conflict Probe')
+      const stored = await repo.getDrug(created.id)
+      expect(stored?.identifiers.name).toBe('Renamed Elsewhere')
+      expect(stored?.revision).toBe(2)
+
+      // Recovery: the CURRENT revision deletes normally.
+      const retry = await store.getState().deleteDrug(created.id, stored?.revision ?? 0)
+      expect(retry.status).toBe('ok')
+      expect(store.getState().drugs).toEqual([])
     } finally {
       await db.delete()
     }

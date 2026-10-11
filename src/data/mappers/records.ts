@@ -76,9 +76,29 @@ export type DrugRecord = {
 }
 
 /**
+ * Optimistic-concurrency token row (phase 20, ADR-21): the current
+ * revision number of one drug id, stored BESIDE the record (Dexie v4
+ * `revisions` table) so drug rows stay byte-identical for every existing
+ * contract. `updateDrug` compares the caller's expected revision against
+ * this row inside the same read-write transaction as the record write;
+ * every path that writes a drug row bumps it. Never serialized into NPSL
+ * or `.npsb` interchange.
+ */
+export type DrugRevision = {
+  id: DrugId
+  /** Strictly monotonic per id (delete keeps the tombstone; absent = 0). */
+  revision: number
+}
+
+/**
  * The DTO key contract — the documented field set of each record level.
  * Anything not listed here is an unknown (future) field and is preserved
  * verbatim across edits; anything listed is owned by the domain value.
+ * `revision` is listed but never written by the mapper: the token lives
+ * in the separate `revisions` table (phase 20, ADR-21), and listing it
+ * here makes unknown-field preservation treat any stray copy — a
+ * hand-edited row or a file carrying a `revision` key — as record-layer
+ * bookkeeping to drop, never to carry forward into storage.
  */
 const ROOT_KEYS = new Set([
   'id',
@@ -91,6 +111,7 @@ const ROOT_KEYS = new Set([
   'createdAt',
   'updatedAt',
   'persistenceVersion',
+  'revision',
 ])
 const IDENTIFIER_KEYS = new Set(['name', 'synonyms', 'description', 'casNumber'])
 const TARGET_KEYS = new Set([
@@ -364,12 +385,15 @@ export function fromRecord(raw: unknown): DrugRecordValidation {
   // The NPSL schema is structurally the domain Drug (both describe the same
   // scientific shape); zod's optional-undefined typing differs from the
   // domain's exact-optional typing, so this is a type-level bridge only.
-  // Persistence bookkeeping (`persistenceVersion`) belongs to the record
-  // layer alone and is stripped from the domain view; unknown future fields
-  // ride along harmlessly — writes re-attach them from the raw record
-  // (toStoredRecord), never from the domain object.
+  // Persistence bookkeeping (`persistenceVersion`, and the phase-20
+  // `revision` token) belongs to the record layer alone and is stripped
+  // from the domain view — the authoritative revision a domain drug
+  // carries is attached by the repository from the `revisions` table,
+  // never read from a row; unknown future fields ride along harmlessly —
+  // writes re-attach them from the raw record (toStoredRecord), never
+  // from the domain object.
   const data = parsed.data as Drug & { readonly persistenceVersion?: unknown }
-  const { persistenceVersion: _bookkeeping, ...domain } = data
+  const { persistenceVersion: _bookkeeping, revision: _revision, ...domain } = data
   return { ok: true, drug: domain }
 }
 

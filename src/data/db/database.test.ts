@@ -1,14 +1,18 @@
 /**
- * Schema migration demo (ADR-14): a database written by the v1 build is
- * upgraded in place — scientific data survives byte-for-byte, unknown
+ * Schema migration demo (ADR-14): a database written by an older build
+ * is upgraded in place — scientific data survives byte-for-byte, unknown
  * (future) fields are never destroyed, only bookkeeping is backfilled,
- * and the newer indexes/tables become usable. Two chains are covered:
+ * and the newer indexes/tables become usable. Three chains are covered:
  *
- * - v1 → v2 → v3 (the historical path): bookkeeping backfill runs, then
- *   the additive v3 schema adds the source-data tables;
- * - v2 → v3 (what an existing install actually performs): drugs and meta
- *   are untouched, the new `compounds`/`observations` tables open empty,
- *   and startup never seeds them.
+ * - v1 → v2 → v3 → v4 (the historical path): bookkeeping backfill runs,
+ *   then the additive v3 schema adds the source-data tables and the
+ *   additive v4 schema adds the phase-20 `revisions` table;
+ * - v2 → v3 → v4 (what an existing install actually performs): drugs and
+ *   meta are untouched, the new `compounds`/`observations` tables open
+ *   empty, and startup never seeds them;
+ * - v4 specifically: opening a pre-v4 database invents no revision rows
+ *   (every existing record simply reads as revision 0 until its first
+ *   edit) and never rewrites a drug row.
  *
  * fake-indexeddb provides the storage; the legacy databases are declared
  * here exactly as the old builds declared them (a second version() in
@@ -50,23 +54,45 @@ class LegacyDatabaseV2 extends Dexie {
   }
 }
 
+/** The v3 build's schema (source-data tables, no revisions), verbatim. */
+class LegacyDatabaseV3 extends Dexie {
+  drugs!: EntityTable<Record<string, unknown>, 'id'>
+  meta!: EntityTable<Record<string, unknown>, 'id'>
+  compounds!: EntityTable<Record<string, unknown>, 'id'>
+
+  constructor(name: string) {
+    super(name)
+    this.version(1).stores({ drugs: 'id', meta: 'id' })
+    this.version(2).stores({ drugs: 'id, origin, updatedAt', meta: 'id' })
+    this.version(3).stores({
+      drugs: 'id, origin, updatedAt',
+      meta: 'id',
+      compounds: 'id',
+      observations: 'id, compoundId',
+    })
+  }
+}
+
 describe('SandboxDatabase — fresh database', () => {
   it('opens empty at the current schema version, with empty source tables', async () => {
     const db = new SandboxDatabase(freshName())
     try {
-      expect(db.verno).toBe(3)
+      expect(db.verno).toBe(4)
       expect(await db.drugs.count()).toBe(0)
       expect(await db.meta.count()).toBe(0)
       // The on-demand source tables exist but are never seeded at startup.
       expect(await db.compounds.count()).toBe(0)
       expect(await db.observations.count()).toBe(0)
+      // Phase 20: the revisions table is equally empty on a fresh run —
+      // tokens only ever come from writes through the repository.
+      expect(await db.revisions.count()).toBe(0)
     } finally {
       await db.delete()
     }
   })
 })
 
-describe('SandboxDatabase — v1 → v2 → v3 migration', () => {
+describe('SandboxDatabase — v1 → v2 → v3 → v4 migration', () => {
   it('backfills bookkeeping only; scientific and unknown fields survive verbatim', async () => {
     const name = freshName()
 
@@ -96,11 +122,11 @@ describe('SandboxDatabase — v1 → v2 → v3 migration', () => {
     await legacy.meta.put({ id: 'legacy-library', name: 'Legacy library' })
     legacy.close()
 
-    // 2. Open with the current build — Dexie runs the version(2) and
-    //    version(3) upgrades.
+    // 2. Open with the current build — Dexie runs the version(2),
+    //    version(3) and version(4) upgrades.
     const db = new SandboxDatabase(name)
     try {
-      expect(db.verno).toBe(3)
+      expect(db.verno).toBe(4)
 
       // Bookkeeping was backfilled…
       const plain = await db.drugs.get('fixture-drug-1')
@@ -167,7 +193,7 @@ describe('SandboxDatabase — v1 → v2 → v3 migration', () => {
   })
 })
 
-describe('SandboxDatabase — v2 → v3 migration', () => {
+describe('SandboxDatabase — v2 → v3 → v4 migration', () => {
   it('adds empty source tables without touching stored data, and never seeds them', async () => {
     const name = freshName()
 
@@ -180,7 +206,7 @@ describe('SandboxDatabase — v2 → v3 migration', () => {
 
     const db = new SandboxDatabase(name)
     try {
-      expect(db.verno).toBe(3)
+      expect(db.verno).toBe(4)
 
       // Existing data is untouched — record shape, bookkeeping and the
       // unknown future field all survive byte-for-byte.
@@ -194,6 +220,11 @@ describe('SandboxDatabase — v2 → v3 migration', () => {
       // database never creates, fetches or seeds source records.
       expect(await db.compounds.count()).toBe(0)
       expect(await db.observations.count()).toBe(0)
+
+      // Phase 20: the revisions table opens empty too — the upgrade
+      // invents no tokens, so every pre-existing record reads as the
+      // documented "never revised" revision 0 until its first edit.
+      expect(await db.revisions.count()).toBe(0)
 
       // …and they are immediately usable (id + compoundId indexes live).
       const compound = {
@@ -237,6 +268,44 @@ describe('SandboxDatabase — v2 → v3 migration', () => {
         await db.observations.where('compoundId').equals('chembl:CHEMBL99990001').count(),
       ).toBe(1)
       expect(await db.compounds.get('chembl:CHEMBL99990001')).toEqual(compound)
+    } finally {
+      await db.delete()
+    }
+  })
+})
+
+describe('SandboxDatabase — v3 → v4 migration (phase 20)', () => {
+  it('adds the empty revisions table without touching any stored row', async () => {
+    const name = freshName()
+
+    // A v3-era database: a drug record with an unknown field and library
+    // metadata — the shape an existing install actually has today.
+    const legacy = new LegacyDatabaseV3(name)
+    const legacyDrug = { ...toRecord(syntheticDrug()), futureField: { keep: 'me' } }
+    await legacy.drugs.put(legacyDrug)
+    await legacy.meta.put({ id: 'v3-library', name: 'V3 library' })
+    legacy.close()
+
+    const db = new SandboxDatabase(name)
+    try {
+      expect(db.verno).toBe(4)
+
+      // Drug rows and metadata survive byte-for-byte — the v4 upgrade is
+      // purely additive and rewrites nothing.
+      expect(await db.drugs.get('fixture-drug-1')).toEqual(legacyDrug)
+      expect((await db.meta.get('v3-library'))?.name).toBe('V3 library')
+
+      // The revisions table opens EMPTY: no token is invented by the
+      // upgrade, so existing records simply read as revision 0 until the
+      // repository writes them.
+      expect(await db.revisions.count()).toBe(0)
+
+      // …and the table is immediately usable with its `id` key.
+      await db.revisions.put({ id: 'fixture-drug-1', revision: 1 })
+      expect(await db.revisions.get('fixture-drug-1')).toEqual({
+        id: 'fixture-drug-1',
+        revision: 1,
+      })
     } finally {
       await db.delete()
     }

@@ -111,8 +111,8 @@ beforeEach(async () => {
   await useLibraryStore.getState().hydrate()
 })
 
-function renderDetail(id: string = drugId): void {
-  render(
+function renderDetail(id: string = drugId) {
+  return render(
     <MemoryRouter initialEntries={[`/library/${id}`]}>
       <Routes>
         <Route path="/library/:drugId" element={<DrugDetailView drugId={id} />} />
@@ -705,5 +705,82 @@ describe('DrugForm — extensions and pharmacokinetics through an unrelated edit
     // A fresh repository read reconstructs the same data.
     const reloaded = await libraryRepository.getDrug(created.id)
     expect(reloaded?.pharmacokinetics).toEqual(EXPECTED_PHARMACOKINETICS)
+  })
+})
+
+/**
+ * Phase 20 (audit GAP-4 remediation): the REAL detail → form → store →
+ * repository chain under a stale token. The session hydrates, a second
+ * writer commits, and the first session's save must be rejected atomically
+ * with the form and its draft still open — then a fresh (reloaded) session
+ * must be able to edit normally. Synthetic fixtures only.
+ */
+describe('DrugForm — stale-write conflict through the real chain (phase 20)', () => {
+  const DRAFT_NAME = 'Stale Draft Rename'
+  const WRITER_NAME = 'Renamed By Another Writer'
+
+  it('rejects the stale save in the form, stores the other writer\'s record untouched, then permits a fresh session', async () => {
+    const view = renderDetail()
+    fireEvent.click(screen.getByTestId('edit-drug'))
+    fireEvent.change(screen.getByTestId('drug-name'), { target: { value: DRAFT_NAME } })
+
+    // Another writer commits AFTER this session hydrated: the store's
+    // session state — and therefore the form's mount-time token — stays
+    // stale, exactly like a second tab that has not reloaded. The form
+    // never re-reads the token at submit time.
+    const beforeConflict = await libraryRepository.getDrug(drugId)
+    expect(beforeConflict?.revision).toBe(1)
+    await libraryRepository.updateDrug(
+      drugId,
+      {
+        identifiers: { name: WRITER_NAME, synonyms: ['Alpha,Beta', 'X', 'X'] },
+      },
+      beforeConflict?.revision ?? 0,
+    )
+
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    const conflict = await screen.findByTestId('save-conflict')
+
+    // The conflict is named in the edit session; the form stays open with
+    // the user's draft intact, and the session error banner is untouched
+    // (the conflict belongs to this form, not to the whole session).
+    expect(conflict).toHaveTextContent('Record changed elsewhere')
+    expect(screen.getByTestId('drug-form')).toBeInTheDocument()
+    expect(screen.queryByTestId('drug-detail')).not.toBeInTheDocument()
+    expect((screen.getByTestId('drug-name') as HTMLInputElement).value).toBe(DRAFT_NAME)
+    expect(screen.getByTestId('conflict-open-latest')).toBeInTheDocument()
+    expect(screen.getByTestId('conflict-reload')).toBeInTheDocument()
+    expect(useLibraryStore.getState().error).toBeNull()
+
+    // Nothing was overwritten: the other writer's record stands exactly as
+    // committed — name, targets, provenance — the rejected draft never
+    // reached storage, and the revision advanced only by that one commit.
+    const raw = await storedRecord()
+    expect(raw?.identifiers.name).toBe(WRITER_NAME)
+    expect(raw?.targets[0]?.kd?.value).toBe(12.4)
+    expect(raw?.targets[0]?.kd?.provenance).toEqual(LITERATURE)
+    expect(raw?.targets[0]?.sourceReferences?.[0]?.sourceTargetId).toBe('CHEMBL99991001')
+    const afterConflict = await libraryRepository.getDrug(drugId)
+    expect(afterConflict?.identifiers.name).toBe(WRITER_NAME)
+    expect(afterConflict?.revision).toBe(2)
+    expect(afterConflict?.tags).toEqual(['one,two', 'duplicate', 'duplicate'])
+
+    // Recovery: a fresh session (reload/reopen) hydrates the current
+    // record and its fresh token — the same draft then commits normally.
+    view.unmount()
+    await useLibraryStore.getState().hydrate()
+    const fresh = renderDetail()
+    fireEvent.click(screen.getByTestId('edit-drug'))
+    expect((screen.getByTestId('drug-name') as HTMLInputElement).value).toBe(WRITER_NAME)
+    fireEvent.change(screen.getByTestId('drug-name'), { target: { value: DRAFT_NAME } })
+    fireEvent.submit(screen.getByTestId('drug-form'))
+    await waitFor(() => expect(screen.queryByTestId('drug-form')).not.toBeInTheDocument())
+
+    const committed = await storedRecord()
+    expect(committed?.identifiers.name).toBe(DRAFT_NAME)
+    // The token never rides in the row — rows stay byte-clean of it.
+    expect(Object.keys(committed ?? {})).not.toContain('revision')
+    expect((await libraryRepository.getDrug(drugId))?.revision).toBe(3)
+    fresh.unmount()
   })
 })

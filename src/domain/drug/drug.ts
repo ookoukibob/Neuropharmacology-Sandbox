@@ -130,6 +130,17 @@ export interface Drug {
   /** ISO 8601. Absent for legacy imports; the importer fills it. */
   readonly createdAt?: string
   readonly updatedAt?: string
+  /**
+   * Optimistic-concurrency token (phase 20, ADR-21): the record's
+   * monotonic revision number as of when this object was read — the
+   * value an edit session submits back with its save, so a write based
+   * on a superseded state is rejected instead of silently applied.
+   * Storage bookkeeping like `id`/`createdAt`: attached by the
+   * repository on every read (`getAllDrugs`/`getDrug`/`createDrug`/
+   * `updateDrug`), never part of a drug row, an NPSL document or a
+   * `.npsb` archive, and never user-editable.
+   */
+  readonly revision?: number
 }
 
 /** The reference this target carries from `source`, if any. */

@@ -1,21 +1,28 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 
 /**
- * Multi-tab write semantics end-to-end (phase 19 — audit GAP-4/S7).
+ * Multi-tab write safety end-to-end (phase 20 — audit GAP-4 remediation).
  *
  * Both pages live in the SAME browser context, so they share one origin
- * and one IndexedDB database — exactly like two tabs of one browser.
- * The scenario is deterministic: both edit forms mount from the same
+ * and one IndexedDB database — exactly like two tabs of one browser. The
+ * interleaving is deterministic: both edit forms mount from the same
  * stored snapshot BEFORE either tab saves, then the later save from the
  * still-stale tab is observed against the earlier tab's committed change.
  *
- * This spec records the OBSERVED behavior of the current UI: the edit
- * form submits a full snapshot of its editable field groups
- * (`DrugForm.buildInput`), so a stale tab's save writes its mount-time
- * values of the untouched groups back over newer data. No assertion here
- * treats the overwrite as desirable — it pins the confirmed limitation
- * documented in docs/architecture.md §4.2 and docs/data-integrity-audit.md
- * GAP-4. Every value is synthetic test data; no external request is made.
+ * Phase 20 expectation: that stale save is REJECTED atomically with a
+ * typed conflict instead of silently overwriting newer data — the stored
+ * record keeps the committing tab's state, the rejecting tab's form stays
+ * open with its draft intact, and recovery (review the latest record in a
+ * new tab without losing the draft, or reload and re-apply) is always an
+ * explicit user choice. The phase-20 review fix extends the same contract
+ * to deletion: a stale tab's guarded delete can never remove a record
+ * another tab has updated — the conflict says the deletion did not
+ * happen, and the delete action is locked until the user reloads/reviews.
+ * Each scenario also proves that a fresh session can edit normally
+ * afterwards, that the unrelated control record and the library metadata
+ * are untouched, and that conflict recovery never replaces target
+ * identity, provenance or source references. Every value is synthetic
+ * test data; no external request is made.
  */
 
 const PROBE_NAME = 'Synthetic Concurrency Probe'
@@ -24,11 +31,15 @@ const PROBE_RETAGGED = 'Synthetic Concurrency Probe B-Edit'
 const UNRELATED_NAME = 'Synthetic Unrelated Probe'
 const LIBRARY_NAME = 'Synthetic Concurrency Library'
 const TARGET_NAME = 'CONC-R1'
+const TARGET_ID = 'e2e-conc-target-1'
+const SOURCE_TARGET_ID = 'CHEMBL99991001'
 
 /**
  * Synthetic NPSL envelope with two user-origin records: the probe both
  * tabs edit, and an unrelated control record no tab touches. Invented
  * fixture values throughout — never real pharmacological information.
+ * The probe target carries an external source identity (phase 18I) so
+ * conflict recovery can be shown to preserve it verbatim.
  */
 function concurrencyNpslBuffer(): Buffer {
   return Buffer.from(
@@ -50,7 +61,7 @@ function concurrencyNpslBuffer(): Buffer {
           tags: ['synthetic-fixture'],
           targets: [
             {
-              id: 'e2e-conc-target-1',
+              id: TARGET_ID,
               name: TARGET_NAME,
               kd: {
                 value: 4.2,
@@ -61,6 +72,18 @@ function concurrencyNpslBuffer(): Buffer {
                   citation: 'Invented for E2E, 2026',
                 },
               },
+              sourceReferences: [
+                {
+                  source: 'chembl',
+                  sourceName: 'ChEMBL',
+                  sourceTargetId: SOURCE_TARGET_ID,
+                  name: TARGET_NAME,
+                  organism: 'synthetic',
+                  url: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
+                  licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+                  licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
+                },
+              ],
             },
           ],
           pharmacokinetics: {},
@@ -122,12 +145,27 @@ async function openProbe(page: Page): Promise<void> {
   await expect(page.getByTestId('drug-detail')).toBeVisible()
 }
 
+/** A brand-new tab reading the probe record with a fresh hydration. */
+async function openProbeFresh(context: BrowserContext): Promise<Page> {
+  const fresh = await context.newPage()
+  await openProbe(fresh)
+  return fresh
+}
+
 /** Enter edit mode and wait for the form to be mounted and interactive. */
 async function openEditForm(page: Page, expectedName: string): Promise<void> {
   await page.getByTestId('edit-drug').click()
   await expect(page.getByTestId('drug-form')).toBeVisible()
   // The form is a snapshot of the record as it was when the form mounted.
   await expect(page.getByTestId('drug-name')).toHaveValue(expectedName)
+}
+
+/**
+ * The provenance badge shown for the probe target's Kd: `param-Kd` holds
+ * the value, the badge sits beside it in the same parameter row.
+ */
+function kdProvenanceBadge(page: Page) {
+  return page.getByTestId('param-Kd').locator('..').getByTestId('provenance-badge')
 }
 
 /**
@@ -147,7 +185,7 @@ async function expectUnrelatedUnchanged(page: Page): Promise<void> {
   ).toBeVisible()
 }
 
-test('library: two stale tabs on one record — the later save reverts the other tab\'s name change (audit GAP-4)', async ({
+test('library: a stale tabs-tag save conflicts instead of reverting a newer rename (audit GAP-4, phase 20)', async ({
   page,
   context,
 }) => {
@@ -162,7 +200,8 @@ test('library: two stale tabs on one record — the later save reverts the other
     await openProbe(pageB)
     await expect(pageB.getByRole('heading', { level: 2, name: PROBE_NAME })).toBeVisible()
 
-    // Both forms mount from the same stored snapshot.
+    // Both forms mount from the same stored snapshot — same revision
+    // token for each session.
     await openEditForm(page, PROBE_NAME)
     await openEditForm(pageB, PROBE_NAME)
   })
@@ -173,36 +212,83 @@ test('library: two stale tabs on one record — the later save reverts the other
     await expect(page.getByRole('heading', { level: 2, name: PROBE_RENAMED })).toBeVisible()
 
     // Tab B has no cross-tab refresh: its OPEN FORM still shows the
-    // pre-save name (confirmed stale display, audit GAP-4).
+    // pre-save name — its session token is now stale.
     await expect(pageB.getByTestId('drug-name')).toHaveValue(PROBE_NAME)
   })
 
-  await test.step('tab B changes only the tags and saves its still-stale form', async () => {
+  await test.step('tab B saves its still-stale tags-only change: typed conflict, form and draft preserved', async () => {
     await pageB.locator('#drug-tags').fill('synthetic-fixture, second-tab')
     await pageB.getByTestId('save-drug').click()
-    // The save reports success: edit mode closes with no error — nothing
-    // warns that the stale snapshot reverted another tab's field.
-    await expect(pageB.getByTestId('drug-detail')).toBeVisible()
+
+    // The conflict is named distinctly and shown inside the edit session.
+    const conflict = pageB.getByTestId('save-conflict')
+    await expect(conflict).toBeVisible()
+    await expect(conflict).toContainText('Record changed elsewhere')
+    await expect(pageB.getByTestId('drug-form')).toBeVisible()
+    await expect(pageB.getByTestId('drug-detail')).toHaveCount(0)
+    // No generic error leaked elsewhere: the conflict is per-session.
     await expect(pageB.getByTestId('detail-error')).toHaveCount(0)
-    // B's own session refreshed from storage after its save: it now shows
-    // the tags it wrote AND the reverted (old) name.
-    await expect(pageB.getByRole('heading', { level: 2, name: PROBE_NAME })).toBeVisible()
-    await expect(pageB.getByText('#second-tab')).toBeVisible()
+    // The draft is fully preserved — the tags the user typed AND the
+    // mount-time name.
+    await expect(pageB.locator('#drug-tags')).toHaveValue('synthetic-fixture, second-tab')
+    await expect(pageB.getByTestId('drug-name')).toHaveValue(PROBE_NAME)
+    // Both recovery paths are offered, the destructive one labeled.
+    await expect(pageB.getByTestId('conflict-open-latest')).toBeVisible()
+    await expect(pageB.getByTestId('conflict-reload')).toContainText('discards this draft')
   })
 
-  await test.step('a fresh hydration pins the final stored state: the name change is reverted', async () => {
-    await pageB.reload()
-    await expect(pageB.getByRole('heading', { name: 'Drug Detail' })).toBeVisible()
-    await expect(pageB.getByRole('heading', { level: 2, name: PROBE_NAME })).toBeVisible()
-    await expect(pageB.getByText('#second-tab')).toBeVisible()
-    // Tab B's tags-only save silently reverted tab A's committed rename:
-    // the UI never merges at the repository's granularity because the
-    // form always supplies the full identifiers group.
-    await expect(pageB.getByText(PROBE_RENAMED)).toHaveCount(0)
+  await test.step('a fresh tab pins the stored state: the rename stands, the stale tags were never written', async () => {
+    const fresh = await openProbeFresh(context)
+    await expect(fresh.getByRole('heading', { level: 2, name: PROBE_RENAMED })).toBeVisible()
+    await expect(fresh.locator('span').filter({ hasText: '#synthetic-fixture' })).toBeVisible()
+    await expect(fresh.getByText('#second-tab')).toHaveCount(0)
+    // Target identity and the external source reference survived the
+    // rejected write untouched.
+    await expect(fresh.getByText(TARGET_NAME, { exact: true })).toBeVisible()
+    await expect(fresh.getByTestId(`target-source-references-${TARGET_ID}`)).toContainText(
+      SOURCE_TARGET_ID,
+    )
+    await fresh.close()
 
-    // Tab A (still not reloaded) keeps displaying its own stale view —
-    // the overwrite is invisible from both directions.
+    // Tab A (not reloaded) keeps displaying its own committed view.
     await expect(page.getByRole('heading', { level: 2, name: PROBE_RENAMED })).toBeVisible()
+  })
+
+  await test.step('recovery: review the latest in a new tab without losing the draft; dismissal keeps the draft; a re-save still conflicts', async () => {
+    const popupPromise = context.waitForEvent('page')
+    await pageB.getByTestId('conflict-open-latest').click()
+    const reviewTab = await popupPromise
+    await expect(reviewTab.getByRole('heading', { level: 2, name: PROBE_RENAMED })).toBeVisible()
+    await expect(reviewTab.getByTestId('drug-detail')).toBeVisible()
+    await reviewTab.close()
+
+    // Dismissing the alert never discards the draft.
+    await pageB.getByTestId('save-failure-dismiss').click()
+    await expect(pageB.getByTestId('save-conflict')).toHaveCount(0)
+    await expect(pageB.getByTestId('drug-form')).toBeVisible()
+    await expect(pageB.locator('#drug-tags')).toHaveValue('synthetic-fixture, second-tab')
+
+    // Re-saving the same stale draft conflicts AGAIN — the session token
+    // is never silently refreshed to turn the full-snapshot write into a
+    // successful overwrite.
+    await pageB.getByTestId('save-drug').click()
+    await expect(pageB.getByTestId('save-conflict')).toBeVisible()
+    await expect(pageB.getByTestId('drug-form')).toBeVisible()
+  })
+
+  await test.step('reload recovery: a fresh session edits successfully and keeps tab A\'s rename', async () => {
+    await pageB.getByTestId('conflict-reload').click()
+    await expect(pageB.getByRole('heading', { level: 2, name: PROBE_RENAMED })).toBeVisible()
+
+    await openEditForm(pageB, PROBE_RENAMED)
+    await pageB.locator('#drug-tags').fill('synthetic-fixture, second-tab')
+    await pageB.getByTestId('save-drug').click()
+    await expect(pageB.getByTestId('drug-detail')).toBeVisible()
+    await expect(pageB.getByTestId('detail-error')).toHaveCount(0)
+    // A's committed rename is not lost: B's fresh full snapshot carries it.
+    await expect(pageB.getByRole('heading', { level: 2, name: PROBE_RENAMED })).toBeVisible()
+    await expect(pageB.getByText('#second-tab')).toBeVisible()
+    await expect(pageB.getByText(PROBE_NAME, { exact: true })).toHaveCount(0)
   })
 
   await test.step('the unrelated record and the library metadata are unchanged', async () => {
@@ -218,7 +304,7 @@ test('library: two stale tabs on one record — the later save reverts the other
   await pageB.close()
 })
 
-test('library: a stale tab\'s targets snapshot reverts the other tab\'s parameter edit wholesale (audit GAP-4)', async ({
+test('library: a stale rename conflicts instead of reverting a newer parameter edit (audit GAP-4, phase 20)', async ({
   page,
   context,
 }) => {
@@ -234,30 +320,84 @@ test('library: a stale tab\'s targets snapshot reverts the other tab\'s paramete
     await openEditForm(pageB, PROBE_NAME)
   })
 
-  await test.step('tab A changes the Kd parameter and saves', async () => {
+  await test.step('tab A changes the Kd parameter to 9.9 nM and saves', async () => {
     await page.locator('#param-value-1-0').fill('9.9')
     await page.getByTestId('save-drug').click()
     await expect(page.getByTestId('param-Kd')).toContainText('9.9 nM')
+    // A's commit stamps user provenance on the changed parameter — the
+    // exact display the stored record must keep through B's conflict.
+    await expect(kdProvenanceBadge(page)).toHaveAttribute(
+      'title',
+      /^Recorded by the user at /,
+    )
   })
 
-  await test.step('tab B renames the record in its stale form and saves', async () => {
+  const committedProvenance = await kdProvenanceBadge(page).getAttribute('title')
+
+  await test.step('tab B renames in its stale form: typed conflict, form and draft preserved', async () => {
     // B never touched the targets draft — it still holds the mount-time
-    // value, which the form submits verbatim as the full targets group.
+    // value, which its save would have submitted as the full group.
     await expect(pageB.locator('#param-value-1-0')).toHaveValue('4.2')
     await pageB.getByTestId('drug-name').fill(PROBE_RETAGGED)
     await pageB.getByTestId('save-drug').click()
-    await expect(pageB.getByTestId('drug-detail')).toBeVisible()
+
+    await expect(pageB.getByTestId('save-conflict')).toBeVisible()
+    await expect(pageB.getByTestId('save-conflict')).toContainText('Record changed elsewhere')
+    await expect(pageB.getByTestId('drug-form')).toBeVisible()
+    await expect(pageB.getByTestId('drug-detail')).toHaveCount(0)
     await expect(pageB.getByTestId('detail-error')).toHaveCount(0)
+    // The draft — rename AND untouched stale targets snapshot — survives.
+    await expect(pageB.getByTestId('drug-name')).toHaveValue(PROBE_RETAGGED)
+    await expect(pageB.locator('#param-value-1-0')).toHaveValue('4.2')
   })
 
-  await test.step('a fresh hydration pins the final stored state: the parameter edit is reverted', async () => {
-    await pageB.reload()
+  await test.step('a fresh tab pins the stored state: A\'s parameter and provenance exactly as committed, identity and source references intact', async () => {
+    const fresh = await openProbeFresh(context)
+    // The committed scientific value stands, with nothing of the stale
+    // snapshot written over it…
+    await expect(fresh.getByTestId('param-Kd')).toContainText('9.9 nM')
+    await expect(fresh.getByTestId('param-Kd')).not.toContainText('4.2')
+    // …and the provenance is EXACTLY what A committed (same badge title).
+    const freshProvenance = await kdProvenanceBadge(fresh).getAttribute('title')
+    expect(freshProvenance).toBe(committedProvenance)
+    // B's rename was rejected: the stored name is still A's record.
+    await expect(fresh.getByRole('heading', { level: 2, name: PROBE_NAME })).toBeVisible()
+    // Target identity and the external source reference are untouched.
+    await expect(fresh.getByText(TARGET_NAME, { exact: true })).toBeVisible()
+    await expect(fresh.getByTestId(`target-source-references-${TARGET_ID}`)).toContainText(
+      SOURCE_TARGET_ID,
+    )
+    await fresh.close()
+
+    // Tab A (not reloaded) keeps displaying its own committed edit.
+    await expect(page.getByTestId('param-Kd')).toContainText('9.9 nM')
+  })
+
+  await test.step('reload recovery: a fresh session re-applies the rename without touching A\'s parameter', async () => {
+    await pageB.getByTestId('conflict-reload').click()
+    // The recovered view shows A's committed record in full: value,
+    // provenance and source identity.
+    await expect(pageB.getByRole('heading', { level: 2, name: PROBE_NAME })).toBeVisible()
+    await expect(pageB.getByTestId('param-Kd')).toContainText('9.9 nM')
+    await expect(pageB.getByTestId(`target-source-references-${TARGET_ID}`)).toContainText(
+      SOURCE_TARGET_ID,
+    )
+
+    await openEditForm(pageB, PROBE_NAME)
+    await pageB.getByTestId('drug-name').fill(PROBE_RETAGGED)
+    await pageB.getByTestId('save-drug').click()
+    await expect(pageB.getByTestId('drug-detail')).toBeVisible()
     await expect(pageB.getByRole('heading', { level: 2, name: PROBE_RETAGGED })).toBeVisible()
-    // B's rename persisted, but its stale targets snapshot replaced the
-    // whole group — A's committed 9.9 nM edit is silently back to 4.2 nM.
-    await expect(pageB.getByTestId('param-Kd')).toContainText('4.2 nM')
-    await expect(pageB.getByTestId('param-Kd')).not.toContainText('9.9')
-    await expect(pageB.getByText(TARGET_NAME, { exact: true })).toBeVisible()
+
+    // A's committed parameter, its provenance and the source reference
+    // are all still exactly as committed — the recovery edit replaced the
+    // name only.
+    await expect(pageB.getByTestId('param-Kd')).toContainText('9.9 nM')
+    const afterRecovery = await kdProvenanceBadge(pageB).getAttribute('title')
+    expect(afterRecovery).toBe(committedProvenance)
+    await expect(pageB.getByTestId(`target-source-references-${TARGET_ID}`)).toContainText(
+      SOURCE_TARGET_ID,
+    )
   })
 
   await test.step('the unrelated record and the library metadata are unchanged', async () => {
@@ -266,6 +406,107 @@ test('library: a stale tab\'s targets snapshot reverts the other tab\'s paramete
     // the unchanged stored name before and after the concurrent saves.
     await pageB.goto('/import-export')
     await expect(pageB.getByTestId('library-record-count')).toContainText('2 records')
+    await expect(pageB.getByTestId('library-record-count')).toContainText('Local library')
+  })
+
+  await pageB.close()
+})
+
+test('library: a stale tabs delete cannot remove a record the other tab updated (audit GAP-4, phase 20 review fix)', async ({
+  page,
+  context,
+}) => {
+  const pageB = await context.newPage()
+  await test.step('import two synthetic user-origin records', async () => {
+    await importSeed(page)
+  })
+
+  await test.step('both tabs open the same record; tab A edits and commits', async () => {
+    await openProbe(page)
+    await openProbe(pageB)
+
+    await openEditForm(page, PROBE_NAME)
+    await page.locator('#param-value-1-0').fill('9.9')
+    await page.getByTestId('save-drug').click()
+    await expect(page.getByTestId('param-Kd')).toContainText('9.9 nM')
+    const committedProvenance = await kdProvenanceBadge(page).getAttribute('title')
+    expect(committedProvenance).toMatch(/^Recorded by the user at /)
+
+    // Tab B never reloaded: its view (and the token its delete action
+    // will carry) is still the pre-edit state — 4.2 nM, revision 1.
+    await expect(pageB.getByTestId('param-Kd')).toContainText('4.2 nM')
+  })
+
+  await test.step('tab B deletes from its stale view: the guarded delete is rejected and names the conflict', async () => {
+    await pageB.getByTestId('delete-drug').click()
+    // The explicit destructive-confirmation step is unchanged.
+    await expect(pageB.getByTestId('delete-confirm-text')).toContainText('permanently')
+    await pageB.getByTestId('delete-drug-confirm').click()
+
+    const conflict = pageB.getByTestId('delete-conflict')
+    await expect(conflict).toBeVisible()
+    await expect(conflict).toContainText('Deletion did not happen')
+    await expect(conflict).toContainText('changed elsewhere')
+    // The record is still there — same detail view, no session error.
+    await expect(pageB.getByTestId('drug-detail')).toBeVisible()
+    await expect(pageB.getByTestId('detail-error')).toHaveCount(0)
+    // The delete action is locked until the user reloads/reviews; no
+    // automatic retry happened (exactly one confirm click was needed).
+    await expect(pageB.getByTestId('delete-drug')).toBeDisabled()
+  })
+
+  await test.step('a fresh tab pins the stored state: the record, its science, provenance and source identity are intact', async () => {
+    const fresh = await openProbeFresh(context)
+    await expect(fresh.getByRole('heading', { level: 2, name: PROBE_NAME })).toBeVisible()
+    await expect(fresh.getByTestId('param-Kd')).toContainText('9.9 nM')
+    const freshProvenance = await kdProvenanceBadge(fresh).getAttribute('title')
+    expect(freshProvenance).toMatch(/^Recorded by the user at /)
+    await expect(fresh.getByText(TARGET_NAME, { exact: true })).toBeVisible()
+    await expect(fresh.getByTestId(`target-source-references-${TARGET_ID}`)).toContainText(
+      SOURCE_TARGET_ID,
+    )
+    await expect(fresh.locator('span').filter({ hasText: '#synthetic-fixture' })).toBeVisible()
+    await fresh.close()
+
+    // Tab A (not reloaded) keeps displaying its own committed edit.
+    await expect(page.getByTestId('param-Kd')).toContainText('9.9 nM')
+    await expect(page.getByRole('heading', { level: 2, name: PROBE_NAME })).toBeVisible()
+  })
+
+  await test.step('reload recovery: after reviewing the current record, the delete succeeds with the fresh token', async () => {
+    await pageB.getByTestId('delete-conflict-reload').click()
+    // The reloaded view shows the OTHER tab's committed state in full —
+    // this is the review step before any further destructive action.
+    await expect(pageB.getByRole('heading', { level: 2, name: PROBE_NAME })).toBeVisible()
+    await expect(pageB.getByTestId('param-Kd')).toContainText('9.9 nM')
+    await expect(pageB.getByTestId(`target-source-references-${TARGET_ID}`)).toContainText(
+      SOURCE_TARGET_ID,
+    )
+    await expect(pageB.getByTestId('delete-conflict')).toHaveCount(0)
+    await expect(pageB.getByTestId('delete-drug')).toBeEnabled()
+
+    // The reviewed delete goes through the unchanged confirmation and
+    // succeeds with the CURRENT revision token.
+    await pageB.getByTestId('delete-drug').click()
+    await pageB.getByTestId('delete-drug-confirm').click()
+    await expect(pageB).toHaveURL(/\/library$/)
+    await expect(pageB.getByTestId('drug-list').getByText(PROBE_NAME)).toHaveCount(0)
+
+    // A fresh tab confirms the deletion in storage — only the probe is
+    // gone; the unrelated record stands.
+    const fresh = await context.newPage()
+    await fresh.goto('/library')
+    await expect(fresh.getByTestId('drug-list').getByText(PROBE_NAME)).toHaveCount(0)
+    await expect(fresh.getByTestId('drug-list').getByText(UNRELATED_NAME)).toBeVisible()
+    await fresh.close()
+  })
+
+  await test.step('the unrelated record and the library metadata reflect only the intentional deletion', async () => {
+    await expectUnrelatedUnchanged(pageB)
+    await pageB.goto('/import-export')
+    // One record remains (the unrelated control); the metadata name is
+    // still the pre-existing 'Local library' — CRUD alone stamps times.
+    await expect(pageB.getByTestId('library-record-count')).toContainText('1 record')
     await expect(pageB.getByTestId('library-record-count')).toContainText('Local library')
   })
 

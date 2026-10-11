@@ -20,7 +20,7 @@ import type { DrugLibrary, LibraryMetadata } from '../../domain/library/library'
 import type { ImportIssue, ImportWarning } from '../import/importPipeline'
 import type { RecoveryCounts, RecoveryIssue, RecoveryWarning } from '../recovery/format'
 
-export type RepositoryErrorCode = 'NOT_FOUND' | 'VALIDATION' | 'STORAGE'
+export type RepositoryErrorCode = 'NOT_FOUND' | 'VALIDATION' | 'STORAGE' | 'CONFLICT'
 
 /** Typed failure for repository operations (never a silent no-op). */
 export class RepositoryError extends Error {
@@ -137,8 +137,40 @@ export interface DrugRepository {
   getAllDrugs(): Promise<LibraryLoadResult>
   getDrug(id: DrugId): Promise<Drug | undefined>
   createDrug(input: DrugInput): Promise<Drug>
-  updateDrug(id: DrugId, changes: DrugChanges): Promise<Drug>
-  deleteDrug(id: DrugId): Promise<void>
+  /**
+   * Partial update guarded by optimistic concurrency (phase 20, ADR-21).
+   * `expectedRevision` is the `Drug.revision` value the caller's draft
+   * is based on (captured when its edit session started). The revision
+   * comparison and the record write run inside ONE read-write
+   * transaction, so a write based on a superseded record state is
+   * rejected with `RepositoryError('CONFLICT')` *before* anything is
+   * written: the stored record, its scientific values and its revision
+   * stay untouched. `DrugChanges` merge semantics are unchanged — an
+   * omitted group keeps the freshly read value, a supplied group
+   * replaces wholesale, and `notes` distinguishes absent from explicit
+   * `undefined`. Failure codes are distinct: `CONFLICT` (stale token),
+   * `NOT_FOUND` (no row), `VALIDATION` (schema/uniqueness), `STORAGE`.
+   * Successful commits advance the stored revision, so a stale token
+   * can never be replayed. Bulk paths (import/replace/restore) are
+   * separate full-snapshot transactions that bump every written id's
+   * revision instead of taking a token.
+   */
+  updateDrug(id: DrugId, changes: DrugChanges, expectedRevision: number): Promise<Drug>
+  /**
+   * Revision-guarded delete (phase 20 review fix, ADR-21): the record is
+   * deleted only if `expectedRevision` — the token the delete action is
+   * based on — equals the stored revision at deletion time. The
+   * comparison runs INSIDE the same read-write transaction as the
+   * deletion itself; a stale token rejects with
+   * `RepositoryError('CONFLICT')` before anything is deleted or
+   * stamped. Codes stay distinct: `CONFLICT` (the record exists but
+   * changed since the token was read), `NOT_FOUND` (no row — including
+   * a concurrent delete that already removed it), `STORAGE`. A
+   * successful delete keeps the revision tombstone and does NOT advance
+   * it; every re-creation path bumps above the tombstone, so a
+   * pre-delete token can never act again (ADR-21).
+   */
+  deleteDrug(id: DrugId, expectedRevision: number): Promise<void>
   /** Single metadata entry; created with documented defaults on first run. */
   getLibraryMetadata(): Promise<LibraryMetadata>
   /** Atomic, all-or-nothing replacement (duplicate ids reject inside the transaction). */
