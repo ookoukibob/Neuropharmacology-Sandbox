@@ -101,6 +101,35 @@ describe('DexieSourceDataRepository', () => {
     expect(await db.observations.toArray()).toEqual(beforeObservations)
   })
 
+  it('rejects a record whose provenance URL is not an absolute HTTPS link — before any write', async () => {
+    const valid = syntheticCompound()
+    const bad = syntheticCompound({
+      id: 'chembl:CHEMBL99990002',
+      sourceId: 'CHEMBL99990002',
+      identifiers: { chemblId: 'CHEMBL99990002' },
+      provenance: {
+        ...valid.provenance,
+        recordId: 'CHEMBL99990002',
+        url: 'javascript:alert(1)',
+      },
+    })
+    const beforeCompounds = structuredClone(await db.compounds.toArray())
+
+    const report = await repo.importSourceRecords({
+      compounds: [valid, bad],
+      observations: [],
+    })
+    expect(report.ok).toBe(false)
+    if (!report.ok) {
+      expect(report.errors[0]?.code).toBe('INVALID_RECORD')
+      expect(report.errors[0]?.path).toBe('compounds.1')
+      expect(report.errors[0]?.message).toContain('provenance.url')
+      expect(report.errors[0]?.message).toContain('absolute HTTPS URL')
+    }
+    // Atomic: the valid sibling is not written either.
+    expect(await db.compounds.toArray()).toEqual(beforeCompounds)
+  })
+
   it('rejects an orphan observation (compound not in batch nor stored)', async () => {
     const orphan = syntheticObservation({
       compoundId: 'chembl:CHEMBL00000000',

@@ -204,11 +204,28 @@ export function describeRequestError(error: unknown): {
         }
       case 'aborted':
         return { code: 'aborted', message: 'Request cancelled.' }
-      case 'http':
+      case 'http': {
+        // Keep transport failures distinguishable where the status says
+        // something specific: throttling and temporary unavailability are
+        // not the same as "the source rejected the request".
+        if (error.status === 429) {
+          return {
+            code: 'http',
+            message:
+              'The source is limiting request rate (HTTP 429). Wait a moment, then retry.',
+          }
+        }
+        if (error.status === 503 || error.status === 504) {
+          return {
+            code: 'http',
+            message: `The source is temporarily unavailable (HTTP ${error.status}). Try again later.`,
+          }
+        }
         return {
           code: 'http',
           message: `The source answered with an error (${error.message}). Try again later.`,
         }
+      }
       case 'invalid-response':
         return {
           code: 'invalid-response',

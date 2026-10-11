@@ -9,7 +9,8 @@ import { describe, expect, it } from 'vitest'
 import cidsFixture from '../../tests/fixtures/sources/pubchem-cids.json'
 import propertiesFixture from '../../tests/fixtures/sources/pubchem-properties.json'
 import synonymsFixture from '../../tests/fixtures/sources/pubchem-synonyms.json'
-import { createPubChemAdapter, classifyQuery } from './pubchem'
+import { createPubChemAdapter, classifyQuery, PUBCHEM_MIN_INTERVAL_MS } from './pubchem'
+import { createRateLimiter } from './limiter'
 import { SourceRequestError, type FetchLike } from './types'
 
 const NOW = '2026-10-11T12:00:00.000Z'
@@ -37,7 +38,10 @@ function scriptedFetch(
 
 function adapterWith(routes: Parameters<typeof scriptedFetch>[0]) {
   const { fetchFn, urls } = scriptedFetch(routes)
-  return { adapter: createPubChemAdapter({ fetchFn, now: () => NOW }), urls }
+  // Fresh immediate limiter per adapter: non-pacing tests must neither
+  // wait on real intervals nor see queue state from other tests.
+  const limiter = createRateLimiter({ minIntervalMs: 0 })
+  return { adapter: createPubChemAdapter({ fetchFn, now: () => NOW, limiter }), urls }
 }
 
 /** The full happy-path routing for a name/CID search. */
@@ -186,5 +190,95 @@ describe('PubChem adapter — search', () => {
       expect(error).toBeInstanceOf(SourceRequestError)
       expect((error as SourceRequestError).code).toBe('aborted')
     }
+  })
+
+  it('rejects with aborted when cancelled during the synonym lookup (never downgraded)', async () => {
+    const controller = new AbortController()
+    const fetchFn: FetchLike = async (url) => {
+      if (url.includes('/synonyms/JSON')) {
+        controller.abort() // the cancel lands while the synonym request is in flight
+        throw new DOMException('The operation was aborted.', 'AbortError')
+      }
+      if (url.includes('/property/')) return json(propertiesFixture)
+      return json(cidsFixture)
+    }
+    const limiter = createRateLimiter({ minIntervalMs: 0 })
+    const adapter = createPubChemAdapter({ fetchFn, now: () => NOW, limiter })
+    // A cancellation is not a "best-effort synonym failure": the search
+    // must reject as cancelled, not resolve with partial results.
+    await expect(adapter.searchCompounds('90000001', { signal: controller.signal })).rejects
+      .toMatchObject({ code: 'aborted' })
+  })
+})
+
+describe('PubChem adapter — request pacing', () => {
+  it('keeps the default spacing below the PubChem 5-requests-per-second line', () => {
+    // Official policy: no more than 5 requests per second. 1000/5 = 200 ms
+    // minimum spacing; the adapter defaults to a stricter 250 ms (4/s).
+    expect(PUBCHEM_MIN_INTERVAL_MS).toBeGreaterThanOrEqual(200)
+  })
+
+  it('paces request starts across adapter instances that share one limiter', async () => {
+    const clock = { value: 0 }
+    const waits: number[] = []
+    const limiter = createRateLimiter({
+      minIntervalMs: 250,
+      now: () => clock.value,
+      delay: async (ms) => {
+        waits.push(ms)
+        clock.value += ms
+      },
+    })
+    const urls: string[] = []
+    const fetchFn: FetchLike = async (url) => {
+      urls.push(url)
+      if (url.includes('/property/')) return json(propertiesFixture)
+      if (url.includes('/synonyms/JSON')) return json(synonymsFixture)
+      return json(cidsFixture)
+    }
+    const a = createPubChemAdapter({ fetchFn, now: () => NOW, limiter })
+    const b = createPubChemAdapter({ fetchFn, now: () => NOW, limiter })
+
+    const [first, second] = await Promise.all([
+      a.searchCompounds('90000001', {}), // direct CID: property + synonyms
+      b.searchCompounds('90000001', {}),
+    ])
+    expect(first).toHaveLength(1)
+    expect(second).toHaveLength(1)
+    expect(urls).toHaveLength(4) // two searches × two requests each
+    expect(waits).toEqual([250, 250, 250]) // three of four starts were paced
+  })
+
+  it('a request cancelled while queued behind another never reaches the network', async () => {
+    const urls: string[] = []
+    let release: (() => void) | undefined
+    const blocked = new Promise<Response>((resolve) => {
+      release = () => resolve(json(propertiesFixture))
+    })
+    const fetchFn: FetchLike = async (url) => {
+      urls.push(url)
+      if (url.includes('/property/')) return await blocked // first search stalls here
+      return json(synonymsFixture)
+    }
+    const clock = { value: 0 }
+    const limiter = createRateLimiter({
+      minIntervalMs: 250,
+      now: () => clock.value,
+      delay: async (ms) => {
+        clock.value += ms
+      },
+    })
+    const a = createPubChemAdapter({ fetchFn, now: () => NOW, limiter })
+    const b = createPubChemAdapter({ fetchFn, now: () => NOW, limiter })
+
+    const first = a.searchCompounds('90000001', {}) // granted — fetch in flight
+    const controller = new AbortController()
+    const queued = b.searchCompounds('90000001', { signal: controller.signal })
+    controller.abort() // cancelled while waiting for its slot
+    await expect(queued).rejects.toMatchObject({ code: 'aborted' })
+    expect(urls).toEqual([expect.stringContaining('/property/')]) // only the first request
+    release?.()
+    await first
+    expect(urls).toHaveLength(2) // the first search's own two requests — no third
   })
 })

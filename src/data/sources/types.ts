@@ -28,12 +28,19 @@ export type SourceErrorCode =
 export class SourceRequestError extends Error {
   readonly code: SourceErrorCode
   readonly status: number | undefined
+  /**
+   * Server-requested wait before a retry (HTTP `Retry-After`), when one
+   * was supplied and parseable — surfaced for honest messaging, not for
+   * unbounded waiting.
+   */
+  readonly retryAfterMs: number | undefined
 
-  constructor(code: SourceErrorCode, message: string, status?: number) {
+  constructor(code: SourceErrorCode, message: string, status?: number, retryAfterMs?: number) {
     super(message)
     this.name = 'SourceRequestError'
     this.code = code
     this.status = status
+    this.retryAfterMs = retryAfterMs
   }
 }
 

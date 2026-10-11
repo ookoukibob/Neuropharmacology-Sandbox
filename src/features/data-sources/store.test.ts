@@ -28,7 +28,12 @@ import {
 } from '../../data/sources/types'
 import type { RemoteCompound } from '../../domain/sources/compound'
 import type { RemoteObservation } from '../../domain/sources/observation'
-import { createDataSourcesStore, importPreviewOf, type DataSourcesState } from './store'
+import {
+  createDataSourcesStore,
+  describeRequestError,
+  importPreviewOf,
+  type DataSourcesState,
+} from './store'
 
 // --- fixtures --------------------------------------------------------------
 
@@ -966,5 +971,47 @@ describe('data sources — adding a compound to the drug library', () => {
     expect(drug).toBeNull()
     expect(store.getState().actionError).toContain('not in the stored records')
     expect(store.getState().stored.drugs).toEqual([])
+  })
+})
+
+describe('data sources — user-visible transport failure distinctions', () => {
+  it('names source throttling (HTTP 429) specifically', () => {
+    const described = describeRequestError(new SourceRequestError('http', 'HTTP 429', 429))
+    expect(described.code).toBe('http')
+    expect(described.message).toContain('rate')
+    expect(described.message).toContain('HTTP 429')
+  })
+
+  it('names temporary unavailability (HTTP 503/504) specifically', () => {
+    const unavailable = describeRequestError(new SourceRequestError('http', 'HTTP 503', 503))
+    expect(unavailable.code).toBe('http')
+    expect(unavailable.message).toContain('temporarily unavailable')
+    expect(unavailable.message).toContain('HTTP 503')
+    expect(
+      describeRequestError(new SourceRequestError('http', 'HTTP 504', 504)).message,
+    ).toContain('temporarily unavailable')
+  })
+
+  it('keeps other HTTP errors generic but actionable (status preserved)', () => {
+    const described = describeRequestError(
+      new SourceRequestError('http', 'HTTP 404: No CID found', 404),
+    )
+    expect(described.message).toContain('HTTP 404: No CID found')
+    expect(described.message).toContain('Try again later')
+  })
+
+  it('distinguishes network, timeout, cancellation and invalid responses', () => {
+    expect(describeRequestError(new SourceRequestError('network', 'reset')).message).toContain(
+      'Network error',
+    )
+    expect(describeRequestError(new SourceRequestError('timeout', 'slow')).message).toContain(
+      'time limit',
+    )
+    expect(describeRequestError(new SourceRequestError('aborted', 'cancel')).message).toContain(
+      'cancelled',
+    )
+    expect(
+      describeRequestError(new SourceRequestError('invalid-response', 'garbage')).message,
+    ).toContain('could not read')
   })
 })
