@@ -98,6 +98,24 @@ export type UpdateDrugResult =
   | { readonly status: 'conflict'; readonly message: string }
   | { readonly status: 'error'; readonly message: string }
 
+/**
+ * Outcome of a revision-guarded delete (phase 20 review fix):
+ * - `ok` — the record was deleted (the session was refreshed);
+ * - `conflict` — the record changed since the token the delete action was
+ *   based on: NOTHING was deleted, the session is deliberately NOT
+ *   refreshed (it still mirrors storage) and the error banner is
+ *   untouched — the delete-confirmation UI owns the recovery flow and
+ *   must send the user back through reload/review. Never retried
+ *   automatically;
+ * - `error` — not found (already deleted elsewhere) or storage failure;
+ *   nothing was committed and the message is surfaced like every other
+ *   mutation failure.
+ */
+export type DeleteDrugResult =
+  | { readonly status: 'ok' }
+  | { readonly status: 'conflict'; readonly message: string }
+  | { readonly status: 'error'; readonly message: string }
+
 export interface LibraryState {
   readonly status: LibraryStatus
   readonly drugs: readonly Drug[]
@@ -125,7 +143,14 @@ export interface LibraryState {
     changes: DrugChanges,
     expectedRevision: number,
   ): Promise<UpdateDrugResult>
-  deleteDrug(id: DrugId): Promise<boolean>
+  /**
+   * Revision-guarded delete (phase 20 review fix): `expectedRevision` is
+   * the `Drug.revision` token the delete action is based on — the record
+   * state the user reviewed before confirming. A conflict is a typed,
+   * per-session outcome (nothing deleted, session untouched); every
+   * other failure sets `error` like all mutations.
+   */
+  deleteDrug(id: DrugId, expectedRevision: number): Promise<DeleteDrugResult>
   /**
    * Transactional NPSL import. `ok` and `committed-refresh-failed` both
    * mean the database commit succeeded (the latter with a stale session);
@@ -223,15 +248,25 @@ export function createLibraryStore(
       }
     },
 
-    async deleteDrug(id) {
+    async deleteDrug(id, expectedRevision) {
       try {
-        await repo.deleteDrug(id)
+        await repo.deleteDrug(id, expectedRevision)
         await refresh(set)
         if (get().selectedDrugId === id) set({ selectedDrugId: null })
-        return true
+        return { status: 'ok' }
       } catch (error) {
-        set({ error: messageOf(error) })
-        return false
+        // Phase 20 review fix: same conflict taxonomy as updateDrug — a
+        // stale delete is a typed, per-session outcome. The repository
+        // rejected it inside its transaction (nothing was deleted), so
+        // the session still mirrors storage: no refresh, and the shared
+        // error banner stays untouched — the delete-confirmation UI owns
+        // the reload/review recovery flow.
+        if (error instanceof RepositoryError && error.code === 'CONFLICT') {
+          return { status: 'conflict', message: error.message }
+        }
+        const message = messageOf(error)
+        set({ error: message })
+        return { status: 'error', message }
       }
     },
 

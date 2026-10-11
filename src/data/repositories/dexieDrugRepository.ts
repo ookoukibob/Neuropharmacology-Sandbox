@@ -18,15 +18,18 @@
  * - storage origin (`origin`) and scientific provenance are distinct: this
  *   layer preserves both verbatim and never rewrites provenance;
  * - optimistic concurrency (phase 20, ADR-21): every per-record editor
- *   write (`updateDrug`) carries the revision its draft is based on, and
- *   the revision comparison + record write + revision bump run inside ONE
- *   read-write transaction over `drugs`+`meta`+`revisions` — a write
- *   based on a superseded state rejects with `RepositoryError('CONFLICT')`
- *   before anything is stored. Full-snapshot bulk paths (import, replace,
- *   restore) take no token; they bump every written id's revision instead,
- *   which invalidates any editor token issued before them. `deleteDrug`
- *   keeps the revision tombstone so delete → re-create can never restart
- *   the sequence and resurrect an old token.
+ *   write (`updateDrug`, `deleteDrug`) carries the revision its action
+ *   is based on, and the revision comparison + the row write or row
+ *   deletion + revision bump run inside ONE read-write transaction over
+ *   `drugs`+`meta`+`revisions` — an action based on a superseded state
+ *   rejects with `RepositoryError('CONFLICT')` before anything is
+ *   stored or deleted. Full-snapshot bulk paths (import, replace,
+ *   restore) take no token; they bump every written id's revision
+ *   instead, which invalidates any editor token issued before them.
+ *   `deleteDrug` keeps the revision tombstone (and does not advance it —
+ *   a deleted row makes every stale action fail `NOT_FOUND`), so
+ *   delete → re-create can never restart the sequence and resurrect an
+ *   old token.
  */
 import type { Drug, DrugId, ReceptorTarget } from '../../domain/drug/drug'
 import {
@@ -293,21 +296,43 @@ export class DexieDrugRepository implements DrugRepository {
     )
   }
 
-  async deleteDrug(id: DrugId): Promise<void> {
-    // The revision tombstone is deliberately KEPT (phase 20): revisions
-    // are monotonic per id for the lifetime of the database, so a record
-    // deleted here and later re-created by a merge import or a restore
-    // continues at a higher revision — an edit token issued before the
-    // delete can never match the re-created record. The delete itself
-    // needs no bump: with the row gone, any stale save fails NOT_FOUND.
-    await this.db.transaction('rw', this.db.drugs, this.db.meta, async () => {
-      const existing: DrugRecord | undefined = await this.db.drugs.get(id)
-      if (existing === undefined) {
-        throw new RepositoryError('NOT_FOUND', `no drug with id "${id}"`)
-      }
-      await this.db.drugs.delete(id)
-      await this.touchLibrary()
-    })
+  async deleteDrug(id: DrugId, expectedRevision: number): Promise<void> {
+    // Revision guard (phase 20 review fix): the token comparison shares
+    // the deletion's own read-write transaction, so there is no window
+    // in which a stale delete can pass the check and then act on newer
+    // data — a stale token aborts before the row is touched.
+    await this.db.transaction(
+      'rw',
+      this.db.drugs,
+      this.db.meta,
+      this.db.revisions,
+      async () => {
+        const existing: DrugRecord | undefined = await this.db.drugs.get(id)
+        if (existing === undefined) {
+          // Includes the concurrent-delete case: by the time this
+          // transaction runs, the row is gone — nothing left to guard.
+          throw new RepositoryError('NOT_FOUND', `no drug with id "${id}"`)
+        }
+        const storedRevision = await this.currentRevision(id)
+        if (storedRevision !== expectedRevision) {
+          throw new RepositoryError(
+            'CONFLICT',
+            `record "${id}" changed elsewhere: the deletion was based on revision ${expectedRevision}, but the stored record is at revision ${storedRevision} — nothing was deleted; reload the record and review it before deleting again`,
+          )
+        }
+        // The revision tombstone is deliberately KEPT and deliberately NOT
+        // advanced (phase 20 review decision, ADR-21): revisions are
+        // monotonic per id for the lifetime of the database, and every
+        // path that (re)writes a row — create, import, replace, restore —
+        // bumps above the tombstone, so an edit or delete token issued
+        // before this deletion can never match a later record. Advancing
+        // here would add no safety (with the row gone every stale action
+        // already fails `NOT_FOUND`) and would blur "the sequence advanced
+        // because data changed" with bookkeeping.
+        await this.db.drugs.delete(id)
+        await this.touchLibrary()
+      },
+    )
   }
 
   async getLibraryMetadata(): Promise<LibraryMetadata> {

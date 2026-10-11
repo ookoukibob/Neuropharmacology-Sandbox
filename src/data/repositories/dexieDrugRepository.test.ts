@@ -159,9 +159,9 @@ describe('DexieDrugRepository — CRUD', () => {
     try {
       const repo = new DexieDrugRepository(db)
       await db.drugs.put(toRecord(syntheticDrug()))
-      await repo.deleteDrug('fixture-drug-1')
+      await repo.deleteDrug('fixture-drug-1', 0)
       expect(await db.drugs.count()).toBe(0)
-      await expectRejected(repo.deleteDrug('fixture-drug-1'), 'NOT_FOUND')
+      await expectRejected(repo.deleteDrug('fixture-drug-1', 0), 'NOT_FOUND')
     } finally {
       await db.delete()
     }
@@ -539,7 +539,7 @@ describe('DexieDrugRepository — optimistic concurrency (phase 20, audit GAP-4)
         notes: 'first life',
       })
       const oldToken = created.revision ?? 0 // 1
-      await repo.deleteDrug(created.id)
+      await repo.deleteDrug(created.id, oldToken)
 
       // A merge import re-creates the SAME id (the only production path
       // that can): the id's revision continues above the tombstone — 2,
@@ -675,6 +675,197 @@ describe('DexieDrugRepository — optimistic concurrency (phase 20, audit GAP-4)
       expect((await repo.getDrug('fixture-drug-1'))?.revision).toBe(1)
       expect((await repo.getAllDrugs()).drugs[0]?.revision).toBe(1)
     } finally {
+      await db.delete()
+    }
+  })
+
+  it('revision-guarded delete: a stale delete is rejected atomically — the record, its science and the metadata stay byte-identical', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      // A record carrying scientific values, provenance and an external
+      // source identity — everything a careless delete could destroy.
+      const created = await repo.createDrug({
+        identifiers: { name: 'Delete Guard Probe', synonyms: ['DGP'] },
+        targets: [
+          {
+            name: 'DGP-R1',
+            kd: {
+              value: 4.2,
+              unit: 'nM',
+              provenance: {
+                type: 'literature',
+                source: 'Synthetic test source',
+                citation: 'Invented for tests, 2026',
+              },
+            },
+            sourceReferences: [
+              { source: 'chembl', sourceName: 'ChEMBL', sourceTargetId: 'CHEMBL99991001' },
+            ],
+          },
+        ],
+        notes: FIXTURE_NOTE,
+      })
+      const staleToken = created.revision ?? 0 // 1
+
+      // Another session commits an edit — the record is now at revision 2.
+      const winner = await repo.updateDrug(created.id, { notes: 'winner edit' }, staleToken)
+      expect(winner.revision).toBe(2)
+
+      // Byte-level snapshot of the winning state, across every store the
+      // rejected deletion could conceivably have touched.
+      const rowAfterWinner = structuredClone(await db.drugs.get(created.id))
+      const revisionAfterWinner = structuredClone(await db.revisions.get(created.id))
+      const metaAfterWinner = structuredClone((await db.meta.toArray())[0])
+
+      // The stale page's delete (based on revision 1) is rejected inside
+      // the deletion's own transaction — nothing happens first.
+      await expectRejected(repo.deleteDrug(created.id, staleToken), 'CONFLICT')
+
+      // Nothing moved anywhere: row (name, values, provenance, source
+      // references), revision entry and library metadata byte-identical.
+      expect(await db.drugs.get(created.id)).toEqual(rowAfterWinner)
+      expect(await db.revisions.get(created.id)).toEqual(revisionAfterWinner)
+      expect((await db.meta.toArray())[0]).toEqual(metaAfterWinner)
+      const stored = await repo.getDrug(created.id)
+      expect(stored?.identifiers.name).toBe('Delete Guard Probe')
+      expect(stored?.targets[0]?.kd).toEqual({
+        value: 4.2,
+        unit: 'nM',
+        provenance: {
+          type: 'literature',
+          source: 'Synthetic test source',
+          citation: 'Invented for tests, 2026',
+        },
+      })
+      expect(stored?.targets[0]?.sourceReferences?.[0]).toEqual({
+        source: 'chembl',
+        sourceName: 'ChEMBL',
+        sourceTargetId: 'CHEMBL99991001',
+      })
+      expect(stored?.revision).toBe(2)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('delete with the CURRENT revision succeeds; the tombstone is kept and deliberately NOT advanced', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Delete Success Probe', synonyms: [] },
+        notes: 'to be deleted',
+      })
+      const token = created.revision ?? 0 // 1
+
+      await repo.deleteDrug(created.id, token)
+      expect(await db.drugs.count()).toBe(0)
+
+      // Documented decision (ADR-21): the tombstone stays at exactly the
+      // last committed revision — a delete is the absence of data, not a
+      // content mutation, and with the row gone every stale action
+      // already fails NOT_FOUND, so advancing would add no safety.
+      expect((await db.revisions.get(created.id))?.revision).toBe(token)
+
+      // The guard never masks "already gone": repeat deletes fail
+      // NOT_FOUND regardless of the token — and a stale save against the
+      // deleted row is NOT_FOUND too, never a false success.
+      await expectRejected(repo.deleteDrug(created.id, token), 'NOT_FOUND')
+      await expectRejected(repo.deleteDrug(created.id, token + 1), 'NOT_FOUND')
+      await expectRejected(repo.updateDrug(created.id, { tags: ['x'] }, token), 'NOT_FOUND')
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('delete → re-create: every pre-delete token (edit AND delete) is invalid forever', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Delete Recreate Probe', synonyms: [] },
+        notes: 'first life',
+      })
+      const oldToken = created.revision ?? 0 // 1
+      await repo.deleteDrug(created.id, oldToken)
+
+      // A merge import re-creates the SAME id (the only production path
+      // that can): the revision continues above the tombstone — 2.
+      const report = await repo.importLibrary(
+        syntheticNpslText([syntheticDrug({ id: created.id, notes: 'second life' })]),
+        { mode: 'merge' },
+      )
+      expect(report.ok).toBe(true)
+      expect((await repo.getDrug(created.id))?.revision).toBe(oldToken + 1)
+
+      // The old token can neither WRITE nor DELETE the new record.
+      await expectRejected(repo.updateDrug(created.id, { tags: ['stale'] }, oldToken), 'CONFLICT')
+      await expectRejected(repo.deleteDrug(created.id, oldToken), 'CONFLICT')
+
+      // The CURRENT token deletes normally — the guard is a token check,
+      // not a lock against deletion itself.
+      await repo.deleteDrug(created.id, oldToken + 1)
+      expect(await db.drugs.count()).toBe(0)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('two concurrent deletion attempts cannot both report success (one connection)', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Concurrent Delete Probe', synonyms: [] },
+        notes: 'original',
+      })
+      const token = created.revision ?? 0
+
+      // Both attempts hold the SAME valid token; the deletion
+      // transactions serialize, so the second re-reads the post-delete
+      // state inside its own transaction.
+      const results = await Promise.allSettled([
+        repo.deleteDrug(created.id, token),
+        repo.deleteDrug(created.id, token),
+      ])
+      expect(results.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+      const rejected = results.filter((outcome) => outcome.status === 'rejected')
+      expect(rejected).toHaveLength(1)
+      expect(
+        (rejected[0] as PromiseRejectedResult & { reason: { code?: string } }).reason?.code,
+      ).toBe('NOT_FOUND')
+      expect(await db.drugs.count()).toBe(0)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('two connections (two tabs) attempting the same delete: exactly one succeeds', async () => {
+    const db = freshDb()
+    const dbOther = new SandboxDatabase(db.name)
+    try {
+      const repo = new DexieDrugRepository(db)
+      const repoOther = new DexieDrugRepository(dbOther)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Two-Tab Delete Probe', synonyms: [] },
+        notes: 'original',
+      })
+      const token = created.revision ?? 0 // both tabs reviewed this state
+
+      const results = await Promise.allSettled([
+        repo.deleteDrug(created.id, token),
+        repoOther.deleteDrug(created.id, token),
+      ])
+      expect(results.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+      const rejected = results.filter((outcome) => outcome.status === 'rejected')
+      expect(rejected).toHaveLength(1)
+      expect(
+        (rejected[0] as PromiseRejectedResult & { reason: { code?: string } }).reason?.code,
+      ).toBe('NOT_FOUND')
+      expect(await db.drugs.count()).toBe(0)
+    } finally {
+      await dbOther.close()
       await db.delete()
     }
   })

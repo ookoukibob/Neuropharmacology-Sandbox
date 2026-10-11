@@ -32,6 +32,7 @@ function seedState(partial: Partial<LibraryState>): void {
 
 /** Original action, restored after tests that swap it for a spy. */
 const originalDeleteDrug = useLibraryStore.getState().deleteDrug
+const originalHydrate = useLibraryStore.getState().hydrate
 
 afterEach(() => {
   useLibraryStore.setState({
@@ -43,6 +44,7 @@ afterEach(() => {
     error: null,
     filter: '',
     deleteDrug: originalDeleteDrug,
+    hydrate: originalHydrate,
   })
 })
 
@@ -213,7 +215,7 @@ describe('DrugDetailView', () => {
   })
 
   it('deletes only after the explicit confirmation is activated', async () => {
-    const deleteDrug = vi.fn(async () => true)
+    const deleteDrug = vi.fn(async () => ({ status: 'ok' as const }))
     useLibraryStore.setState({ deleteDrug })
     seedState({ status: 'ready', drugs: [syntheticDrug()], metadata: undefined })
     renderDetail('fixture-drug-1')
@@ -221,11 +223,53 @@ describe('DrugDetailView', () => {
     fireEvent.click(screen.getByTestId('delete-drug'))
     fireEvent.click(screen.getByTestId('delete-drug-confirm'))
 
-    await vi.waitFor(() => expect(deleteDrug).toHaveBeenCalledWith('fixture-drug-1'))
+    // The confirm action carries the revision token the page was based
+    // on (phase 20 review fix); the fixture has none → 0.
+    await vi.waitFor(() =>
+      expect(deleteDrug).toHaveBeenCalledWith('fixture-drug-1', 0),
+    )
     // The record leaves the detail view once the repository confirmed it.
     await vi.waitFor(() =>
       expect(screen.queryByTestId('drug-detail')).not.toBeInTheDocument(),
     )
+  })
+
+  it('a stale delete conflicts (phase 20 review fix): nothing deleted, conflict named, delete locked until reload', async () => {
+    const deleteDrug = vi.fn(async () => ({
+      status: 'conflict' as const,
+      message: 'record "fixture-drug-1" changed elsewhere: nothing was deleted',
+    }))
+    const hydrate = vi.fn(async () => {})
+    useLibraryStore.setState({ deleteDrug, hydrate })
+    seedState({ status: 'ready', drugs: [syntheticDrug()], metadata: undefined })
+    renderDetail('fixture-drug-1')
+
+    fireEvent.click(screen.getByTestId('delete-drug'))
+    fireEvent.click(screen.getByTestId('delete-drug-confirm'))
+
+    // The conflict is named distinctly from ordinary failures, states
+    // that the deletion did not happen, and the record's detail view is
+    // still there.
+    const conflict = await screen.findByTestId('delete-conflict')
+    expect(conflict).toHaveTextContent('Deletion did not happen')
+    expect(conflict).toHaveTextContent('changed elsewhere')
+    expect(screen.getByTestId('drug-detail')).toBeInTheDocument()
+    expect(screen.queryByTestId('delete-drug-confirm')).not.toBeInTheDocument()
+    // The confirm action carried the page's revision token; exactly one
+    // attempt — never an automatic retry.
+    expect(deleteDrug).toHaveBeenCalledWith('fixture-drug-1', 0)
+    expect(deleteDrug).toHaveBeenCalledTimes(1)
+    // No session-wide error banner: the conflict belongs to this flow.
+    expect(screen.queryByTestId('detail-error')).not.toBeInTheDocument()
+
+    // The delete action is locked until the user reloads/reviews.
+    expect(screen.getByTestId('delete-drug')).toBeDisabled()
+
+    // The recovery action re-hydrates the session explicitly and clears
+    // the conflict.
+    fireEvent.click(screen.getByTestId('delete-conflict-reload'))
+    await vi.waitFor(() => expect(hydrate).toHaveBeenCalledTimes(1))
+    expect(screen.queryByTestId('delete-conflict')).not.toBeInTheDocument()
   })
 })
 

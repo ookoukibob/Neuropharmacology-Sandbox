@@ -156,7 +156,21 @@ export interface DrugRepository {
    * revision instead of taking a token.
    */
   updateDrug(id: DrugId, changes: DrugChanges, expectedRevision: number): Promise<Drug>
-  deleteDrug(id: DrugId): Promise<void>
+  /**
+   * Revision-guarded delete (phase 20 review fix, ADR-21): the record is
+   * deleted only if `expectedRevision` — the token the delete action is
+   * based on — equals the stored revision at deletion time. The
+   * comparison runs INSIDE the same read-write transaction as the
+   * deletion itself; a stale token rejects with
+   * `RepositoryError('CONFLICT')` before anything is deleted or
+   * stamped. Codes stay distinct: `CONFLICT` (the record exists but
+   * changed since the token was read), `NOT_FOUND` (no row — including
+   * a concurrent delete that already removed it), `STORAGE`. A
+   * successful delete keeps the revision tombstone and does NOT advance
+   * it; every re-creation path bumps above the tombstone, so a
+   * pre-delete token can never act again (ADR-21).
+   */
+  deleteDrug(id: DrugId, expectedRevision: number): Promise<void>
   /** Single metadata entry; created with documented defaults on first run. */
   getLibraryMetadata(): Promise<LibraryMetadata>
   /** Atomic, all-or-nothing replacement (duplicate ids reject inside the transaction). */
