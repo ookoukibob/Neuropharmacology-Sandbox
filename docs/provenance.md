@@ -66,18 +66,24 @@ Additional fields on every variant: optional `notes`; `recordedAt` /
    rule (ADR-14), not a provenance rewrite: contract fields are governed
    by the new domain value.
 8. **Imported source records carry their own attribution, and applied
-   parameters keep it (phase 18).** Layer A/B records store
-   `SourceAttribution` (`source`, `recordId`, `url`, `retrievedAt`,
+   parameters keep it (phase 18, extended phase 18G).** Layer A/B records
+   store `SourceAttribution` (`source`, `recordId`, `url`, `retrievedAt`,
    `licenseNotice?`, `licenseUrl?`, `recordUrl?`) — the source, the exact
    record id, a working link, the retrieval time and the license/term
    notice the adapter reports (ChEMBL: CC BY-SA 3.0 with attribution URL;
    PubChem: aggregation notice pointing at the downloads page). When a
    stored observation is promoted onto a drug parameter (Layer C), the
    written `literature` provenance sets `source` to the source name, the
-   record URL in `url`, the retrieval time in `accessedAt` and the
-   observation's id in `observationId` — the parameter is permanently
-   traceable back to the exact stored measurement, in the database and in
-   `.npsl` round trips (`observationId` is a recognized provenance field).
+   external record id in `sourceRecordId`, the record URL in `url`, the
+   retrieval time in `accessedAt`, the source's `licenseNotice` /
+   `licenseUrl` when available, and the observation's id in
+   `observationId` — the parameter is permanently traceable back to the
+   exact stored measurement, in the database and in `.npsl` round trips
+   (all of these are recognized provenance fields, so an exported library
+   stays citable without exporting the source-data stores). When the
+   chosen target row did not verifiably match the observation's reported
+   target, the explicit acknowledgement is recorded in the parameter's
+   provenance `notes`.
 
 ---
 
