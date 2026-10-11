@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { abortableDelay, createRateLimiter } from './limiter'
+import { SourceRequestError } from './types'
 
 /** A limiter whose clock only moves when a wait runs (auto-advancing). */
 function manualLimiter(minIntervalMs = 250) {
@@ -116,6 +117,45 @@ describe('createRateLimiter — cancellation', () => {
     controller.abort()
     await expect(limiter.acquire(controller.signal)).rejects.toMatchObject({ code: 'aborted' })
     expect(waits).toEqual([])
+  })
+
+  it('rejects a mid-queue cancellation promptly, without disturbing the survivors', async () => {
+    const { limiter, pending } = gatedLimiter(250)
+    const events: string[] = []
+    const first = limiter.acquire().then(() => {
+      events.push('one')
+    })
+    await first // caller 1 holds its permit
+    const second = limiter.acquire().then(() => {
+      events.push('two')
+    }) // enters an actual limiter wait
+    const controller = new AbortController()
+    const third = limiter.acquire(controller.signal).then(
+      () => {
+        events.push('three')
+      },
+      (error: unknown) => {
+        events.push(`three:${error instanceof SourceRequestError ? error.code : 'other'}`)
+      },
+    )
+    expect(pending).toHaveLength(1) // caller 2 is in an actual wait…
+    controller.abort() // …and caller 3 is queued BEHIND that pending wait
+    await third // settles promptly — caller 2's wait was never released
+    expect(events).toEqual(['one', 'three:aborted'])
+    expect(pending).toHaveLength(1) // no wait was ever started for caller 3
+    pending[0]?.resolve() // now release caller 2
+    await second
+    expect(events).toEqual(['one', 'three:aborted', 'two'])
+    // The survivors keep FIFO order and spacing: the next caller is
+    // granted only after waiting one full interval from caller 2's start.
+    const fourth = limiter.acquire().then(() => {
+      events.push('four')
+    })
+    expect(pending).toHaveLength(2)
+    expect(pending[1]?.ms).toBe(250)
+    pending[1]?.resolve()
+    await fourth
+    expect(events).toEqual(['one', 'three:aborted', 'two', 'four'])
   })
 })
 
