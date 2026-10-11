@@ -474,6 +474,144 @@ describe('DexieDrugRepository — importLibrary', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Phase 18I.1: target source-reference uniqueness — one reference per exact
+// source identifier, enforced at the shared schema boundary and exercised
+// through the real write/read paths. Synthetic test data only.
+// ---------------------------------------------------------------------------
+
+const DUP_REF_A = { source: 'chembl', sourceName: 'ChEMBL', sourceTargetId: 'CHEMBL99991001' }
+const DUP_REF_B = { source: 'chembl', sourceName: 'ChEMBL', sourceTargetId: 'CHEMBL99991002' }
+
+describe('DexieDrugRepository — target source-reference uniqueness (18I.1)', () => {
+  it('rejects duplicate source references on create, before any write', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const attempt = repo.createDrug({
+        identifiers: { name: 'Fixture Compound D', synonyms: ['FFD'] },
+        targets: [
+          {
+            name: 'TEST-R',
+            kd: { value: 5, unit: 'nM', provenance: { type: 'user' } },
+            sourceReferences: [DUP_REF_A, DUP_REF_B],
+          },
+        ],
+      })
+      await expect(attempt).rejects.toMatchObject({ code: 'VALIDATION' })
+      // The error names the exact duplicate path, not merely "invalid".
+      await expect(attempt).rejects.toThrow('targets.0.sourceReferences.1.source')
+      expect(await db.drugs.count()).toBe(0)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('rejects duplicate source references on update, keeping the stored row untouched', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      const created = await repo.createDrug({
+        identifiers: { name: 'Fixture Compound E', synonyms: [] },
+        targets: [{ name: 'TEST-R', kd: { value: 5, unit: 'nM', provenance: { type: 'user' } } }],
+      })
+      const stored = structuredClone(await db.drugs.get(created.id))
+      const attempt = repo.updateDrug(created.id, {
+        targets: [
+          {
+            name: 'TEST-R',
+            kd: { value: 5, unit: 'nM', provenance: { type: 'user' } },
+            // Even an IDENTICAL duplicate is malformed — never deduplicated.
+            sourceReferences: [DUP_REF_A, { ...DUP_REF_A }],
+          },
+        ],
+      })
+      await expect(attempt).rejects.toMatchObject({ code: 'VALIDATION' })
+      expect(await db.drugs.get(created.id)).toEqual(stored)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('rolls back a transactional import: a duplicate-reference record writes nothing', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      await db.drugs.put(toRecord(syntheticDrug()))
+      const rowsBefore = structuredClone(await db.drugs.toArray())
+
+      const invalid = syntheticDrug({
+        id: 'fixture-drug-3',
+        identifiers: { name: 'Fixture Compound C', synonyms: [] },
+      }) as unknown as Record<string, unknown>
+      const targets = invalid['targets'] as Record<string, unknown>[]
+      const target = targets[0]
+      if (target === undefined) throw new Error('fixture needs a target')
+      target['sourceReferences'] = [DUP_REF_A, DUP_REF_B]
+
+      // Mixed document: a perfectly valid sibling plus the invalid record.
+      const report = await repo.importLibrary(
+        JSON.stringify({
+          formatVersion: '1.0.0',
+          schemaVersion: '1.0.0',
+          libraryMetadata: syntheticMetadata(),
+          drugs: [syntheticDrugB(), invalid],
+        }),
+        { mode: 'merge' },
+      )
+      expect(report.ok).toBe(false)
+      if (!report.ok) {
+        expect(report.errors[0]?.code).toBe('SCHEMA')
+        // The structured issue path pinpoints the duplicate entry.
+        expect(report.errors[0]?.path).toBe('drugs.1.targets.0.sourceReferences.1.source')
+      }
+      // Zero persistent mutation — the valid sibling was not committed.
+      expect(await db.drugs.toArray()).toEqual(rowsBefore)
+      expect(await db.drugs.get('fixture-drug-2')).toBeUndefined()
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('quarantines a stored duplicate-reference row without mutation; valid rows stay usable', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      await db.drugs.put(toRecord(syntheticDrug()))
+
+      const record = toRecord(
+        syntheticDrug({
+          id: 'fixture-drug-dup',
+          identifiers: { name: 'Fixture Compound X', synonyms: [] },
+        }),
+      )
+      const target = record.targets[0]
+      if (target === undefined) throw new Error('fixture needs a target')
+      const malformed = {
+        ...record,
+        targets: [{ ...target, futureTargetField: 'kept', sourceReferences: [DUP_REF_A, DUP_REF_B] }],
+      }
+      await db.drugs.put(malformed)
+      const before = structuredClone(await db.drugs.get(record.id))
+
+      const loaded = await repo.getAllDrugs()
+      // The valid row stays readable next to the quarantined one.
+      expect(loaded.drugs.map((d) => d.id)).toEqual(['fixture-drug-1'])
+      expect(loaded.quarantine).toHaveLength(1)
+      expect(loaded.quarantine[0]?.id).toBe(record.id)
+      expect(loaded.quarantine[0]?.errors.join(' ')).toContain('duplicate source reference')
+
+      // Quarantine never deletes, repairs or rewrites: the raw row —
+      // duplicate references and the unknown field included — is unchanged.
+      expect(await db.drugs.get(record.id)).toEqual(before)
+      expect(before).toEqual(malformed)
+      expect(await db.drugs.count()).toBe(2)
+    } finally {
+      await db.delete()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Extension fields: the loose-schema contract exercised through the real
 // repository path (file → validation → transaction → storage → hydration →
 // export → re-import). Synthetic test data only — never pharmacological

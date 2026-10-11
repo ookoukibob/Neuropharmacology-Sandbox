@@ -168,8 +168,38 @@ export const receptorTargetSchema = z.looseObject({
    * External source identities (phase 18I). Optional: records without
    * any (all pre-18I data) simply omit the key — never written as an
    * empty array or explicit undefined.
+   *
+   * Phase 18I.1 enforces the documented invariant "at most one reference
+   * per source" here, at the shared authoritative boundary (NPSL import,
+   * create/update, hydration): source equality is the EXACT `source`
+   * string — the same rule `findSourceReference` /
+   * `mergeSourceReferences` and the persistence mapper's by-source
+   * matching rely on (adapter ids like 'chembl' are already canonical,
+   * so no case-folding or trimming is applied). Two entries with the
+   * same `source` are malformed even when their `sourceTargetId` values
+   * are identical: they are never merged, deduplicated or resolved
+   * first-wins/last-wins — the containing record is rejected, with the
+   * issue path pointing at the duplicate entry's `source`.
    */
-  sourceReferences: z.array(targetSourceReferenceSchema).optional(),
+  sourceReferences: z
+    .array(targetSourceReferenceSchema)
+    .superRefine((references, ctx) => {
+      const firstIndexBySource = new Map<string, number>()
+      references.forEach((reference, index) => {
+        const previous = firstIndexBySource.get(reference.source)
+        if (previous !== undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [index, 'source'],
+            input: reference.source,
+            message: `duplicate source reference: "${reference.source}" already appears at index ${previous} — a target carries at most one reference per source; duplicates are rejected, never merged or deduplicated`,
+          })
+        } else {
+          firstIndexBySource.set(reference.source, index)
+        }
+      })
+    })
+    .optional(),
 })
 
 export const pharmacokineticsSchema = z.looseObject({

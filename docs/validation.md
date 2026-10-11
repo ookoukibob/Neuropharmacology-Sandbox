@@ -98,6 +98,7 @@ rendered field-by-field by the calculator (phase 4).
 | Unit dimension | `halfLife` is time, `kd`/`ki`/`ec50`/`ic50` are molar- or mass-concentration, `bioavailability` is dimensionless | warning `UNEXPECTED_DIMENSION` — never rewritten |
 | Cross-parameter consistency | one target may not carry both `kd` and `ki` **for the same measurement** with conflicting literature sources | non-blocking warning in the CSV mapping UI (`mapping-warnings`: the two stay separate values, never substituted) — the import never resolves it silently |
 | Duplicate ids | unique `Drug.id` (file-wide), unique `targets[].id` per drug — compared as exact strings, never normalized; the same target id in a *different* drug is legal | error `DUPLICATE_ID` — blocking, enforced on both the NPSL path (`validateNpslFile`, at preview and again inside the import transaction before any write) and the CSV path |
+| Duplicate source references | within one target, `sourceReferences` holds at most one entry per exact `source` string (compared verbatim — no case folding or trimming); a second entry with the same `source` is invalid even when its `sourceTargetId` matches the first | schema error — blocking at every shared-schema boundary (phase 18I.1): NPSL import rejects the containing drug record before any write (valid siblings are never partially committed), create/update is refused by `assertWritable` with the issue path (`…sourceReferences[m].source`) named, and hydration classifies a pre-existing stored row as invalid → quarantined and reported, kept byte-identical — never repaired, deduplicated or deleted. No first-wins/last-wins/merge resolution exists |
 | Merge vs quarantined row | a merge import id matches a stored raw row that fails schema validation (quarantined by hydration) | error `QUARANTINE_CONFLICT` — blocking: the whole document is rejected inside the import transaction before any write; the quarantined row stays byte-identical and keeps appearing in the quarantine report (audit GAP-3, Phase 17). Enforced by the authoritative hydration classifier (`fromRecord`), not by the preview's cached quarantine list |
 | Duplicate names | same `identifiers.name` twice in one file | warning `DUPLICATE_NAME` — names are labels, not identities |
 | Ranges | fraction-like values in range, non-negative where required | error (form) / engine-side (calculator) |
@@ -359,4 +360,14 @@ without the optional key remain valid (the key is omitted, never
 written as `[]` or explicit `undefined`), and unknown keys inside a
 reference round-trip (ADR-8 rules apply at the reference level too,
 matched by `source` — never array position — by the persistence
-mapper).
+mapper). Phase 18I.1 adds the uniqueness invariant to the same shared
+boundary: `receptorTargetSchema` rejects two references with the same
+exact `source` (identical or differing `sourceTargetId` alike) via a
+refinement issue pointing at the duplicate entry's `.source`, so the
+duplicate cannot enter through import, create/update or any other
+schema-governed write. A malformed row that predates the rule (or
+arrives as raw storage) is not repaired on read — hydration reports it
+in the quarantine list with the duplicate named and leaves the stored
+row byte-identical; the raw `.npsb` recovery archive by design snapshots
+and restores such rows verbatim without any schema pass (see
+`dexieDrugRepository.recovery.test.ts`).
