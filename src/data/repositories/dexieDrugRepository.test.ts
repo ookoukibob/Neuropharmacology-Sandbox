@@ -10,6 +10,7 @@ import 'fake-indexeddb/auto'
 import { describe, expect, it } from 'vitest'
 import {
   FIXTURE_NOTE,
+  FIXTURE_TIMESTAMP,
   syntheticDrug,
   syntheticDrugB,
   syntheticLibrary,
@@ -156,6 +157,104 @@ describe('DexieDrugRepository — CRUD', () => {
       await repo.deleteDrug('fixture-drug-1')
       expect(await db.drugs.count()).toBe(0)
       await expectRejected(repo.deleteDrug('fixture-drug-1'), 'NOT_FOUND')
+    } finally {
+      await db.delete()
+    }
+  })
+})
+
+describe('DexieDrugRepository — partial DrugChanges merge semantics (audit GAP-4)', () => {
+  it('composes an omitted group with an interleaved committed write from another connection', async () => {
+    // Repository-level contract (docs/architecture.md §4.2): updateDrug
+    // re-reads the row INSIDE its transaction and applies only the
+    // supplied groups to that fresh row. A caller that omits groups
+    // composes with a write another connection already committed — this
+    // is the narrower API contract the real edit form does not use
+    // (it always submits its full snapshot; e2e/multitab.spec.ts).
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      await db.drugs.put(toRecord(syntheticDrug()))
+      // Another connection commits a rename, as a second tab's save would.
+      const otherConnection = new DexieDrugRepository(db)
+      await otherConnection.updateDrug('fixture-drug-1', {
+        identifiers: { name: 'Concurrent Name', synonyms: ['CN'] },
+      })
+      // Our caller supplies ONLY tags: every omitted group must reflect
+      // the freshly re-read row, not any earlier snapshot.
+      const updated = await repo.updateDrug('fixture-drug-1', { tags: ['composed'] })
+      expect(updated.identifiers.name).toBe('Concurrent Name')
+      expect(updated.tags).toEqual(['composed'])
+      // Omitted groups come from the fresh read, byte-for-byte.
+      expect(updated.targets).toEqual(syntheticDrug().targets)
+      expect(updated.pharmacokinetics).toEqual(syntheticDrug().pharmacokinetics)
+      expect(updated.notes).toBe(FIXTURE_NOTE)
+      expect(updated.createdAt).toBe(FIXTURE_TIMESTAMP)
+      expect(updated.updatedAt).not.toBe(FIXTURE_TIMESTAMP) // restamped per commit
+      const stored = await repo.getDrug('fixture-drug-1')
+      expect(stored?.identifiers.name).toBe('Concurrent Name')
+      expect(stored?.tags).toEqual(['composed'])
+      expect(stored?.targets).toEqual(syntheticDrug().targets)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('replaces a supplied group wholesale — identifiers and targets are replacement groups, never deep-merged', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      await db.drugs.put(toRecord(syntheticDrug()))
+      // A supplied identifiers group REPLACES the stored one: fields the
+      // replacement omits (the fixture's description) do not survive.
+      const afterIdentifiers = await repo.updateDrug('fixture-drug-1', {
+        identifiers: { name: 'Replaced Name', synonyms: [] },
+      })
+      expect(afterIdentifiers.identifiers).toEqual({ name: 'Replaced Name', synonyms: [] })
+      expect(afterIdentifiers.identifiers.description).toBeUndefined()
+      expect(afterIdentifiers.identifiers.casNumber).toBeUndefined()
+      const storedIdentifiers = (await db.drugs.get('fixture-drug-1')) as unknown as {
+        readonly identifiers: Record<string, unknown>
+      }
+      expect(storedIdentifiers.identifiers).toEqual({ name: 'Replaced Name', synonyms: [] })
+
+      // A supplied targets group REPLACES the whole stored list: the
+      // fixture's two targets become exactly the one supplied row, and no
+      // field of the dropped targets lingers anywhere in the raw record.
+      const afterTargets = await repo.updateDrug('fixture-drug-1', {
+        targets: [
+          {
+            name: 'REPLACED-R',
+            kd: { value: 1, unit: 'nM', provenance: { type: 'user' } },
+          },
+        ],
+      })
+      expect(afterTargets.targets).toHaveLength(1)
+      expect(afterTargets.targets[0]?.name).toBe('REPLACED-R')
+      const raw = (await db.drugs.get('fixture-drug-1')) as unknown as Record<string, unknown>
+      expect(JSON.stringify(raw)).not.toContain('TEST-R')
+      expect(JSON.stringify(raw)).not.toContain('TEST-S')
+      // Untouched groups are unaffected by the replacements.
+      expect(afterTargets.identifiers).toEqual({ name: 'Replaced Name', synonyms: [] })
+      expect(afterTargets.notes).toBe(FIXTURE_NOTE)
+      expect(afterTargets.pharmacokinetics).toEqual(syntheticDrug().pharmacokinetics)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('keeps notes when the key is absent and clears it only on explicit undefined', async () => {
+    const db = freshDb()
+    try {
+      const repo = new DexieDrugRepository(db)
+      await db.drugs.put(toRecord(syntheticDrug()))
+      // Absent key: the stored notes survive an unrelated group update.
+      const kept = await repo.updateDrug('fixture-drug-1', { tags: [] })
+      expect(kept.notes).toBe(FIXTURE_NOTE)
+      // Explicit undefined: the one key whose presence means "clear".
+      const cleared = await repo.updateDrug('fixture-drug-1', { notes: undefined })
+      expect(cleared.notes).toBeUndefined()
+      expect((await db.drugs.get('fixture-drug-1'))?.['notes']).toBeUndefined()
     } finally {
       await db.delete()
     }
