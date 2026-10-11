@@ -10,11 +10,16 @@
  * versions round-trip verbatim — the same forward-compatibility rule the
  * NPSL drug schema follows (see schemas/npsl.ts).
  *
+ * Beyond shape, the boundary also enforces the cross-field identity
+ * invariants derived from the deterministic id factories (see
+ * `compoundIdentityIssues` / `observationIdentityIssues` below): a
+ * structurally valid but internally contradictory record is malformed.
+ *
  * Pure schema module: no React, no I/O.
  */
 import { z } from 'zod'
-import type { Compound } from '../../domain/sources/compound'
-import type { ExperimentalObservation } from '../../domain/sources/observation'
+import { compoundId, type Compound } from '../../domain/sources/compound'
+import { observationId, type ExperimentalObservation } from '../../domain/sources/observation'
 
 const isoDateTime = z.iso.datetime({
   offset: true,
@@ -110,14 +115,71 @@ function issuesOf(error: z.ZodError): readonly string[] {
   )
 }
 
+/**
+ * Cross-field identity invariants, derived from the deterministic id
+ * factories (`compoundId` / `observationId`) and the adapter contracts —
+ * not new identity semantics. A record can be structurally valid and still
+ * be internally contradictory (an id that names a different source record,
+ * provenance pointing at another record, an encoded compound reference
+ * that does not match its parts); such a record is malformed and is
+ * rejected at the same boundary as a schema failure — never repaired,
+ * never written. Messages name the offending fields so the conflict is
+ * actionable.
+ */
+function compoundIdentityIssues(record: Compound): readonly string[] {
+  const issues: string[] = []
+  const expectedId = compoundId(record.source, record.sourceId)
+  if (record.id !== expectedId) {
+    issues.push(
+      `id "${record.id}" does not match source "${record.source}" + sourceId "${record.sourceId}" (the deterministic id is "${expectedId}")`,
+    )
+  }
+  if (record.provenance.source !== record.source) {
+    issues.push(
+      `provenance.source "${record.provenance.source}" does not match record source "${record.source}"`,
+    )
+  }
+  if (record.provenance.recordId !== record.sourceId) {
+    issues.push(
+      `provenance.recordId "${record.provenance.recordId}" does not match sourceId "${record.sourceId}"`,
+    )
+  }
+  return issues
+}
+
+function observationIdentityIssues(record: ExperimentalObservation): readonly string[] {
+  const issues: string[] = []
+  const expectedId = observationId(record.provenance.source, record.provenance.recordId)
+  if (record.id !== expectedId) {
+    issues.push(
+      `id "${record.id}" does not match provenance.source "${record.provenance.source}" + provenance.recordId "${record.provenance.recordId}" (the deterministic id is "${expectedId}")`,
+    )
+  }
+  // `compoundId` encodes (source, compoundSourceId) exactly as the ChEMBL
+  // adapter builds it (`compoundId(provenance.source, compoundSourceId)`).
+  const expectedCompoundId = `${record.provenance.source}:${record.compoundSourceId}`
+  if (record.compoundId !== expectedCompoundId) {
+    issues.push(
+      `compoundId "${record.compoundId}" does not match provenance.source "${record.provenance.source}" + compoundSourceId "${record.compoundSourceId}" (expected "${expectedCompoundId}")`,
+    )
+  }
+  return issues
+}
+
 export function parseCompoundRecord(raw: unknown): SourceRecordValidation<Compound> {
   const parsed = compoundRecordSchema.safeParse(raw)
   if (!parsed.success) return { ok: false, errors: issuesOf(parsed.error) }
-  return { ok: true, record: parsed.data as Compound }
+  const record = parsed.data as Compound
+  const issues = compoundIdentityIssues(record)
+  if (issues.length > 0) return { ok: false, errors: issues }
+  return { ok: true, record }
 }
 
 export function parseObservationRecord(raw: unknown): SourceRecordValidation<ExperimentalObservation> {
   const parsed = observationRecordSchema.safeParse(raw)
   if (!parsed.success) return { ok: false, errors: issuesOf(parsed.error) }
-  return { ok: true, record: parsed.data as ExperimentalObservation }
+  const record = parsed.data as ExperimentalObservation
+  const issues = observationIdentityIssues(record)
+  if (issues.length > 0) return { ok: false, errors: issues }
+  return { ok: true, record }
 }

@@ -56,6 +56,12 @@ export const literatureProvenanceSchema = z.looseObject({
   doi: z.string().min(1).optional(),
   url: z.url().optional(),
   accessedAt: isoDateTime.optional(),
+  /** Record id inside `source` — portable attribution for promoted values. */
+  sourceRecordId: z.string().min(1).optional(),
+  /** Source licensing/attribution notice, verbatim. */
+  licenseNotice: z.string().min(1).optional(),
+  /** Link to the source's licensing/attribution page. */
+  licenseUrl: z.url().optional(),
   /** Explicit Layer B → Layer C link: the stored observation this value came from. */
   observationId: z.string().min(1).optional(),
   notes: z.string().optional(),

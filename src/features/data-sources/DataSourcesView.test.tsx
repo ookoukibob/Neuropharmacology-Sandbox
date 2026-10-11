@@ -119,6 +119,7 @@ function unmappableObservation(): RemoteObservation {
     ...syntheticObservation(),
     id: 'chembl:99000021',
     endpoint: "Log K'",
+    provenance: { ...syntheticObservation().provenance, recordId: '99000021' },
   }
   delete clone['parameterKind']
   return clone as unknown as RemoteObservation
@@ -287,12 +288,50 @@ describe('DataSourcesView — applying a stored observation (Layer C)', () => {
     expect(screen.getByTestId('apply-overwrite-wrapper')).toHaveTextContent('88 nM')
     expect(screen.getByTestId('apply-confirm')).toBeDisabled()
 
+    // The row name ("TEST-S") differs from the reported target — that
+    // acknowledgement is required IN ADDITION to the overwrite one.
     fireEvent.click(screen.getByTestId('apply-overwrite'))
+    expect(screen.getByTestId('apply-confirm')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('apply-target-mismatch-ack'))
     fireEvent.click(screen.getByTestId('apply-confirm'))
     await screen.findByTestId('apply-notice')
 
     const drug = await libraryRepository.getDrug('fixture-drug-1')
     expect(drug?.targets.find((target) => target.id === 'fixture-target-2')?.ic50?.value).toBe(3.5)
+  })
+
+  it('shows both targets together and gates linking on the mismatch acknowledgement', async () => {
+    await seedStored({ withLibrary: true })
+    render(<DataSourcesView />)
+
+    fireEvent.click(await screen.findByTestId('apply-to-parameter-chembl:99000001'))
+    await screen.findByTestId('apply-card')
+    fireEvent.change(screen.getByTestId('apply-drug-select'), {
+      target: { value: 'fixture-drug-1' },
+    })
+    fireEvent.change(screen.getByTestId('apply-target-select'), {
+      target: { value: 'fixture-target-1' },
+    })
+
+    // Both sides are shown together — the UI never pretends a name match
+    // (or a name mismatch) proves biological identity.
+    const comparison = screen.getByTestId('apply-target-comparison')
+    expect(comparison).toHaveTextContent('Synthetic Target A')
+    expect(comparison).toHaveTextContent('TEST-R')
+    expect(screen.getByTestId('apply-target-mismatch')).toBeVisible()
+    expect(screen.getByTestId('apply-confirm')).toBeDisabled()
+
+    fireEvent.click(screen.getByTestId('apply-target-mismatch-ack'))
+    fireEvent.click(screen.getByTestId('apply-confirm'))
+    await screen.findByTestId('apply-notice')
+
+    const drug = await libraryRepository.getDrug('fixture-drug-1')
+    const linked = drug?.targets.find((target) => target.id === 'fixture-target-1')
+    expect(linked?.ic50?.value).toBe(3.5)
+    expect(linked?.ic50?.provenance).toMatchObject({
+      type: 'literature',
+      observationId: 'chembl:99000001',
+    })
   })
 })
 

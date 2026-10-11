@@ -10,18 +10,28 @@
  *
  * Contract highlights (validated inside one transaction — a preview never
  * substitutes for this boundary):
- * - every incoming record is schema-validated before any write;
+ * - every incoming record is schema- and identity-validated before any
+ *   write;
  * - an observation whose compound is neither in the batch nor already
- *   stored is rejected (no orphan measurements);
- * - records that already exist are never overwritten — existing rows win
- *   and the import reports them as skipped;
+ *   stored as a VALID record is rejected (no orphan measurements, and no
+ *   measurement validated against a malformed stored compound row);
+ * - records that already exist are never overwritten — existing VALID
+ *   rows win and the import reports them as skipped;
+ * - an id that collides with a stored row which fails source-record
+ *   validation (quarantined on hydration) is a blocking
+ *   `QUARANTINE_CONFLICT` raised before any write: the quarantined row is
+ *   preserved byte-identical and nothing from the request is written;
  * - any rejection means nothing was written (all-or-nothing).
  */
 import type { Compound } from '../../domain/sources/compound'
 import type { ExperimentalObservation } from '../../domain/sources/observation'
 import type { QuarantinedRecord } from './repository'
 
-export type SourceImportIssueCode = 'INVALID_RECORD' | 'ORPHAN_OBSERVATION'
+export type SourceImportIssueCode =
+  | 'INVALID_RECORD'
+  | 'ORPHAN_OBSERVATION'
+  /** Collision with (or reference to) a stored row that fails validation. */
+  | 'QUARANTINE_CONFLICT'
 
 export interface SourceImportIssue {
   readonly code: SourceImportIssueCode

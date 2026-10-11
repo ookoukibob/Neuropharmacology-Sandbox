@@ -95,16 +95,26 @@ requires, in this order:
 3. the qualifier is exact (`=` or absent) — a bound ("< 3.5 nM") is
    displayed but refused with the reason;
 4. a unit is present and its dimension is `molar-concentration`;
-5. the target drug exists; attaching to an existing target requires its
-   id, a new target is created from the observation's reported target
-   name (refused when the source reported none);
+5. the target drug exists; attaching to an existing target row requires
+   its id — and, when the observation's reported target name or species
+   contradicts that row, the explicit `confirmTargetMismatch`
+   acknowledgement. The UI always shows the observation's reported
+   target next to the selected row; a differing name or species never
+   pretends to be established identity (a field the observation does
+   not report is missing information, not a difference). Creating a new
+   target from the observation's reported name remains available
+   (refused when the source reported none);
 6. an occupied slot requires the explicit overwrite acknowledgement.
 
 The written `ScientificValue` keeps a `literature` provenance with
 `observationId` — the parameter stays permanently traceable back to the
-stored measurement, through `.npsl` round trips included. Backward
-compatible: no change to the `Drug` shape beyond the optional
-`provenance.observationId` field on `literature` provenance
+stored measurement, through `.npsl` round trips included. The citation is
+portable (phase 18G): `source`, `sourceRecordId` (the external record
+id), `url` (record URL), `accessedAt` (retrieval time), `licenseNotice`
+and `licenseUrl` travel with the value, so an exported library stays
+attributable **without** exporting the compound/observation stores; an
+acknowledged target mismatch is recorded in the provenance `notes`.
+Backward compatible: only optional provenance fields were added
 (serialization-tested; older files load unchanged).
 
 "Add to drug library" on a stored compound is deliberately weaker: it
@@ -165,6 +175,19 @@ mirrored; only individually requested records are stored.
 - Deterministic ids make re-fetching idempotent; the repository import
   is a single transaction: **any** invalid record rejects the whole
   batch and nothing is written (report names the failing record index).
+- The repository boundary also enforces the cross-field identity
+  invariants derived from the id factories (phase 18G): a compound whose
+  `id` is not `source:sourceId`, provenance pointing at a different
+  source/record, an observation `id` that does not match its provenance,
+  or a `compoundId` that does not encode `source:compoundSourceId` are
+  rejected as `INVALID_RECORD` with the offending fields named — never
+  repaired or rewritten.
+- An id colliding with a stored row that fails source-record validation
+  (quarantined on hydration) is a blocking `QUARANTINE_CONFLICT`: the
+  whole import is rejected inside the transaction, the quarantined row
+  stays byte-identical, and an observation is never imported as valid
+  against a malformed compound row (same policy as the drug merge
+  import — protection wins).
 - Invalid stored rows found on later reads are quarantined, reported,
   and kept byte-identical for recovery — the established repository rule.
 

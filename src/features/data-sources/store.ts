@@ -18,11 +18,13 @@
  *   re-validates atomically; existing records are never overwritten;
  * - a stored observation becomes a model parameter only through
  *   `applyObservation`, which refuses endpoint substitution, qualifiers
- *   other than an exact reported value, missing/non-concentration units
- *   and occupied slots without an explicit `overwrite`.
+ *   other than an exact reported value, missing/non-concentration units,
+ *   occupied slots without an explicit `overwrite`, and target rows whose
+ *   name/species contradict the observation without an explicit
+ *   `confirmTargetMismatch` acknowledgement.
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
-import type { Drug, DrugId, TargetId } from '../../domain/drug/drug'
+import type { Drug, DrugId, ReceptorTarget, TargetId } from '../../domain/drug/drug'
 import type { ScientificValue } from '../../domain/pharmacology/scientific-value'
 import { unitCatalog } from '../../domain/pharmacology/unit-catalog'
 import type { Compound, RemoteCompound } from '../../domain/sources/compound'
@@ -111,6 +113,13 @@ export interface ApplyObservationRequest {
   readonly targetId: TargetId | null
   /** Explicit acknowledgement required when the slot is already occupied. */
   readonly overwrite: boolean
+  /**
+   * Explicit acknowledgement required when the observation's reported
+   * target does not verifiably match the chosen existing target row
+   * (see `findTargetMismatch`). Without it the application is refused —
+   * a differing association is never silently presented as verified.
+   */
+  readonly confirmTargetMismatch?: boolean
 }
 
 /** One entry of the source picker, derived once from the adapters. */
@@ -264,6 +273,81 @@ export function importPreviewOf(state: DataSourcesState): ImportPreview {
       storedObservationIds.has(observation.id),
     ).length,
   }
+}
+
+export interface TargetMismatch {
+  /** What the observation reports as its target (name, or an honest placeholder). */
+  readonly observationTarget: string
+  /** Species/organism the observation reports, or null when unreported. */
+  readonly observationSpecies: string | null
+  /** Display name of the chosen existing target row. */
+  readonly selectedTarget: string
+  /** Species recorded on the chosen row, or null when unrecorded. */
+  readonly selectedSpecies: string | null
+  /** Which reported fields do not line up with the chosen row. */
+  readonly differences: readonly ('name' | 'species')[]
+}
+
+function compared(value: string | undefined): string | null {
+  if (value === undefined) return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+function sameText(a: string, b: string): boolean {
+  // Comparison only decides whether a warning is required; the labels are
+  // always shown verbatim so the user judges the identity themselves.
+  return a.toLowerCase() === b.toLowerCase()
+}
+
+/**
+ * Compare an observation's reported target against a chosen EXISTING
+ * target row (Layer C selection safety).
+ *
+ * A differing reported name or species means the two records do not
+ * verifiably describe the same target — name-only matching never
+ * establishes biological identity, so the caller must show both sides and
+ * require an explicit acknowledgement before linking. A field the
+ * observation does not report is missing information, not a difference:
+ * only reported contradictions count. Returns null when nothing reported
+ * contradicts the row.
+ */
+export function findTargetMismatch(
+  observation: ExperimentalObservation,
+  target: ReceptorTarget,
+): TargetMismatch | null {
+  const reportedName = compared(observation.target.name)
+  const reportedSpecies = compared(observation.species ?? observation.target.organism)
+  const rowSpecies = compared(target.species)
+  const differences: ('name' | 'species')[] = []
+  if (reportedName !== null && !sameText(reportedName, target.name)) differences.push('name')
+  if (reportedSpecies !== null && rowSpecies !== null && !sameText(reportedSpecies, rowSpecies)) {
+    differences.push('species')
+  }
+  if (differences.length === 0) return null
+  return {
+    observationTarget: reportedName ?? '(no target name reported)',
+    observationSpecies: reportedSpecies,
+    selectedTarget: target.name,
+    selectedSpecies: rowSpecies,
+    differences,
+  }
+}
+
+/** Failure message that names both sides of a target mismatch. */
+function mismatchMessage(mismatch: TargetMismatch): string {
+  const parts: string[] = []
+  if (mismatch.differences.includes('name')) {
+    parts.push(
+      `the observation reports target "${mismatch.observationTarget}" while the selected row is "${mismatch.selectedTarget}"`,
+    )
+  }
+  if (mismatch.differences.includes('species')) {
+    parts.push(
+      `the observation reports species "${mismatch.observationSpecies ?? '(unreported)'}" while the row records "${mismatch.selectedSpecies ?? '(unrecorded)'}"`,
+    )
+  }
+  return `Target mismatch: ${parts.join('; ')} — differing reports do not establish that these are the same target. Confirm the mismatch explicitly to link this measurement to the existing row, or create a new target from the observation instead.`
 }
 
 /** Parameter slot assignment without ever substituting one kind for another. */
@@ -898,36 +982,30 @@ export function createDataSourcesStore(
         return fail('Choose a drug record from the library first.')
       }
 
-      const parameter: ScientificValue = {
-        value: observation.value,
-        unit,
-        provenance: {
-          type: 'literature',
-          source: observation.provenance.sourceName,
-          url: observation.provenance.url,
-          accessedAt: observation.provenance.retrievedAt,
-          observationId: observation.id,
-          notes: `Applied from stored observation (endpoint ${observation.endpoint}${observation.qualifier !== undefined ? `, reported '${observation.qualifier}'` : ''}).`,
-        },
-      }
-
-      let nextTargets: readonly TargetInput[]
+      // Resolve the target selection first: every refusal (missing row,
+      // occupied slot, unacknowledged target mismatch, unnamed new target)
+      // happens before a parameter value is even constructed.
+      let existingTarget: ReceptorTarget | undefined
+      let mismatch: TargetMismatch | null = null
       let targetName: string
       if (request.targetId !== null) {
-        const target = drug.targets.find((candidate) => candidate.id === request.targetId)
-        if (target === undefined) return fail('The selected target is not part of that drug record.')
-        const occupied = target[kind]
+        existingTarget = drug.targets.find((candidate) => candidate.id === request.targetId)
+        if (existingTarget === undefined) {
+          return fail('The selected target is not part of that drug record.')
+        }
+        const occupied = existingTarget[kind]
         if (occupied !== undefined && !request.overwrite) {
           return fail(
-            `The ${kind.toUpperCase()} slot of "${target.name}" already holds a value — confirm an explicit overwrite to replace it.`,
+            `The ${kind.toUpperCase()} slot of "${existingTarget.name}" already holds a value — confirm an explicit overwrite to replace it.`,
           )
         }
-        targetName = target.name
-        nextTargets = drug.targets.map((candidate) =>
-          candidate.id === target.id
-            ? { ...candidate, ...withParameter(kind, parameter) }
-            : candidate,
-        )
+        targetName = existingTarget.name
+        mismatch = findTargetMismatch(observation, existingTarget)
+        if (mismatch !== null && request.confirmTargetMismatch !== true) {
+          // Never present a differing association as verified: the user
+          // must explicitly acknowledge the mismatch (or create a new row).
+          return fail(mismatchMessage(mismatch))
+        }
       } else {
         const name = observation.target.name
         if (name === undefined || name.length === 0) {
@@ -936,12 +1014,50 @@ export function createDataSourcesStore(
           )
         }
         targetName = name
+      }
+
+      const attribution = observation.provenance
+      const baseNotes = `Applied from stored observation (endpoint ${observation.endpoint}${observation.qualifier !== undefined ? `, reported '${observation.qualifier}'` : ''}).`
+      const parameter: ScientificValue = {
+        value: observation.value,
+        unit,
+        provenance: {
+          type: 'literature',
+          source: attribution.sourceName,
+          // Portable attribution: the external record id, record URL,
+          // retrieval time and license notice travel with the value so the
+          // citation survives a library export without the source-data
+          // stores (observationId keeps the local Layer B link).
+          sourceRecordId: attribution.recordId,
+          url: attribution.url,
+          accessedAt: attribution.retrievedAt,
+          ...(attribution.licenseNotice !== undefined
+            ? { licenseNotice: attribution.licenseNotice }
+            : {}),
+          ...(attribution.licenseUrl !== undefined ? { licenseUrl: attribution.licenseUrl } : {}),
+          observationId: observation.id,
+          notes:
+            mismatch !== null
+              ? `${baseNotes} Target mismatch acknowledged: the observation reports target "${mismatch.observationTarget}"${mismatch.observationSpecies !== null ? ` (species "${mismatch.observationSpecies}")` : ''}, linked to the existing row "${targetName}".`
+              : baseNotes,
+        },
+      }
+
+      let nextTargets: readonly TargetInput[]
+      if (existingTarget !== undefined) {
+        const selected = existingTarget
+        nextTargets = drug.targets.map((candidate) =>
+          candidate.id === selected.id
+            ? { ...candidate, ...withParameter(kind, parameter) }
+            : candidate,
+        )
+      } else {
         const species = observation.species
         nextTargets = [
           ...drug.targets,
           {
             // No id: the repository assigns one, as for any created target.
-            name,
+            name: targetName,
             ...(species !== undefined ? { species } : {}),
             ...withParameter(kind, parameter),
           },

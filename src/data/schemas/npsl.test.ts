@@ -124,6 +124,35 @@ describe('npslFileSchema', () => {
     parseFails(input)
   })
 
+  it('accepts the portable attribution fields on a promoted literature value', () => {
+    const input = structuredClone(fixture)
+    const kd = input.drugs[0]?.targets[0]?.kd
+    if (kd && kd.provenance.type === 'literature') {
+      const provenance = kd.provenance as Record<string, unknown>
+      provenance['sourceRecordId'] = '99000001'
+      provenance['licenseNotice'] = 'ChEMBL data is licensed under CC BY-SA 3.0.'
+      provenance['licenseUrl'] = 'https://creativecommons.org/licenses/by-sa/3.0/'
+    }
+    const parsed = parseOk(input)
+    expect(parsed.drugs[0]?.targets[0]?.kd?.provenance).toMatchObject({
+      type: 'literature',
+      sourceRecordId: '99000001',
+      licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+      licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
+    })
+  })
+
+  it('rejects empty or malformed portable attribution fields', () => {
+    const input = structuredClone(fixture)
+    const kd = input.drugs[0]?.targets[0]?.kd
+    if (kd && kd.provenance.type === 'literature') {
+      const provenance = kd.provenance as Record<string, unknown>
+      provenance['sourceRecordId'] = ''
+      provenance['licenseUrl'] = 'not-a-url'
+    }
+    parseFails(input)
+  })
+
   it('rejects a missing libraryMetadata block', () => {
     const input = structuredClone(fixture) as Record<string, unknown>
     delete input['libraryMetadata']

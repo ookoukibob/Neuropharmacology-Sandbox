@@ -294,7 +294,7 @@ only the second one can write:
 2. **Repository boundary** (`dexieSourceDataRepository.importSourceRecords`).
    The preview shown in the UI is advisory only: inside one Dexie `rw`
    transaction every record is re-validated with the same schemas
-   (unknown fields round-trip untouched), deterministic ids are
+   (unknown fields round-tripped untouched), deterministic ids are
    `source:sourceId` (compound) / `source:activityId` (observation),
    observations whose compound is neither in the batch nor already stored
    are rejected as orphans, and **existing rows win** — a re-import
@@ -304,9 +304,39 @@ only the second one can write:
    are quarantined, reported and kept byte-identical — the established
    repository rule.
 
+   Two integrity rules (phase 18G) close the remaining gaps, both derived
+   from the existing id factories rather than new identity semantics:
+
+   - **Cross-field identity invariants.** A structurally valid record is
+     still rejected when it is internally contradictory: a compound whose
+     `id` is not `source:sourceId`, provenance whose `source`/`recordId`
+     disagree with the record's own fields, an observation whose `id`
+     does not match `provenance.source:provenance.recordId`, or a
+     `compoundId` that does not encode `provenance.source:compoundSourceId`.
+     The same invariants make such a row quarantined on a later read.
+     Messages name the offending fields (`does not match …`).
+   - **Quarantine-conflict collisions.** A colliding id only counts as a
+     normal duplicate when the *stored* row passes the authoritative
+     source-record validator (the same parser hydration uses). If it does
+     not — the row is malformed and quarantined — the whole import is
+     rejected with a blocking `QUARANTINE_CONFLICT` before any write
+     (same policy as the drug merge import, audit GAP-3: protection
+     wins). The quarantined row is never overwritten, repaired, deleted
+     or silently skipped, and stays in the quarantine report. An
+     observation is likewise never imported as valid when its referenced
+     compound exists only as a quarantined row (also
+     `QUARANTINE_CONFLICT`, not `ORPHAN_OBSERVATION`).
+
 Layer C (`applyObservation`) validates again before touching a drug
 record: known observation, `parameterKind` mapped to the same named
 slot, exact qualifier (`=` or absent), a present molar-concentration
-unit, an existing drug (and target when attaching to one), and an
-explicit `overwrite` for an occupied slot. A refusal states its reason;
-it never partially applies.
+unit, an existing drug (and target when attaching to one), an explicit
+`overwrite` for an occupied slot, and — when attaching to an existing
+target row whose name or species contradicts the observation — an
+explicit `confirmTargetMismatch` acknowledgement (`findTargetMismatch`
+compares reported vs recorded; an unreported field is missing
+information, not a difference). A refusal states its reason; it never
+partially applies. The promoted parameter carries portable attribution
+(`source`, `sourceRecordId`, `url`, `accessedAt`, `licenseNotice`,
+`licenseUrl`, `observationId`), so the citation survives an NPSL library
+export without exporting the source-data stores.

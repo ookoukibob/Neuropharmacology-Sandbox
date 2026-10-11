@@ -58,8 +58,11 @@ Curve generation additionally tests: point counts, axis scale declarations
   metadata and every drug nesting level; full round-trip preservation and
   the merge collision policy are covered by the repository/mapper tests);
 - rejections: non-finite value, wrong value type, empty unit, unknown
-  provenance type, `literature` without `source`, missing
+  provenance type, `literature` without `source`, empty/malformed
+  portable attribution fields (`sourceRecordId`, `licenseUrl`), missing
   `libraryMetadata`, malformed ISO date, invalid version string;
+- portable literature attribution on promoted values (`sourceRecordId`,
+  `licenseNotice`, `licenseUrl`) accepted and preserved;
 - `checkNpslVersions`: accept same/older-minor, reject newer minor and
   different major.
 
@@ -348,7 +351,7 @@ lossy edges are listed in `docs/validation.md` §7.
 | Area | Status |
 | --- | --- |
 | Vitest + RTL + coverage harness | done |
-| NPSL schema tests (15 cases) | done |
+| NPSL schema tests (17 cases) | done |
 | AppLayout component tests | done |
 | Playwright config + shell smoke test | done |
 | Engine model tests (matrix §1) | done — 3 models, curves, units, numeric, registry |
@@ -367,10 +370,10 @@ lossy edges are listed in `docs/validation.md` §7.
 | Calculator presentation-settings tests | done — `applyPresentationSettings` replaces display defaults without touching drafts/report/curve, marks the curve stale when a report exists; `defaultCalculatorSettings` returns fresh independent copies |
 | Settings UI tests | done — four sections with accessible headings, theme applied + persisted per model blocks, invalid range text refused with `aria-invalid`/description, cross-field enforcement, restore-defaults keeps the theme, data-management link, About metadata, acknowledged reset (Escape, focus, scope) with repository mutation spies and an untouched scientific draft, invalid/unavailable-storage notes |
 | Source adapter tests | done — PubChem name/CAS/InChIKey resolution, ChEMBL compound/target/activity/endpoint filtering, fixtures-only HTTP (`src/data/sources/*.test.ts`) |
-| Source-data repository tests | done — atomic import (validation failure rolls back, nothing written), deterministic ids, existing-records-win skip reporting, orphan-observation rejection, quarantine on invalid stored rows, hydrate with provenance and license survival (`dexieSourceDataRepository.test.ts`) |
+| Source-data repository tests | done — atomic import (validation failure rolls back, nothing written), deterministic ids, existing-records-win skip reporting, orphan-observation rejection, quarantine on invalid stored rows, hydrate with provenance and license survival, quarantine-collision conflicts (compound- and observation-id collisions with deliberately malformed raw rows: `QUARANTINE_CONFLICT`, whole-batch no-write with valid siblings, raw rows byte-identical incl. unknown fields, observation-vs-malformed-compound rejection), cross-field identity invariants (mismatched ids, inconsistent provenance, invalid compound references — and identity-consistent PubChem + ChEMBL fixtures still import) (`dexieSourceDataRepository.test.ts`) |
 | Database schema tests | done — verno 3 with `compounds` + `observations` stores, fresh-install table creation, v1→v2→v3 migration chain, drug rows byte-identical through the v2→v3 upgrade (`database.test.ts`) |
-| Data-sources store tests | done — startup-no-seed with real adapters (zero fetch), search lifecycle (stale/cancel/source- and scope-switch), observation retrieval (merge paging, page-source snapshot, stale guard), import (identity resolution, whole-batch failure, no-op, advisory preview), Layer C apply rules (endpoint mapping, qualifiers, units, occupied-slot overwrite, unknown ids) (`src/features/data-sources/store.test.ts`) |
-| Data-sources UI tests | done — full chain against real repositories with fixture-stubbed `fetch`: picker, zero network on mount, search → preview → confirmed import, network-failure honesty, Layer C UI gates, identity-only library addition (`DataSourcesView.test.tsx`) |
+| Data-sources store tests | done — startup-no-seed with real adapters (zero fetch), search lifecycle (stale/cancel/source- and scope-switch), observation retrieval (merge paging, page-source snapshot, stale guard), import (identity resolution, whole-batch failure, no-op, advisory preview), Layer C apply rules (endpoint mapping, qualifiers, units, occupied-slot overwrite, unknown ids), existing-target mismatch safety (refusal naming both sides until `confirmTargetMismatch`, acknowledgement recorded in provenance notes, name-and-species match needs no ack, species-only mismatch refuses), portable attribution surviving an NPSL export → re-import round trip (`src/features/data-sources/store.test.ts`) |
+| Data-sources UI tests | done — full chain against real repositories with fixture-stubbed `fetch`: picker, zero network on mount, search → preview → confirmed import, network-failure honesty, Layer C UI gates (incl. the target comparison block and the required mismatch-acknowledgement checkbox), identity-only library addition (`DataSourcesView.test.tsx`) |
 | Drug-form persistence integration tests | done — real detail → form → store → Dexie chain: whole provenance of unchanged parameters in the raw stored row, user stamp only on the changed parameter, supported target metadata (`gene` / `action` / `species` / `notes`) intact after an unrelated edit, no metadata migration after removal + same-name recreation, stored-only identifier metadata (`description` / `casNumber`) preserved byte-identical in the raw row after an unrelated edit (raw row + fresh repository read), untouched list/text fields (`synonyms` / `tags` / name / top-level notes) preserved byte-identical in the raw row after an unrelated edit (audit DI-03), a negative-zero parameter kept exact (`Object.is`) with its complete provenance in the raw row after an unrelated edit, and top-level `notes` absent/empty proven by raw-row own-property checks (audit DI-04 + DI-03 follow-up), unknown target extension fields surviving the form's targets-replacing save with a post-import baseline (record, target and provenance level, stable-id + non-transfer asserts — audit GAP-1), and the whole pharmacokinetics object (half-life, clearance, Vd, bioavailability: values, units, complete provenance incl. an unknown extension key) deep-equal in the raw row and a fresh read after an unrelated rename (audit GAP-2) |
 | Test suite total | 868 unit tests (52 files) |
 | Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
