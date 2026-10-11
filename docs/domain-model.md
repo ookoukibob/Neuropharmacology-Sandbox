@@ -105,7 +105,8 @@ Drug
 ├── tags: string[]
 ├── targets: ReceptorTarget[]       zero or more
 │   └── each: id, name, gene?, action?, species?,
-│             kd?, ki?, ec50?, ic50?, notes?
+│             kd?, ki?, ec50?, ic50?, notes?,
+│             sourceReferences?      external source identities (18I)
 ├── pharmacokinetics
 │   ├── halfLife?                   time unit expected
 │   ├── clearance?                  volume/time unit expected
@@ -128,6 +129,33 @@ Invariants:
    the same rule (`src/data` importers may not upgrade `user` → `literature`).
 5. Demo records are marked: `origin: 'built-in-demo'` and their library
    carries `dataStatus: 'example'`.
+
+**External target identity (phase 18I, ADR-20).** A target may carry
+zero or more `TargetSourceReference` entries — what an external source
+calls the target:
+
+```
+TargetSourceReference
+├── source            adapter id ('chembl', …)      required
+├── sourceName        display name of that source   required
+├── sourceTargetId    that source's authoritative target id  required
+├── name? / organism? as reported by that source
+├── url?              HTTPS URL of the source's target record
+└── licenseNotice? / licenseUrl?   source terms, verbatim
+```
+
+- `ReceptorTarget.id` stays the application's opaque row identity; a
+  source target id is never used to look rows up locally and never
+  replaces the internal id (or vice versa) — the two are distinct
+  identity spaces.
+- Multiple source systems may hold references on one target; at most
+  **one reference per source**. A same-source id conflict is surfaced
+  to the user (`findTargetMismatch` → `'source-id'`), never merged by
+  the code (`mergeSourceReferences` reports it instead of applying it).
+- The field is optional and additive: older records and `.npsl` files
+  omit it, nothing writes `[]` or explicit `undefined`, and no schema
+  or file version bump was needed (ADR-20).
+- A reference is the source's claim, not verified biological identity.
 
 ---
 
@@ -213,4 +241,9 @@ a molar-concentration unit, and requires an explicit acknowledgement to
 overwrite an occupied slot. The written `ScientificValue` keeps a
 `literature` provenance whose `observationId` links back to the Layer B
 record. Kd ≠ Ki ≠ EC50 ≠ IC50 is enforced in both directions: no silent
-substitution in, and no relabelling of what was stored.
+substitution in, and no relabelling of what was stored. When the
+observation reports an external target id, the promotion also stores
+that identity on the target (`sourceReferences`, phase 18I — ADR-20,
+[data-sources.md](data-sources.md) §2), and an existing row's stored
+reference is protected against a same-source id conflict by the same
+explicit-acknowledgement policy as name/species differences.

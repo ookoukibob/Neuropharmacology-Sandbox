@@ -332,11 +332,31 @@ record: known observation, `parameterKind` mapped to the same named
 slot, exact qualifier (`=` or absent), a present molar-concentration
 unit, an existing drug (and target when attaching to one), an explicit
 `overwrite` for an occupied slot, and — when attaching to an existing
-target row whose name or species contradicts the observation — an
-explicit `confirmTargetMismatch` acknowledgement (`findTargetMismatch`
-compares reported vs recorded; an unreported field is missing
-information, not a difference). A refusal states its reason; it never
-partially applies. The promoted parameter carries portable attribution
-(`source`, `sourceRecordId`, `url`, `accessedAt`, `licenseNotice`,
-`licenseUrl`, `observationId`), so the citation survives an NPSL library
-export without exporting the source-data stores.
+target row whose name or species contradicts the observation, **or**
+whose stored source reference names a different target id from the
+*same* source — an explicit `confirmTargetMismatch` acknowledgement
+(`findTargetMismatch` compares reported vs recorded for name, species
+and source id; an unreported field is missing information, not a
+difference, and a missing reference — on either side — is never a
+fabricated conflict). A refusal states its reason; it never partially
+applies. An acknowledged conflicting reference is never overwritten,
+merged or relabelled (`mergeSourceReferences` reports the conflict
+instead of applying it, and the acknowledgement with both ids is
+recorded in the parameter's provenance notes). The promoted parameter
+carries portable attribution (`source`, `sourceRecordId`, `url`,
+`accessedAt`, `licenseNotice`, `licenseUrl`, `observationId`), so the
+citation survives an NPSL library export without exporting the
+source-data stores.
+
+Target source references (phase 18I) are schema-validated like every
+other known field (`targetSourceReferenceSchema` in `schemas/npsl.ts`,
+sharing the HTTPS-only URL rule from `schemas/sources.ts`): empty
+identity fields and non-HTTPS / `javascript:` / relative `url` /
+`licenseUrl` values fail validation with the offending field named —
+**before any write** — and a drug record carrying a malformed
+reference is refused as a whole, never partially imported. Records
+without the optional key remain valid (the key is omitted, never
+written as `[]` or explicit `undefined`), and unknown keys inside a
+reference round-trip (ADR-8 rules apply at the reference level too,
+matched by `source` — never array position — by the persistence
+mapper).
