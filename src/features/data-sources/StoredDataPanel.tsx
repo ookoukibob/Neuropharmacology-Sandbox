@@ -5,11 +5,18 @@
  * Layer C (parameter application) is a one-way, provenance-preserving
  * promotion of ONE stored observation onto ONE drug parameter slot:
  * - the store enforces the rules (endpoint mapping, qualifier, unit,
- *   explicit overwrite of occupied slots) — this panel only collects the
- *   user's explicit choices and shows the reason when a value cannot be
- *   applied;
- * - the drug record receives the observation id in its provenance, so the
- *   parameter stays traceable back to the source record.
+ *   explicit overwrite of occupied slots, explicit acknowledgement when
+ *   the observation's reported target differs from the chosen row) — this
+ *   panel only collects the user's explicit choices and shows the reason
+ *   when a value cannot be applied;
+ * - choosing an existing target row always shows the observation's
+ *   reported target next to that row, and a differing name/species
+ *   requires a checkbox acknowledgement — name-only matching is never
+ *   presented as established biological identity;
+ * - the drug record receives the observation id (source record id, URL,
+ *   retrieval time, license notice) in its provenance, so the parameter
+ *   stays traceable back to the source record — including after the
+ *   library is exported.
  *
  * "Add to library" creates an identity-only drug record (name, synonyms,
  * CAS) whose notes carry the full source attribution — it never invents
@@ -27,6 +34,7 @@ import type { Drug } from '../../domain/drug/drug'
 import type { Compound } from '../../domain/sources/compound'
 import type { ExperimentalObservation } from '../../domain/sources/observation'
 import { ObservationSummary } from './ObservationSummary'
+import { findTargetMismatch } from './store'
 
 const SELECT_CLASS = 'h-9 rounded-md border border-input bg-background px-2 text-sm'
 const NEW_TARGET = '__new__'
@@ -164,6 +172,7 @@ function ApplyCard({
   const [drugId, setDrugId] = useState('')
   const [targetChoice, setTargetChoice] = useState<string>(NEW_TARGET)
   const [overwrite, setOverwrite] = useState(false)
+  const [mismatchAck, setMismatchAck] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const kind = observation.parameterKind
@@ -173,6 +182,11 @@ function ApplyCard({
   const occupied = slotValue !== undefined
   const namesNewTarget = observation.target.name !== undefined && observation.target.name !== ''
   const mapsToParameter = kind !== undefined
+  /** Comparison (and possible mismatch) only apply to an EXISTING row. */
+  const comparesRow = drugId !== '' && targetChoice !== NEW_TARGET && target !== undefined
+  const mismatch =
+    comparesRow && target !== undefined ? findTargetMismatch(observation, target) : null
+  const reportedSpecies = observation.species ?? observation.target.organism
 
   async function onApply(): Promise<void> {
     if (drugId === '') return
@@ -183,6 +197,7 @@ function ApplyCard({
         drugId,
         targetId: targetChoice === NEW_TARGET ? null : targetChoice,
         overwrite,
+        confirmTargetMismatch: mismatchAck,
       })
       if (ok) {
         // The parameter now lives on the drug record — keep the shared
@@ -239,6 +254,7 @@ function ApplyCard({
               setDrugId(e.target.value)
               setTargetChoice(NEW_TARGET)
               setOverwrite(false)
+              setMismatchAck(false)
             }}
           >
             <option value="">Choose a drug record…</option>
@@ -262,6 +278,7 @@ function ApplyCard({
               onChange={(e) => {
                 setTargetChoice(e.target.value)
                 setOverwrite(false)
+                setMismatchAck(false)
               }}
             >
               <option value={NEW_TARGET}>
@@ -275,6 +292,52 @@ function ApplyCard({
               ))}
             </select>
           </div>
+        )}
+
+        {comparesRow && target !== undefined && (
+          <div
+            className="space-y-1 rounded-md border p-2 text-sm"
+            data-testid="apply-target-comparison"
+          >
+            <p className="font-medium">Compare the targets before linking</p>
+            <p data-testid="apply-observation-target">
+              Observation reports: “{observation.target.name ?? '(no target name reported)'}”
+              {reportedSpecies !== undefined && `, species “${reportedSpecies}”`}
+            </p>
+            <p data-testid="apply-selected-target">
+              Selected row: “{target.name}”
+              {target.species !== undefined && `, species “${target.species}”`}
+            </p>
+          </div>
+        )}
+
+        {mismatch !== null && (
+          <Alert data-testid="apply-target-mismatch">
+            <AlertTitle>The reported target differs from the selected row</AlertTitle>
+            <AlertDescription>
+              <p>
+                A differing name or species does not establish that these are the same target —
+                linking them is a user judgement, and it is recorded in the parameter's
+                provenance. Create a new target from the observation instead if they are not the
+                same target.
+              </p>
+              <label
+                className="mt-2 flex items-start gap-2 text-sm"
+                data-testid="apply-target-mismatch-wrapper"
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  data-testid="apply-target-mismatch-ack"
+                  checked={mismatchAck}
+                  disabled={busy}
+                  onChange={(e) => setMismatchAck(e.target.checked)}
+                />
+                I understand these may be different targets — link this measurement to “
+                {target?.name ?? ''}” anyway
+              </label>
+            </AlertDescription>
+          </Alert>
         )}
 
         {occupied && kind !== undefined && slotValue !== undefined && (
@@ -306,6 +369,7 @@ function ApplyCard({
               !mapsToParameter ||
               (observation.qualifier !== undefined && observation.qualifier !== '=') ||
               (occupied && !overwrite) ||
+              (mismatch !== null && !mismatchAck) ||
               (targetChoice === NEW_TARGET && !namesNewTarget)
             }
             onClick={() => void onApply()}
@@ -323,8 +387,9 @@ function ApplyCard({
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          The applied parameter keeps a provenance link to this observation (source record, URL,
-          retrieval time) — the drug record never loses its sources.
+          The applied parameter keeps a provenance link to this observation (source name, record
+          id, URL, retrieval time, license notice) — the citation stays with the drug record and
+          survives exporting the library.
         </p>
       </CardContent>
     </Card>

@@ -29,8 +29,11 @@ function detailOf(provenance: Provenance): string {
       const parts = [`Source: ${provenance.source}`]
       if (provenance.citation !== undefined) parts.push(provenance.citation)
       if (provenance.doi !== undefined) parts.push(`DOI: ${provenance.doi}`)
+      if (provenance.sourceRecordId !== undefined) parts.push(`Record: ${provenance.sourceRecordId}`)
       if (provenance.url !== undefined) parts.push(provenance.url)
       if (provenance.accessedAt !== undefined) parts.push(`Accessed: ${provenance.accessedAt}`)
+      if (provenance.licenseNotice !== undefined) parts.push(`License: ${provenance.licenseNotice}`)
+      if (provenance.licenseUrl !== undefined) parts.push(provenance.licenseUrl)
       return parts.join(' · ')
     }
     case 'user':

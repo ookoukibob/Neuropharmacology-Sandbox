@@ -38,6 +38,18 @@ export interface LiteratureProvenance {
   /** When the source was last consulted (ISO 8601). */
   readonly accessedAt?: IsoDateTime
   /**
+   * Record identifier inside `source` (e.g. a ChEMBL activity id) when
+   * this value was promoted from a stored source record. Together with
+   * `source`, `url`, `accessedAt` and the license fields it keeps the
+   * citation portable: an exported drug library stays traceable to the
+   * external record without exporting the source-data stores.
+   */
+  readonly sourceRecordId?: string
+  /** Licensing/attribution notice of the external source, verbatim. */
+  readonly licenseNotice?: string
+  /** Link to the external source's licensing or attribution page. */
+  readonly licenseUrl?: string
+  /**
    * Reference to the stored experimental observation (Layer B) this value
    * was taken from — the explicit Layer B → Layer C link. Set only when
    * the user applied a specific stored observation to this parameter;

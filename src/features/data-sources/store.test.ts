@@ -15,6 +15,7 @@ import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { syntheticCompound, syntheticObservation, syntheticDrug, syntheticLibrary } from '../../tests/fixtures'
 import { SandboxDatabase } from '../../data/db/database'
+import { serializeNpslDocument, toNpslDocument } from '../../data/mappers/npslDocument'
 import { DexieDrugRepository } from '../../data/repositories/dexieDrugRepository'
 import { DexieSourceDataRepository } from '../../data/repositories/dexieSourceDataRepository'
 import { createSourceAdapters } from '../../data/sources/registry'
@@ -51,6 +52,7 @@ const OBSERVATION_B: RemoteObservation = {
   compoundId: 'chembl:CHEMBL99990002',
   compoundSourceId: 'CHEMBL99990002',
   compoundName: 'Synthetic Fixture Compound B',
+  provenance: { ...syntheticObservation().provenance, recordId: '99000007' },
 }
 
 function emptyPage(items: readonly RemoteObservation[] = []): ObservationPage {
@@ -689,8 +691,12 @@ describe('data sources — applying an observation to a parameter (Layer C)', ()
       provenance: {
         type: 'literature',
         source: 'ChEMBL',
+        // Portable attribution — the citation survives a library export.
+        sourceRecordId: '99000001',
         url: 'https://www.ebi.ac.uk/chembl/api/data/activity.json?activity_id=99000001',
         accessedAt: '2026-01-01T00:00:00.000Z',
+        licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+        licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
         observationId: 'chembl:99000001',
         notes: expect.stringContaining('endpoint IC50'),
       },
@@ -703,9 +709,13 @@ describe('data sources — applying an observation to a parameter (Layer C)', ()
 
   it('fills an empty slot on an existing target without touching other slots', async () => {
     const store = await storeWithLibrary()
+    // "TEST-R" vs the reported "Synthetic Target A" is a name mismatch —
+    // linking it requires the explicit acknowledgement (see below).
     const ok = await store
       .getState()
-      .applyObservation(applyRequest({ targetId: 'fixture-target-1' }))
+      .applyObservation(
+        applyRequest({ targetId: 'fixture-target-1', confirmTargetMismatch: true }),
+      )
     expect(ok).toBe(true)
     const drug = await drugRepo.getDrug('fixture-drug-1')
     const target = drug?.targets.find((candidate) => candidate.id === 'fixture-target-1')
@@ -733,11 +743,115 @@ describe('data sources — applying an observation to a parameter (Layer C)', ()
 
     const accepted = await store
       .getState()
-      .applyObservation(applyRequest({ targetId: 'fixture-target-2', overwrite: true }))
+      .applyObservation(
+        applyRequest({ targetId: 'fixture-target-2', overwrite: true, confirmTargetMismatch: true }),
+      )
     expect(accepted).toBe(true)
     const after = await drugRepo.getDrug('fixture-drug-1')
     expect(after?.targets.find((t) => t.id === 'fixture-target-2')?.ic50?.value).toBe(3.5)
     expect(after?.targets.find((t) => t.id === 'fixture-target-2')?.ic50?.provenance).toMatchObject({
+      observationId: 'chembl:99000001',
+    })
+  })
+
+  it('refuses an existing target whose reported name differs until it is acknowledged', async () => {
+    const store = await storeWithLibrary()
+    const refused = await store
+      .getState()
+      .applyObservation(applyRequest({ targetId: 'fixture-target-1' }))
+    expect(refused).toBe(false)
+    const error = store.getState().actionError ?? ''
+    expect(error).toContain('Target mismatch')
+    expect(error).toContain('Synthetic Target A')
+    expect(error).toContain('TEST-R')
+    const untouched = await drugRepo.getDrug('fixture-drug-1')
+    expect(untouched?.targets.find((t) => t.id === 'fixture-target-1')?.ic50).toBeUndefined()
+
+    const accepted = await store
+      .getState()
+      .applyObservation(
+        applyRequest({ targetId: 'fixture-target-1', confirmTargetMismatch: true }),
+      )
+    expect(accepted).toBe(true)
+    const drug = await drugRepo.getDrug('fixture-drug-1')
+    const target = drug?.targets.find((candidate) => candidate.id === 'fixture-target-1')
+    expect(target?.ic50?.value).toBe(3.5)
+    const provenance = target?.ic50?.provenance
+    expect(provenance?.type).toBe('literature')
+    // The acknowledgement travels with the parameter (portable, exported).
+    const notes = provenance?.type === 'literature' ? provenance.notes ?? '' : ''
+    expect(notes).toContain('Target mismatch acknowledged')
+    expect(notes).toContain('Synthetic Target A')
+  })
+
+  it('links a name-and-species-matching target row without any acknowledgement', async () => {
+    const store = makeStore()
+    await sourceRepo.importSourceRecords({ compounds: [COMPOUND_A], observations: [OBSERVATION_A] })
+    await drugRepo.replaceLibrary(
+      syntheticLibrary([
+        syntheticDrug({
+          targets: [
+            { id: 'matching-target', name: 'Synthetic Target A', species: 'Homo sapiens' },
+          ],
+        }),
+      ]),
+    )
+    await store.getState().hydrateStored()
+
+    // Same reported name and species: nothing reported contradicts the row,
+    // so the link needs no extra confirmation — but note that a name match
+    // alone never proves identity (that claim is never made anywhere).
+    const ok = await store
+      .getState()
+      .applyObservation(applyRequest({ targetId: 'matching-target' }))
+    expect(ok).toBe(true)
+    const drug = await drugRepo.getDrug('fixture-drug-1')
+    expect(drug?.targets.find((t) => t.id === 'matching-target')?.ic50?.value).toBe(3.5)
+  })
+
+  it('requires acknowledgement for a species-only mismatch (same name, different species)', async () => {
+    const store = makeStore()
+    await sourceRepo.importSourceRecords({ compounds: [COMPOUND_A], observations: [OBSERVATION_A] })
+    await drugRepo.replaceLibrary(
+      syntheticLibrary([
+        syntheticDrug({
+          targets: [{ id: 'mouse-target', name: 'Synthetic Target A', species: 'Mus musculus' }],
+        }),
+      ]),
+    )
+    await store.getState().hydrateStored()
+
+    const refused = await store
+      .getState()
+      .applyObservation(applyRequest({ targetId: 'mouse-target' }))
+    expect(refused).toBe(false)
+    expect(store.getState().actionError).toContain('species')
+
+    const ok = await store
+      .getState()
+      .applyObservation(applyRequest({ targetId: 'mouse-target', confirmTargetMismatch: true }))
+    expect(ok).toBe(true)
+  })
+
+  it('keeps the promoted attribution through an NPSL export → re-import round trip', async () => {
+    const store = await storeWithLibrary()
+    const applied = await store.getState().applyObservation(applyRequest())
+    expect(applied).toBe(true)
+
+    const text = serializeNpslDocument(toNpslDocument(await drugRepo.exportLibrary()))
+    const report = await drugRepo.importLibrary(text, { mode: 'replace' })
+    expect(report.ok).toBe(true)
+
+    const drug = await drugRepo.getDrug('fixture-drug-1')
+    const created = drug?.targets.find((target) => target.name === 'Synthetic Target A')
+    expect(created?.ic50?.provenance).toMatchObject({
+      type: 'literature',
+      source: 'ChEMBL',
+      sourceRecordId: '99000001',
+      url: 'https://www.ebi.ac.uk/chembl/api/data/activity.json?activity_id=99000001',
+      accessedAt: '2026-01-01T00:00:00.000Z',
+      licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+      licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
       observationId: 'chembl:99000001',
     })
   })
@@ -779,7 +893,12 @@ describe('data sources — applying an observation to a parameter (Layer C)', ()
     expect(missing).toBe(false)
     expect(store.getState().actionError).toContain('no unit')
 
-    const percent: RemoteObservation = { ...OBSERVATION_A, id: 'chembl:99000009', unit: '%' }
+    const percent: RemoteObservation = {
+      ...OBSERVATION_A,
+      id: 'chembl:99000009',
+      unit: '%',
+      provenance: { ...OBSERVATION_A.provenance, recordId: '99000009' },
+    }
     await sourceRepo.importSourceRecords({ compounds: [], observations: [percent] })
     await store.getState().hydrateStored()
     const wrongUnit = await store
@@ -806,7 +925,14 @@ describe('data sources — applying an observation to a parameter (Layer C)', ()
     const unnamed = makeStore()
     await sourceRepo.importSourceRecords({
       compounds: [COMPOUND_A],
-      observations: [{ ...OBSERVATION_A, id: 'chembl:99000011', target: {} }],
+      observations: [
+        {
+          ...OBSERVATION_A,
+          id: 'chembl:99000011',
+          target: {},
+          provenance: { ...OBSERVATION_A.provenance, recordId: '99000011' },
+        },
+      ],
     })
     await drugRepo.replaceLibrary(syntheticLibrary([syntheticDrug()]))
     await unnamed.getState().hydrateStored()
