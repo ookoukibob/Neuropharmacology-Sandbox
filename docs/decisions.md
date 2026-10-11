@@ -482,21 +482,25 @@ bump rides the same transaction as the data write. A stale token raises
 mutation path that writes drug rows (create, import both modes,
 replace, recovery restore) bumps the ids it writes inside its own
 transaction; deletion keeps the tombstone so delete→recreate→restore
-cannot mint a token that revives a stale form (ABA-safe). The UI layer
+cannot mint a token that revives a stale form (ABA-safe). *Review fix — deletion is guarded too:* `deleteDrug(id, expectedRevision)` compares the token inside the deletion's own read-write transaction (drugs+meta+revisions) and rejects a stale delete with `CONFLICT` before removing or stamping anything — a stale detail page can never delete a record another tab has updated. A successful delete keeps the tombstone and deliberately does NOT advance it: deletion is the absence of data, not a content mutation, and with the row gone every stale action already fails `NOT_FOUND`; advancing would add no safety while blurring "the sequence advanced because data changed" with bookkeeping. Concurrent deletes cannot both succeed — the loser's transaction re-reads the post-delete state and fails `NOT_FOUND` ("already gone"), which never masks the conflict distinction for a record that still exists. The UI layer
 receives a discriminated `UpdateDrugResult` (`ok` / `conflict` /
 `error`); the form captures its token once at mount, never
 auto-refreshes it after a conflict (no silent retry), keeps the draft
 and the edit session open, names the conflict distinctly from ordinary
 failures, and offers explicit recovery: open the latest record in a
-new tab (draft kept) or reload (draft discarded, labeled as such).
+new tab (draft kept) or reload (draft discarded, labeled as such). The
+delete-confirmation flow is guarded the same way (`DeleteDrugResult`):
+a conflict states that the deletion did not happen and that the record
+changed elsewhere, and locks the delete action until the user
+explicitly reloads/reviews — never an automatic retry.
 Rejected alternatives: a `revision` column in the drug row (breaks the
 byte-identical row contract and import/export identity); a parallel
 revision map in store state (drifts from storage); content-hash tokens
 (identical content defeats ABA safety, and hashes are data, not
 identity); cross-tab refresh alone (timing-dependent, still racy).
-**Consequences.** A stale write is rejected atomically and visibly —
-never silently; conflicting tabs converge by the user explicitly
-re-basing on the current record. `DrugChanges` merge semantics for
+**Consequences.** A stale write or delete is rejected atomically and
+visibly — never silently; conflicting tabs converge by the user
+explicitly re-basing on the current record. `DrugChanges` merge semantics for
 omitted groups are preserved (API callers still compose; the
 full-snapshot form simply cannot be stale without detection), and
 validation/uniqueness failures stay distinguishable from conflicts by

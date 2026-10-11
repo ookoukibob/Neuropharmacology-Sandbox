@@ -288,6 +288,24 @@ was read with — and strips before any row/record/export write).
   validation/uniqueness failures stay distinguishable from conflicts by
   error code — a validation-rejected write does not advance the
   revision.
+- **Deletion is revision-guarded (phase 20 review fix).**
+  `deleteDrug(id, expectedRevision)` compares the token with the stored
+  revision INSIDE the deletion's own read-write transaction
+  (drugs+meta+revisions): a stale token rejects with `CONFLICT` before
+  anything is deleted or stamped — a detail page that loaded before
+  another tab's commit can never delete the newer record (repository
+  tests; `e2e/multitab.spec.ts` scenario 3). A successful delete keeps
+  the tombstone and deliberately does NOT advance it — deletion is the
+  absence of data, not a content mutation, and with the row gone every
+  stale action already fails `NOT_FOUND`; concurrent deletes cannot
+  both succeed because the loser's transaction re-reads the
+  post-delete state (`NOT_FOUND`, never a masked conflict for a record
+  that still exists). In the UI, a delete conflict renders a distinct
+  alert ("Deletion did not happen… the record changed elsewhere"),
+  keeps the record's detail view open and locks the delete action
+  behind an explicit reload — the destructive confirmation step is
+  unchanged, and nothing retries automatically (`DeleteDrugResult` in
+  `store.ts`).
 - The write gate is the repository: application code reaches storage
   only through the injected instance. A hypothetical direct Dexie write
   would neither compare nor bump — a documented bypass for which no
