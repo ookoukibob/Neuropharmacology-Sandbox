@@ -659,7 +659,17 @@ supplied by data.
 - [x] Atomic multi-record operations: replace/import validate inside the
       transaction; failures roll back to the previous library untouched;
       import pipeline is parse → NPSL schema → semantic → preview →
-      transaction, all-or-nothing.
+      transaction, all-or-nothing. The recovery restore transaction's
+      atomicity is additionally verified under a real browser-PROCESS
+      kill (phase 21, audit NV-1): a supervised Chromium process is
+      terminated from the outside at a deterministic in-flight
+      checkpoint of the production restore transaction and a
+      same-profile restart shows the entire previous library
+      byte-identical (drugs, metadata, revision entries), with the
+      committed-restore positive control surviving the same kill
+      (`e2e-crash/crash-durability.spec.ts`, `docs/testing.md` §4.12) —
+      process-crash durability only; hardware power loss, OS/kernel
+      crash, disk failure and controller failure remain unproven.
 - [x] Library metadata `{name, author, description, createdAt, updatedAt,
       dataStatus}` with a documented first-run default; stable UUID ids for
       drugs and targets (never names or positions).
