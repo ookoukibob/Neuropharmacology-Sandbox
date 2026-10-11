@@ -136,8 +136,10 @@ pick source + scope + query        (nothing fetched yet)
 ```
 
 - **Cancellation**: Cancel aborts the in-flight request (AbortSignal);
-  a late answer from a superseded search or fetch is dropped via
-  monotonic sequence guards — it can never overwrite newer state.
+  a request still waiting for its rate-limit slot is cancelled there and
+  never reaches the network; a late answer from a superseded search or
+  fetch is dropped via monotonic sequence guards — it can never
+  overwrite newer state.
 - **Paging**: measurement pages append under a snapshot of the query
   that produced them; paging continues the original query even if the
   on-screen selection changed.
@@ -165,10 +167,45 @@ mirrored; only individually requested records are stored.
 
 ## 5. Transport, validation and failure handling
 
-- One shared `fetchJson` (`src/data/sources/http.ts`): 10 s timeout,
-  one retry on network failure/5xx (never on 4xx), typed
-  `SourceRequestError` codes (`network`, `timeout`, `http`, `invalid-response`,
-  `aborted`) that the UI maps to human-readable, code-specific messages.
+- One shared `fetchJson` (`src/data/sources/http.ts`): 10 s timeout
+  per attempt, one retry on network failure / 5xx / HTTP 429 (never on
+  other 4xx), typed `SourceRequestError` codes (`network`, `timeout`,
+  `http`, `invalid-response`, `aborted`) that the UI maps to
+  human-readable, code-specific messages — including a distinct
+  "source is limiting request rate" (429) and "source is temporarily
+  unavailable" (503/504) wording.
+- **Retry waits are cancellation-aware**: cancelling during the wait
+  between attempts rejects immediately with `aborted` and never starts
+  another network request.
+- **Bounded `Retry-After`**: when a retryable answer (429/5xx) carries
+  a valid `Retry-After` header, the retry waits exactly that long up to
+  a 2 s cap; a longer server-requested wait fails fast with the status
+  and the requested wait attached (`retryAfterMs`) instead of stalling
+  the UI. Unparseable headers fall back to the fixed 300 ms delay.
+- **PubChem pacing** (`src/data/sources/limiter.ts`): one in-memory
+  rate limiter per `createSourceAdapters()` call (one per application
+  runtime) spaces every PubChem PUG REST request start ≥ 250 ms apart
+  (4/second — below PubChem's documented ≤ 5 requests/second policy).
+  It covers concurrent searches, sequential multi-request lookups and
+  retries (retries re-enter through the same paced path); requests
+  cancelled while queued reject with `aborted` and never reach the
+  network. Honest scope: the limiter coordinates only the callers that
+  share its instance — it does **not** coordinate other browser tabs,
+  independent profiles, or other devices, and it keeps no persistent
+  state. ChEMBL publishes no per-second limit, so it keeps the plain
+  bounded transport.
+- **PubChem synonym lookup** stays best-effort: a genuine failure
+  returns valid identity records with empty synonym lists, but
+  cancellation is never downgraded to a synonym failure — an aborted
+  search rejects as `aborted`.
+- **Attribution URLs are validated** (`sourceAttributionSchema`): when
+  present, `url` and `licenseUrl` must be absolute HTTPS URLs, parsed
+  with the platform URL parser. Malformed strings, relative paths,
+  whitespace-only values and non-HTTPS schemes (`javascript:`, `file:`,
+  plain `http:`) are rejected as `INVALID_RECORD` with the offending
+  field named, before any write. Missing optional license fields stay
+  missing — nothing is fetched, dereferenced, or invented during
+  validation.
 - Responses are validated with strict Zod schemas at the network edge;
   unmapped rows are counted (`omitted`) and reported, never silently
   dropped or partially mapped.
@@ -190,6 +227,14 @@ mirrored; only individually requested records are stored.
   import — protection wins).
 - Invalid stored rows found on later reads are quarantined, reported,
   and kept byte-identical for recovery — the established repository rule.
+- **Deterministic tests vs live verification**: timeouts, retries,
+  Retry-After bounds, cancellation (in flight and during waits),
+  limiter spacing/queueing, synonym best-effort semantics and URL
+  validation are all covered by deterministic unit tests with scripted
+  transports (no live API in CI). Only the real-world behaviour of the
+  external services themselves (actual throttling headers PubChem
+  sends, endpoint availability) requires occasional manual live
+  checking.
 
 ---
 

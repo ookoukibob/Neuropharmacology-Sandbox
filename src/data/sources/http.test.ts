@@ -5,7 +5,7 @@
  * All URLs and payloads here are synthetic test data.
  */
 import { describe, expect, it } from 'vitest'
-import { fetchJson } from './http'
+import { fetchJson, parseRetryAfterMs } from './http'
 import { SourceRequestError, type FetchLike } from './types'
 
 function json(body: unknown, status = 200): Response {
@@ -170,5 +170,129 @@ describe('fetchJson — network failure, timeout, cancellation', () => {
     controller.abort()
     const error = await rejection(pending)
     expect(error.code).toBe('aborted')
+  })
+
+  it('does not start another attempt after cancellation during the retry wait', async () => {
+    const controller = new AbortController()
+    let calls = 0
+    const fetchFn: FetchLike = async () => {
+      calls += 1
+      setTimeout(() => controller.abort(), 5) // cancels during the retry wait
+      return json({}, 503)
+    }
+    const error = await rejection(
+      fetchJson('https://source.test/data', {
+        fetchFn,
+        signal: controller.signal,
+        retryDelayMs: 10_000, // would wait 10 s — cancellation must cut it short
+      }),
+    )
+    expect(error.code).toBe('aborted')
+    expect(calls).toBe(1) // the cancelled request never reached a second fetch
+  })
+})
+
+describe('fetchJson — throttling answers (429 / Retry-After)', () => {
+  it('retries a 429 once and succeeds', async () => {
+    let calls = 0
+    const fetchFn: FetchLike = async () => {
+      calls += 1
+      return calls === 1 ? json({}, 429) : json({ ok: true })
+    }
+    await expect(
+      fetchJson('https://source.test/data', { fetchFn, retryDelayMs: 0 }),
+    ).resolves.toEqual({ ok: true })
+    expect(calls).toBe(2)
+  })
+
+  it('honours a bounded Retry-After before the retry (deterministic, injected wait)', async () => {
+    let calls = 0
+    const waits: number[] = []
+    const fetchFn: FetchLike = async () => {
+      calls += 1
+      return calls === 1
+        ? new Response('{}', { status: 429, headers: { 'Retry-After': '2' } })
+        : json({ ok: true })
+    }
+    await expect(
+      fetchJson('https://source.test/data', {
+        fetchFn,
+        retryDelayMs: 0,
+        sleep: async (ms) => {
+          waits.push(ms)
+        },
+      }),
+    ).resolves.toEqual({ ok: true })
+    expect(waits).toEqual([2000])
+    expect(calls).toBe(2)
+  })
+
+  it('fails fast with the status instead of stalling on a long Retry-After', async () => {
+    let calls = 0
+    const waits: number[] = []
+    const fetchFn: FetchLike = async () => {
+      calls += 1
+      return new Response('{}', { status: 429, headers: { 'Retry-After': '120' } })
+    }
+    const error = await rejection(
+      fetchJson('https://source.test/data', {
+        fetchFn,
+        sleep: async (ms) => {
+          waits.push(ms)
+        },
+      }),
+    )
+    expect(error.code).toBe('http')
+    expect(error.status).toBe(429)
+    expect(error.retryAfterMs).toBe(120_000) // preserved for honest messaging
+    expect(calls).toBe(1) // no retry, no wait
+    expect(waits).toEqual([])
+  })
+
+  it('ignores an unparseable Retry-After and uses the fixed delay', async () => {
+    let calls = 0
+    const waits: number[] = []
+    const fetchFn: FetchLike = async () => {
+      calls += 1
+      return calls === 1
+        ? new Response('{}', { status: 503, headers: { 'Retry-After': 'later' } })
+        : json({ ok: true })
+    }
+    await expect(
+      fetchJson('https://source.test/data', {
+        fetchFn,
+        retryDelayMs: 7,
+        sleep: async (ms) => {
+          waits.push(ms)
+        },
+      }),
+    ).resolves.toEqual({ ok: true })
+    expect(waits).toEqual([7])
+    expect(calls).toBe(2)
+  })
+
+  it('does not retry 4xx answers that merely carry a Retry-After header', async () => {
+    let calls = 0
+    const fetchFn: FetchLike = async () => {
+      calls += 1
+      return new Response('{}', { status: 404, headers: { 'Retry-After': '1' } })
+    }
+    const error = await rejection(fetchJson('https://source.test/lookup', { fetchFn }))
+    expect(error.code).toBe('http')
+    expect(error.status).toBe(404)
+    expect(calls).toBe(1)
+  })
+})
+
+describe('parseRetryAfterMs', () => {
+  it('parses delta-seconds and HTTP-dates, rejecting garbage', () => {
+    expect(parseRetryAfterMs('5')).toBe(5000)
+    expect(parseRetryAfterMs(' 12 ')).toBe(12000)
+    const now = (): number => Date.parse('2026-10-11T00:00:00Z')
+    expect(parseRetryAfterMs('Sun, 11 Oct 2026 00:00:02 GMT', now)).toBe(2000)
+    expect(parseRetryAfterMs('Sun, 11 Oct 2026 00:00:00 GMT', now)).toBe(0) // past → immediate
+    expect(parseRetryAfterMs('soon', now)).toBeNull()
+    expect(parseRetryAfterMs('', now)).toBeNull()
+    expect(parseRetryAfterMs(null, now)).toBeNull()
   })
 })

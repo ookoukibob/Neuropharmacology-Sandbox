@@ -26,15 +26,36 @@ const isoDateTime = z.iso.datetime({
   message: 'must be an ISO 8601 date-time (e.g. 2026-10-08T12:00:00Z)',
 })
 
+/**
+ * External attribution links must be absolute HTTPS URLs — validated
+ * with the platform URL parser (not a string regex): malformed strings,
+ * relative paths, whitespace-only values and non-HTTPS schemes
+ * (`javascript:`, `file:`, ...) are rejected with a message that names
+ * the offending field. Validation never fetches or navigates.
+ */
+const httpsUrl = z
+  .string()
+  .min(1, 'must be an absolute HTTPS URL')
+  .refine(
+    (value) => {
+      try {
+        return new URL(value).protocol === 'https:'
+      } catch {
+        return false
+      }
+    },
+    'must be an absolute HTTPS URL',
+  )
+
 export const sourceAttributionSchema = z.looseObject({
   source: z.string().min(1),
   sourceName: z.string().min(1),
   recordId: z.string().min(1),
-  url: z.string().min(1),
+  url: httpsUrl,
   retrievedAt: isoDateTime,
   sourceVersion: z.string().min(1).optional(),
   licenseNotice: z.string().min(1).optional(),
-  licenseUrl: z.string().url().optional(),
+  licenseUrl: httpsUrl.optional(),
 })
 
 export const compoundRecordSchema = z.looseObject({

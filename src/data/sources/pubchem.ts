@@ -10,7 +10,11 @@
  *   connectivity SMILES, InChIKey);
  * - fetches synonyms in one batched request — best-effort: if that request
  *   fails the records are still returned with empty synonym lists rather
- *   than losing the whole search (missing stays missing).
+ *   than losing the whole search (missing stays missing); a cancelled
+ *   search is still cancelled, never downgraded to "missing synonyms";
+ * - paces every PUG REST request through one shared rate limiter (see
+ *   `PUBCHEM_MIN_INTERVAL_MS`), so concurrent searches and sequential
+ *   multi-request lookups together stay below PubChem's per-second line.
  *
  * It offers no experimental-observation endpoint in this version: PubChem
  * bioassay data is not surfaced as Layer B records, and the UI does not
@@ -24,6 +28,7 @@
 import { z } from 'zod'
 import { compoundId, type CompoundIdentifiers, type RemoteCompound } from '../../domain/sources/compound'
 import { fetchJson, type FetchJsonOptions } from './http'
+import { createRateLimiter, type RateLimiter } from './limiter'
 import { numberOf, textOf, uniqueStrings } from './normalize'
 import {
   SourceRequestError,
@@ -34,6 +39,15 @@ import {
 
 const PUBCHEM_PUG_BASE = 'https://pubchem.ncbi.nlm.nih.gov/rest/pug'
 const COMPOUND_PAGE_BASE = 'https://pubchem.ncbi.nlm.nih.gov/compound/'
+
+/**
+ * PubChem's usage policy asks for at most 5 requests per second; this
+ * adapter paces its request STARTS at 4 per second (one shared in-memory
+ * limiter per adapter instance, injected and shared application-wide by
+ * the registry). The limiter coordinates the callers that share it in
+ * one runtime — not other tabs, profiles, or devices.
+ */
+export const PUBCHEM_MIN_INTERVAL_MS = 250
 
 /** Attribution shown with every PubChem record (no license assumed). */
 export const PUBCHEM_LICENSE_NOTICE =
@@ -100,15 +114,26 @@ export interface PubChemAdapterOptions {
   readonly now?: () => string
   /** Transport overrides (timeouts/retries) — defaults are the policy. */
   readonly http?: Omit<FetchJsonOptions, 'fetchFn' | 'signal'>
+  /**
+   * Shared request pacer. The registry injects one limiter so every
+   * PubChem request of the runtime is paced together; adapters created
+   * independently (tests) default to their own fresh instance.
+   */
+  readonly limiter?: RateLimiter
 }
 
 export function createPubChemAdapter(options: PubChemAdapterOptions = {}): SourceAdapter {
   const fetchFn = options.fetchFn
   const now = options.now ?? (() => new Date().toISOString())
   const http = options.http ?? {}
+  const limiter = options.limiter ?? createRateLimiter({ minIntervalMs: PUBCHEM_MIN_INTERVAL_MS })
 
-  function request(url: string, signal?: AbortSignal): Promise<unknown> {
-    return fetchJson(url, {
+  async function request(url: string, signal?: AbortSignal): Promise<unknown> {
+    // One shared limiter covers every PUG REST call of this adapter —
+    // searches, sequential multi-request lookups and retries alike.
+    // A request cancelled while queued never reaches the network.
+    await limiter.acquire(signal)
+    return await fetchJson(url, {
       ...http,
       ...(fetchFn !== undefined ? { fetchFn } : {}),
       ...(signal !== undefined ? { signal } : {}),
@@ -208,7 +233,12 @@ export function createPubChemAdapter(options: PubChemAdapterOptions = {}): Sourc
     return records
   }
 
-  /** Synonym lookup — best-effort; failure never fails the search. */
+  /**
+   * Synonym lookup — best-effort; a genuine failure (network, HTTP,
+   * malformed body) never fails the search because the identity records
+   * are already valid. Cancellation is NOT a synonym failure: an aborted
+   * lookup rejects so the caller's cancel is honoured, not masked.
+   */
   async function fetchSynonyms(
     cids: readonly number[],
     signal?: AbortSignal,
@@ -218,7 +248,8 @@ export function createPubChemAdapter(options: PubChemAdapterOptions = {}): Sourc
     let body: unknown
     try {
       body = await request(`${PUBCHEM_PUG_BASE}/compound/cid/${cids.join(',')}/synonyms/JSON`, signal)
-    } catch {
+    } catch (error) {
+      if (error instanceof SourceRequestError && error.code === 'aborted') throw error
       return byId // best-effort: empty synonyms, identity records still delivered
     }
     const parsed = synonymListSchema.safeParse(body)

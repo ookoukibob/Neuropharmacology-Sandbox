@@ -8,11 +8,17 @@
  *   hung endpoint cannot stall the UI indefinitely;
  * - **cancellation** — a caller-supplied AbortSignal aborts the in-flight
  *   request immediately and rejects with code `aborted` (used for stale
- *   searches and unmounts);
- * - **controlled retries** — network failures and 5xx responses are
- *   retried once (default) with a short delay; 4xx answers, timeouts and
- *   cancellations are never retried, so a bad query or a slow endpoint is
- *   reported promptly instead of hammered;
+ *   searches and unmounts). The wait between retries is cancellation-aware
+ *   too: a cancelled request never starts another attempt;
+ * - **controlled retries** — network failures, 5xx answers and HTTP 429
+ *   (throttling) are retried once (default) after a short delay; every
+ *   other 4xx answer, timeout and cancellation is never retried, so a bad
+ *   query or a slow endpoint is reported promptly instead of hammered;
+ * - **bounded Retry-After** — when a retryable answer supplies a valid
+ *   `Retry-After` header, the wait honours it up to a small cap
+ *   (`maxRetryAfterMs`, default 2 s); a longer server-requested wait fails
+ *   fast with the status and the requested wait attached instead of
+ *   stalling the UI;
  * - **honest errors** — non-2xx statuses carry their status code (and the
  *   source's own fault message when the body has one); a body that is not
  *   JSON is `invalid-response`, never a generic failure.
@@ -20,12 +26,15 @@
  * No request is ever issued by this module on its own — callers pass the
  * URL, so startup and navigation paths stay network-free.
  */
+import { abortableDelay } from './limiter'
 import { SourceRequestError, type FetchLike } from './types'
 
 export const DEFAULT_TIMEOUT_MS = 10_000
-/** Extra attempts after the first (network / 5xx only). */
+/** Extra attempts after the first (network / 5xx / 429 only). */
 export const DEFAULT_RETRIES = 1
 export const DEFAULT_RETRY_DELAY_MS = 300
+/** Upper bound for a server-supplied `Retry-After` wait. */
+export const DEFAULT_MAX_RETRY_AFTER_MS = 2_000
 
 export interface FetchJsonOptions {
   readonly fetchFn?: FetchLike
@@ -34,6 +43,10 @@ export interface FetchJsonOptions {
   readonly timeoutMs?: number
   readonly retries?: number
   readonly retryDelayMs?: number
+  /** Upper bound for a server-supplied `Retry-After` (default 2 s). */
+  readonly maxRetryAfterMs?: number
+  /** Injected wait between attempts — deterministic tests. */
+  readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
 }
 
 const defaultFetch: FetchLike = (input, init) => globalThis.fetch(input, init)
@@ -49,10 +62,18 @@ function faultDetail(body: unknown): string | undefined {
   return undefined
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
+/**
+ * Parse a `Retry-After` header (delta-seconds or HTTP-date) into
+ * milliseconds; `null` when absent or unparseable (then the caller uses
+ * its own fixed delay).
+ */
+export function parseRetryAfterMs(header: string | null, now: () => number = Date.now): number | null {
+  if (header === null) return null
+  const value = header.trim()
+  if (/^\d+$/.test(value)) return Number(value) * 1000
+  const atMs = Date.parse(value)
+  if (Number.isNaN(atMs)) return null
+  return Math.max(0, atMs - now())
 }
 
 async function attemptOnce(url: string, options: FetchJsonOptions): Promise<unknown> {
@@ -106,10 +127,12 @@ async function attemptOnce(url: string, options: FetchJsonOptions): Promise<unkn
       } catch {
         // Non-JSON error body — the status code alone carries the meaning.
       }
+      const retryAfterMs = parseRetryAfterMs(response.headers.get('Retry-After')) ?? undefined
       throw new SourceRequestError(
         'http',
         `HTTP ${response.status}${detail !== undefined ? `: ${detail}` : ''}`,
         response.status,
+        retryAfterMs,
       )
     }
 
@@ -128,10 +151,14 @@ async function attemptOnce(url: string, options: FetchJsonOptions): Promise<unkn
  * GET `url` and parse the JSON body, applying the timeout / retry /
  * cancellation policy above. Rejects only with `SourceRequestError`, so
  * callers can map every failure to an explained, source-specific message.
+ * Retried attempts re-enter through `attemptOnce`, so any pacing applied
+ * around `fetchFn` (e.g. the PubChem limiter) covers retries as well.
  */
 export async function fetchJson(url: string, options: FetchJsonOptions = {}): Promise<unknown> {
   const retries = options.retries ?? DEFAULT_RETRIES
   const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS
+  const maxRetryAfterMs = options.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER_MS
+  const sleep = options.sleep ?? abortableDelay
   let extraAttempts = 0
   for (;;) {
     try {
@@ -140,10 +167,17 @@ export async function fetchJson(url: string, options: FetchJsonOptions = {}): Pr
       if (!(error instanceof SourceRequestError)) throw error
       if (error.code === 'aborted') throw error
       const retryable =
-        error.code === 'network' || (error.code === 'http' && (error.status ?? 0) >= 500)
+        error.code === 'network' ||
+        (error.code === 'http' && ((error.status ?? 0) >= 500 || error.status === 429))
       if (!retryable || extraAttempts >= retries) throw error
       extraAttempts += 1
-      if (retryDelayMs > 0) await delay(retryDelayMs)
+      if (error.retryAfterMs !== undefined && error.retryAfterMs > maxRetryAfterMs) {
+        // Deliberate: a long server-requested wait must not stall the UI.
+        // Fail fast with the status and the requested wait attached.
+        throw error
+      }
+      const waitMs = error.retryAfterMs ?? retryDelayMs
+      if (waitMs > 0) await sleep(waitMs, options.signal) // rejects with 'aborted' on cancel
     }
   }
 }
