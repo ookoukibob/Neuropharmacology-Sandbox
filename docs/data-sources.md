@@ -141,8 +141,13 @@ Layer B; a field the source cannot supply stays absent):
   reference is kept **exactly** as it was — never overwritten, merged or
   relabelled — and the acknowledgement (with both ids) is recorded in
   the parameter's provenance notes;
-- at most one reference per source per target; different source systems
-  may sit side by side.
+- at most one reference per **exact** source identifier per target (the
+  adapter id, compared verbatim — no case folding or trimming);
+  different source systems may sit side by side. Since phase 18I.1 this
+  is an enforced schema rule: a document or record carrying two
+  references with the same `source` — even with identical
+  `sourceTargetId` values — is rejected as a whole, with the duplicate
+  entry's path named; nothing ever merges or deduplicates them silently.
 
 This is the *source's own claim* about which of its records the target
 is — an internal-vs-external identity link, **not** verified biological

@@ -430,7 +430,13 @@ source's reference never conflicts); a same-source id conflict is a
 detail) that refuses without `confirmTargetMismatch` and — after
 acknowledgement — keeps the stored reference verbatim with the
 acknowledgement recorded in provenance notes; `mergeSourceReferences`
-never merges a conflict. **No version bump**: the field is optional and
+never merges a conflict. (Phase 18I.1 closure: the
+one-entry-per-source rule became an enforced schema refinement in
+`receptorTargetSchema` — a second entry with the same exact `source`,
+identical `sourceTargetId` included, rejects the containing record with
+the duplicate's path named; nothing is merged, deduplicated or
+normalized, and rejecting malformed data needed no version bump.)
+**No version bump**: the field is optional and
 additive — old files load unchanged, and older builds (loose objects)
 carry the key through unknown-field preservation (reference-level
 unknown keys are matched by `source`, never position).

@@ -149,9 +149,15 @@ TargetSourceReference
   replaces the internal id (or vice versa) — the two are distinct
   identity spaces.
 - Multiple source systems may hold references on one target; at most
-  **one reference per source**. A same-source id conflict is surfaced
-  to the user (`findTargetMismatch` → `'source-id'`), never merged by
-  the code (`mergeSourceReferences` reports it instead of applying it).
+  **one reference per exact `source` string** — a documented invariant
+  since 18I and an enforced schema rule since 18I.1:
+  `receptorTargetSchema` rejects a second entry with the same `source`
+  (even when its `sourceTargetId` is identical), so no import,
+  create/update or hydration path can introduce an ambiguous list. A
+  same-source id conflict between the *observation* and the stored
+  reference is surfaced to the user (`findTargetMismatch` →
+  `'source-id'`), never merged by the code (`mergeSourceReferences`
+  reports it instead of applying it).
 - The field is optional and additive: older records and `.npsl` files
   omit it, nothing writes `[]` or explicit `undefined`, and no schema
   or file version bump was needed (ADR-20).
