@@ -14,11 +14,15 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test'
  * record keeps the committing tab's state, the rejecting tab's form stays
  * open with its draft intact, and recovery (review the latest record in a
  * new tab without losing the draft, or reload and re-apply) is always an
- * explicit user choice. Each scenario also proves that a fresh session can
- * edit normally afterwards, that the unrelated control record and the
- * library metadata are untouched, and that conflict recovery never
- * replaces target identity, provenance or source references. Every value
- * is synthetic test data; no external request is made.
+ * explicit user choice. The phase-20 review fix extends the same contract
+ * to deletion: a stale tab's guarded delete can never remove a record
+ * another tab has updated — the conflict says the deletion did not
+ * happen, and the delete action is locked until the user reloads/reviews.
+ * Each scenario also proves that a fresh session can edit normally
+ * afterwards, that the unrelated control record and the library metadata
+ * are untouched, and that conflict recovery never replaces target
+ * identity, provenance or source references. Every value is synthetic
+ * test data; no external request is made.
  */
 
 const PROBE_NAME = 'Synthetic Concurrency Probe'
@@ -402,6 +406,107 @@ test('library: a stale rename conflicts instead of reverting a newer parameter e
     // the unchanged stored name before and after the concurrent saves.
     await pageB.goto('/import-export')
     await expect(pageB.getByTestId('library-record-count')).toContainText('2 records')
+    await expect(pageB.getByTestId('library-record-count')).toContainText('Local library')
+  })
+
+  await pageB.close()
+})
+
+test('library: a stale tabs delete cannot remove a record the other tab updated (audit GAP-4, phase 20 review fix)', async ({
+  page,
+  context,
+}) => {
+  const pageB = await context.newPage()
+  await test.step('import two synthetic user-origin records', async () => {
+    await importSeed(page)
+  })
+
+  await test.step('both tabs open the same record; tab A edits and commits', async () => {
+    await openProbe(page)
+    await openProbe(pageB)
+
+    await openEditForm(page, PROBE_NAME)
+    await page.locator('#param-value-1-0').fill('9.9')
+    await page.getByTestId('save-drug').click()
+    await expect(page.getByTestId('param-Kd')).toContainText('9.9 nM')
+    const committedProvenance = await kdProvenanceBadge(page).getAttribute('title')
+    expect(committedProvenance).toMatch(/^Recorded by the user at /)
+
+    // Tab B never reloaded: its view (and the token its delete action
+    // will carry) is still the pre-edit state — 4.2 nM, revision 1.
+    await expect(pageB.getByTestId('param-Kd')).toContainText('4.2 nM')
+  })
+
+  await test.step('tab B deletes from its stale view: the guarded delete is rejected and names the conflict', async () => {
+    await pageB.getByTestId('delete-drug').click()
+    // The explicit destructive-confirmation step is unchanged.
+    await expect(pageB.getByTestId('delete-confirm-text')).toContainText('permanently')
+    await pageB.getByTestId('delete-drug-confirm').click()
+
+    const conflict = pageB.getByTestId('delete-conflict')
+    await expect(conflict).toBeVisible()
+    await expect(conflict).toContainText('Deletion did not happen')
+    await expect(conflict).toContainText('changed elsewhere')
+    // The record is still there — same detail view, no session error.
+    await expect(pageB.getByTestId('drug-detail')).toBeVisible()
+    await expect(pageB.getByTestId('detail-error')).toHaveCount(0)
+    // The delete action is locked until the user reloads/reviews; no
+    // automatic retry happened (exactly one confirm click was needed).
+    await expect(pageB.getByTestId('delete-drug')).toBeDisabled()
+  })
+
+  await test.step('a fresh tab pins the stored state: the record, its science, provenance and source identity are intact', async () => {
+    const fresh = await openProbeFresh(context)
+    await expect(fresh.getByRole('heading', { level: 2, name: PROBE_NAME })).toBeVisible()
+    await expect(fresh.getByTestId('param-Kd')).toContainText('9.9 nM')
+    const freshProvenance = await kdProvenanceBadge(fresh).getAttribute('title')
+    expect(freshProvenance).toMatch(/^Recorded by the user at /)
+    await expect(fresh.getByText(TARGET_NAME, { exact: true })).toBeVisible()
+    await expect(fresh.getByTestId(`target-source-references-${TARGET_ID}`)).toContainText(
+      SOURCE_TARGET_ID,
+    )
+    await expect(fresh.locator('span').filter({ hasText: '#synthetic-fixture' })).toBeVisible()
+    await fresh.close()
+
+    // Tab A (not reloaded) keeps displaying its own committed edit.
+    await expect(page.getByTestId('param-Kd')).toContainText('9.9 nM')
+    await expect(page.getByRole('heading', { level: 2, name: PROBE_NAME })).toBeVisible()
+  })
+
+  await test.step('reload recovery: after reviewing the current record, the delete succeeds with the fresh token', async () => {
+    await pageB.getByTestId('delete-conflict-reload').click()
+    // The reloaded view shows the OTHER tab's committed state in full —
+    // this is the review step before any further destructive action.
+    await expect(pageB.getByRole('heading', { level: 2, name: PROBE_NAME })).toBeVisible()
+    await expect(pageB.getByTestId('param-Kd')).toContainText('9.9 nM')
+    await expect(pageB.getByTestId(`target-source-references-${TARGET_ID}`)).toContainText(
+      SOURCE_TARGET_ID,
+    )
+    await expect(pageB.getByTestId('delete-conflict')).toHaveCount(0)
+    await expect(pageB.getByTestId('delete-drug')).toBeEnabled()
+
+    // The reviewed delete goes through the unchanged confirmation and
+    // succeeds with the CURRENT revision token.
+    await pageB.getByTestId('delete-drug').click()
+    await pageB.getByTestId('delete-drug-confirm').click()
+    await expect(pageB).toHaveURL(/\/library$/)
+    await expect(pageB.getByTestId('drug-list').getByText(PROBE_NAME)).toHaveCount(0)
+
+    // A fresh tab confirms the deletion in storage — only the probe is
+    // gone; the unrelated record stands.
+    const fresh = await context.newPage()
+    await fresh.goto('/library')
+    await expect(fresh.getByTestId('drug-list').getByText(PROBE_NAME)).toHaveCount(0)
+    await expect(fresh.getByTestId('drug-list').getByText(UNRELATED_NAME)).toBeVisible()
+    await fresh.close()
+  })
+
+  await test.step('the unrelated record and the library metadata reflect only the intentional deletion', async () => {
+    await expectUnrelatedUnchanged(pageB)
+    await pageB.goto('/import-export')
+    // One record remains (the unrelated control); the metadata name is
+    // still the pre-existing 'Local library' — CRUD alone stamps times.
+    await expect(pageB.getByTestId('library-record-count')).toContainText('1 record')
     await expect(pageB.getByTestId('library-record-count')).toContainText('Local library')
   })
 
