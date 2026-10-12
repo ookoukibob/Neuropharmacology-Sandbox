@@ -81,6 +81,9 @@ async function fillPK(page: Page, c0: string, time: string, halfLife: string): P
  *    (path.js-line with d attribute of substantial length).
  * 3. The trace's endpoint data matches the expected values within tolerance.
  *
+ * Uses Playwright's auto-retrying locator assertions to wait for Plotly's
+ * asynchronous rendering to complete before evaluating geometry.
+ *
  * Used instead of hover labels because plotly hover is not reliably bound
  * in the dev-server e2e environment.
  */
@@ -88,6 +91,16 @@ async function expectRenderedCurveEndpoints(
   page: Page,
   expected: { x0: number; xLast: number; y0: number; yLast: number },
 ): Promise<void> {
+  const chartContainer = page.getByTestId('curve-chart')
+
+  // Wait for the actual rendered line path to appear with auto-retry.
+  // This is the SVG path element that Plotly renders for line traces.
+  // Plotly rendering is asynchronous, so we must wait for the path element
+  // to exist before checking its geometry.
+  const linePath = chartContainer.locator('.scatterlayer .trace path.js-line')
+  await expect(linePath).toBeVisible({ timeout: 20_000 })
+
+  // Now that the path is visible, evaluate its geometry and trace data.
   const drawn = await page.evaluate(() => {
     const chartContainer = document.querySelector('[data-testid="curve-chart"]')
     if (!chartContainer) return { error: 'No chart container found' }
@@ -102,11 +115,9 @@ async function expectRenderedCurveEndpoints(
       return { error: 'No trace data in gd.data[0]' }
     }
 
-    // Verify actual rendered line path exists with non-empty geometry.
-    // For line traces (mode: 'lines'), Plotly renders a path.js-line with
-    // a d attribute containing the SVG path commands.
+    // The path already passed visibility check above; now verify its geometry.
     const linePath = chartContainer.querySelector('.scatterlayer .trace path.js-line')
-    if (!linePath) return { error: 'No rendered line path found (.scatterlayer .trace path.js-line)' }
+    if (!linePath) return { error: 'No rendered line path found' }
 
     const dAttr = linePath.getAttribute('d')
     if (!dAttr || dAttr.length < 10) {
@@ -126,22 +137,23 @@ async function expectRenderedCurveEndpoints(
     }
   })
 
-  // Assert no errors occurred
-  expect(drawn).not.toHaveProperty('error')
+  // Assert no errors occurred during evaluation
+  if (typeof drawn === 'object' && 'error' in drawn) {
+    throw new Error(`Curve rendering check failed: ${drawn.error}`)
+  }
+
+  // Assert path geometry is substantial (> 100 chars indicates real curve)
   expect(drawn).toHaveProperty('pathRendered', true)
   expect(drawn).toHaveProperty('pathLength')
-  // Path length > 100 indicates a real curve was drawn (not just a stub)
   if (typeof drawn === 'object' && 'pathLength' in drawn) {
     expect(drawn.pathLength).toBeGreaterThan(100)
   }
 
   // Assert endpoint values match expectations
-  if (typeof drawn === 'object' && 'x0' in drawn) {
-    expect(drawn.x0).toBe(expected.x0)
-    expect(drawn.xLast).toBe(expected.xLast)
-    expect(drawn.y0).toBe(expected.y0)
-    expect(drawn.yLast).toBeCloseTo(expected.yLast, 10)
-  }
+  expect(drawn.x0).toBe(expected.x0)
+  expect(drawn.xLast).toBe(expected.xLast)
+  expect(drawn.y0).toBe(expected.y0)
+  expect(drawn.yLast).toBeCloseTo(expected.yLast, 10)
 }
 
 test('occupancy: calculates [D]/([D]+Kd) and shows result, formula and trace', async ({
