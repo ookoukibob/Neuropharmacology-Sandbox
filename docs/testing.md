@@ -301,7 +301,81 @@ Critical workflows only (each one is a spec-level guarantee):
     requests; no sleeps — every wait is an assertion poll. Contract:
     `docs/architecture.md` §4.2, ADR-21.
 
-Config: `playwright.config.ts` (chromium; dev server auto-started).
+12. NV-1 real-browser crash durability (phase 21, audit
+    NV-1 — `e2e-crash/crash-durability.spec.ts`, implemented): a
+    supervised-browser harness that proves the production `.npsb`
+    restore transaction (`restoreRecoveryArchive`, one `rw`
+    transaction over `drugs`+`meta`+`revisions`) is atomic across a
+    real browser-PROCESS kill, and that a committed restore survives
+    the same kill. It runs OUTSIDE the ordinary suite: dedicated
+    config `playwright.crash.config.ts`, `npm run test:crash`, its
+    own CI job (`NV-1 crash durability`), one worker, and its own
+    disposable Chromium processes — the ordinary E2E browser profile
+    is never touched.
+    - **Supervision and process termination**: the test spawns
+      Chromium as its own OS child (`--headless=new`,
+      `--remote-debugging-port=0`, fresh `mkdtemp` user-data dir,
+      launched on `about:blank` — connecting over CDP while the
+      dev-server page is still loading stalls the handshake), drives
+      it via `chromium.connectOverCDP`, and kills the process TREE
+      externally with `taskkill /T /F` (Windows) or SIGKILL to the
+      detached process group (POSIX), awaiting the child `exit` event
+      under a bounded watchdog. A page reload, tab close, graceful
+      shutdown or `transaction.abort()` is never used and would not
+      satisfy the test.
+    - **Checkpoint synchronization (no sleeps)**: test-only
+      instrumentation (`IDBObjectStore.prototype.clear`/`put`
+      wrappers installed with `addInitScript` — no production
+      failpoint) marks the transaction that clears the `drugs` store
+      (the restore's signature, `clearSeen: 1`) and on its SECOND
+      completed drug `put` (`putsInTx: 2`: clear + put #1 applied,
+      put #2 applied at dispatch) sends a SYNCHRONOUS
+      XMLHttpRequest to a test-owned local HTTP server and never
+      returns — the server records the payload and withholds the
+      response, so the renderer main thread blocks inside the
+      transaction's success dispatch while the transaction stays open
+      and uncommitted. The server's receipt is the observable proof
+      the real transaction reached that exact checkpoint; the
+      supervisor kills the process on that signal.
+    - **Crash-scenario assertions**: the same profile is relaunched
+      in a fresh Chromium process; a raw-storage snapshot taken
+      BEFORE the restore (direct `indexedDB.open` reads of
+      drugs/meta/revisions — byte-level truth including unknown
+      extension fields, provenance and ChEMBL source references)
+      deep-equals the post-restart snapshot store-by-store; the UI
+      hydrates the whole old library (3 records incl. the old-only
+      raw-seeded row, old metadata marker, Kd 4.2 nM, provenance
+      badge title, source id); no restore success report exists; the
+      revision entries are exactly the pre-crash values
+      (`{r1: 2, r2: 1}` — no partial bumps survive). The archive
+      carries changed values, one added record, no old-only record,
+      different metadata and a `-0` numeric-sidecar row.
+    - **Positive control (same infrastructure)**: the same restore
+      runs to commit (observable "Restore complete" report plus an
+      observe-mode checkpoint receipt), the browser is killed AFTER
+      the commit, the profile is reopened, and the FULL restored
+      state survives: archive rows byte-equal (incl. the `-0` sidecar
+      row materialized back — pinned in-page with `Object.is`, since
+      the assertion must run in storage's realm), archive metadata,
+      revisions advanced by exactly one per restored id, the
+      old-only record's row absent, and the changed science rendering
+      (Kd 88.8 nM, new source id).
+    - **Determinism and hygiene**: event-driven waits only (HTTP
+      receipt, child `exit` event, Playwright auto-waiting) with
+      bounded watchdogs (180 s test budget, 120 s hook budget, 45 s
+      checkpoint window, 30 s kill window); every run uses fresh temp
+      profiles removed in `finally` blocks plus a suite-start sweep of
+      stale `nv1-*` temp dirs; observed locally: 8/8 consecutive
+      full-suite runs green with checkpoint evidence present and zero
+      leftover processes or directories. What it does NOT prove:
+      hardware power loss, OS/kernel crash, physical disk failure or
+      storage-controller failure.
+
+Config: `playwright.config.ts` (chromium; dev server auto-started) for
+the ordinary suite; `playwright.crash.config.ts` (chromium, 1 worker;
+its own `npm run test:crash` script and CI job) for the NV-1 crash
+harness, which owns its browser-process lifecycle and never shares a
+profile with the ordinary suite.
 
 The specs themselves are held to the same strictness as the application:
 `npm run typecheck:e2e` runs `tsc --noEmit -p tsconfig.e2e.json` over every
@@ -374,7 +448,11 @@ lossy edges are listed in `docs/validation.md` §7.
   test the moment a producer exists.
 - `npm run typecheck` (strict), `npm run typecheck:e2e` (strict, every
   Playwright spec), `npm run lint`, `npm test` and `npm run build`
-  must all pass before merging a change. CI additionally requires
+  must all pass before merging a change. The NV-1 crash-durability
+  suite (`npm run test:crash`, its own CI job) must also pass; it is
+  deterministic, self-contained (dedicated config, its own supervised
+  browser processes and disposable profiles) and never shares a
+  browser profile with the ordinary suite. CI additionally requires
   `npm audit --omit=dev` (production dependency advisories) to pass, and
   reports the full-tree `npm audit` as a non-blocking step because of the
   known dev-only `shadcn` chain — see `docs/architecture.md` §7
@@ -431,6 +509,7 @@ lossy edges are listed in `docs/validation.md` §7.
 | Partial-update repository tests (phase 19, audit GAP-4) | done — `dexieDrugRepository.test.ts` describe `partial DrugChanges merge semantics (audit GAP-4)`: an omitted group composing with an interleaved committed write from a second connection (rename survives a tags-only update; omitted targets/PK/notes byte-equal to the freshly re-read fixture; `updatedAt` restamped, `createdAt` kept); supplied groups replacing wholesale — an `identifiers` replacement dropping the fixture's description (no deep merge) and a `targets` replacement shrinking two rows to one with the removed targets' names absent from the whole raw record; `notes` absent-keeps vs explicit-`undefined`-clears. Pins the repository API's narrower merge independently of the UI's full-snapshot form — unchanged by phase 20 |
 | Optimistic-concurrency repository tests (phase 20, audit GAP-4 remediation) | done — `dexieDrugRepository.test.ts` describe `DexieDrugRepository — optimistic concurrency (phase 20, audit GAP-4)`: a stale-token update rejected atomically with the stored row, the revision entry and the metadata row byte-identical (transaction-level, not compare-then-write — the compare and the bump share one `rw` transaction over drugs+meta+revisions); `CONFLICT` distinct from `NOT_FOUND` (deleted id) and `VALIDATION` (bad payload) by error code; two concurrent writers on one connection and on two connections — exactly one commits, the loser gets `CONFLICT`; a fresh-token retry committing and advancing the revision exactly once, with no replay of the stale attempt; a VALIDATION-rejected write not advancing the revision; delete→recreate (tombstone kept) and merge/replace/restore/import invalidating all prior tokens (ABA-safety); the token never written into rows, exports or hand-edited NPSL (unknown-key carry strips it); hydration attaching revision 0 (absent entry) or the stored value, in one read transaction with the row |
 | Multi-tab write-safety e2e (phase 20, audit GAP-4 remediation; rewrites the phase-19 limitation scenarios) | done — 3 workflows (`e2e/multitab.spec.ts`): two pages in the SAME browser context (one shared IndexedDB) mount edit forms from the same stored snapshot before either saves. Scenario 1: tab A renames and saves; tab B (no reload) saves a tags-only change → typed conflict alert ("Record changed elsewhere") instead of a write — form still open, draft (tags AND mount-time name) intact, no session error banner, fresh-tab verification that A's rename stands and B's tags never reached storage; recovery: open-latest popup shows A's commit while B keeps its draft, dismissing the alert keeps the draft, re-saving the stale draft conflicts AGAIN (no token refresh), `conflict-reload` then a fresh edit commits keeping A's rename; target identity and the ChEMBL source reference intact throughout. Scenario 2: tab A's committed Kd edit (9.9 nM + user provenance) survives tab B's stale rename save as a conflict; a fresh tab pins the exact provenance badge title as committed, the stored name unchanged, source references intact; reload recovery re-applies the rename leaving A's parameter, provenance and source references byte-exact. Both scenarios end with the unrelated control record and library metadata unchanged. Scenario 3 (review fix, revision-guarded deletion): tab A commits a Kd edit; tab B — still on the pre-edit view — opens the unchanged destructive confirmation and confirms → "Deletion did not happen" conflict alert, record view intact, delete action disabled (no auto-retry, no session banner); a fresh tab pins the record with its 9.9 nM value, exact provenance badge title, source identity and tags intact; the explicit reload shows A's committed state (the review step), then the delete succeeds through the same confirmation with the fresh token, leaving the unrelated record and metadata standing. Synthetic fixtures only, no external requests; deterministic interleaving (no sleeps) |
+| NV-1 crash-durability e2e (phase 21) | done — 2 workflows (`e2e-crash/crash-durability.spec.ts`, `npm run test:crash`, dedicated `NV-1 crash durability` CI job): an external process-tree kill of a supervised Chromium at a deterministic in-flight checkpoint of the real restore transaction (sync-XHR stall inside the transaction's success dispatch; the test server's receipt is the observable checkpoint proof; no production failpoint), with same-profile restart verifying byte-level rollback of drugs/meta/revisions (unknown fields, provenance, source references, exact revision entries) and no false success report; positive control — a committed restore survives the same kill with the full restored state (incl. the `-0` sidecar row, pinned in-page with `Object.is`) and revision bumps of exactly one per restored id. Real Chromium + real IndexedDB, never `fake-indexeddb`; 8/8 consecutive local full-suite runs green with zero leftover processes/profiles |
 | Data-sources e2e | done — 6 workflows (`e2e/dataSources.spec.ts`, fixture-mocked HTTP via `e2e/sourceMocks.ts`): zero external requests on page load, PubChem search → explicit selection → confirmed import, ChEMBL measurement fidelity (qualifiers, omitted row counting, unresolved-identity resolution), Layer C promotion with provenance badge, a source target identity stored, shown on a synthetic same-source conflict, acknowledged and never merged (phase 18I), network-failure honesty with nothing written |
 | Accessibility e2e | done — 7 scans (`e2e/a11y.spec.ts`) covering 22 stable states (incl. four Recovery, two Settings and four Data Sources states) with axe-core WCAG A/AA tags; no rules disabled, no violations suppressed (0 violations) |
 | Dependency security gate | done — `npm audit --omit=dev`: 0 production vulnerabilities (blocking in CI); full tree: 7 high, all dev-only, from one advisory with no fixed release (`braces` ≤ 3.0.3, GHSA-vfj7-8cjw-p6xm), reported non-blocking |

@@ -15,7 +15,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:crash": "playwright test -c playwright.crash.config.ts"
   },
   "dependencies": {
     "@types/plotly.js": "^3.0.15",

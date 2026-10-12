@@ -25,5 +25,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["e2e/**/*.ts"]
+  "include": ["e2e/**/*.ts", "e2e-crash/**/*.ts"]
 }

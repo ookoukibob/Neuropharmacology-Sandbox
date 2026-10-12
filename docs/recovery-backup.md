@@ -585,13 +585,16 @@ text it is about to apply (the preview may have run earlier).
 
 ### 8.4 The restore transaction (atomicity contract)
 
-Exactly one Dexie `rw` transaction over `drugs` and `meta`:
+Exactly one Dexie `rw` transaction over `drugs`, `meta` and the local
+`revisions` table (phase 20 added the per-id revision bumps; the
+revision table itself is NOT part of the archive format):
 
 ```
-begin rw(drugs, meta)
+begin rw(drugs, meta, revisions)
   drugs.clear()
   meta.clear()
   for each drugs entry (archive order):  db.drugs.put(value)   // key derived from value.id ≡ entry.key
+                                         bumpRevision(id)      // phase 20: stale edit tokens invalidated
   for each meta entry  (archive order):  db.meta.put(value)
 commit                                   // any throw ⇒ abort
 ```
@@ -603,6 +606,24 @@ commit                                   // any throw ⇒ abort
   (asserted by the existing rollback tests). Outcome: `failed`,
   message "no changes were written; the previous library is intact" plus
   the underlying error (e.g. quota guidance). **No automatic retry.**
+- **Process-crash durability (verified, phase 21).** The rollback
+  guarantee above also holds when the browser PROCESS is killed from the
+  outside while this transaction is genuinely in flight — verified in
+  real Chromium by the supervised crash harness
+  (`e2e-crash/crash-durability.spec.ts`, `npm run test:crash`;
+  `docs/testing.md` §4.12, audit `docs/data-integrity-audit.md` §6):
+  a deterministic in-flight checkpoint (drugs `clear` + the second drug
+  `put` applied, commit not yet reached, proven by the test server's
+  receipt of the instrumentation payload), an external process-tree
+  kill, and a same-profile restart in a fresh Chromium process — after
+  which drugs, metadata and revision entries are byte-identical to the
+  pre-crash raw snapshot and no false restore success is reported. The
+  positive control proves a COMMITTED restore survives the same kill
+  with the full restored state (incl. the `-0` sidecar row, pinned
+  in-page with `Object.is`) and exact revision bumps. Scope honesty:
+  this is process-crash durability; hardware power loss, OS/kernel
+  crash, physical disk failure and storage-controller failure are NOT
+  proven by that test.
 - **Raw writes are confined to this operation.** Restoring verbatim rows
   necessarily bypasses `drugSchema`/`assertWritable()` — and *only* here:
   `drugSchema`, `parseNpsl`, `validateNpslFile`, `importLibrary()` and
