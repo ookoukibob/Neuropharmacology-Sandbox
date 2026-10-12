@@ -371,6 +371,63 @@ Critical workflows only (each one is a spec-level guarantee):
       hardware power loss, OS/kernel crash, physical disk failure or
       storage-controller failure.
 
+13. NV-2 evidence — real-Chromium schema migration (phase 23, audit
+    NV-2 — `e2e/migration.spec.ts`, implemented — runs inside the
+    ordinary `npm run test:e2e` suite): the historical v1/v2/v3 → v4
+    IndexedDB upgrades executed by REAL Chromium's versioned-upgrade
+    engine, independent of the `fake-indexeddb` unit coverage
+    (`database.test.ts`). It does NOT prove correctness against
+    authentic legacy user data — no real user database exists or was
+    simulated, and audit NV-2 stays open (`data-integrity-audit.md`
+    §6 "Evidence upgraded in Phase 23").
+    - **Authentic historical versions and schemas**: every build of
+      this application used `dexie@4.4.6`, which opens IndexedDB at
+      `declared × 10` (`nativeVerToOpen = Math.round(db.verno * 10)`,
+      upgrade hooks normalized with `oldVer / 10`) — so real legacy
+      databases live at native versions 10/20/30 (the v1/v2/v3
+      declarations) and the current build opens at native 40
+      (declared 4). The tests seed at those native versions (never
+      fabricated 1/2/3) with store/index layouts copied from the
+      original schema commits (v1/v2 `b178c0d`, v3 `5146264`,
+      v4 `de95c95`), not from the migration-test fixtures.
+    - **Deterministic same-origin seeding (no sleeps; an IndexedDB
+      database cannot be downgraded)**: an intercepted `page.route`
+      serves a minimal same-origin HTML document that never loads
+      the app bundle; it creates the historical schema with the RAW
+      IndexedDB API, inserts the synthetic rows in one transaction,
+      closes its connection and reports readiness in the DOM — only
+      then does the test navigate to the real app, whose normal open
+      path performs the upgrade. Every scenario runs in its own
+      browser context (isolated storage partition); storage-level
+      assertions are direct raw `indexedDB.open` snapshots (version,
+      per-store index names, every row structured-cloned out) — not
+      Dexie, not app code — while hydration is asserted through the
+      UI (drug list, count, quarantine banner absent) with bounded
+      Playwright waits.
+    - **Three scenarios**: (A) v1 (native 10) → current — only the
+      documented v1→v2 bookkeeping backfill runs: missing
+      `persistenceVersion` added; both-missing timestamps get ONE
+      shared generated stamp (`updatedAt === createdAt`); a lone
+      `createdAt` backfills `updatedAt` from itself; pre-existing
+      timestamps, a fully complete row and metadata byte-identical;
+      unknown fields at five nesting levels byte-identical; additive
+      v3/v4 stores present and empty. (B) v2 (native 20) → current —
+      every stored row byte-identical, with a bookkeeping-incomplete
+      tripwire row proving the v1→v2 backfill never fires on an
+      already-v2 database (complete rows alone could not detect a
+      no-op hook run). (C) v3 (native 30) → current — all
+      pre-existing stores byte-identical (incl. `compounds` /
+      `observations` marker rows), `revisions` added empty, no drug
+      row rewritten by the additive upgrade (same tripwire). All
+      three: the app hydrates every synthetic record with zero
+      quarantined records, and a close/reopen (fresh page load plus
+      a fresh raw connection) deep-equals the post-migration
+      snapshot. Fixtures are unmistakably synthetic (`NV23 …`
+      markers, `example.invalid` URLs).
+    - Run individually with `npx playwright test e2e/migration.spec.ts`
+      (dev server auto-started); it also runs in CI's `E2E smoke
+      test` job with the rest of the ordinary suite.
+
 Config: `playwright.config.ts` (chromium; dev server auto-started) for
 the ordinary suite; `playwright.crash.config.ts` (chromium, 1 worker;
 its own `npm run test:crash` script and CI job) for the NV-1 crash
@@ -482,7 +539,8 @@ invalid provenance blocking the whole import) is tested as policy
 | Playwright config + shell smoke test | done |
 | Engine model tests (matrix §1) | done — 3 models, curves, units, numeric, registry |
 | Persistence DTO mapper tests | done — round trip, validation, unknown-field preservation (previous-record *and* incoming-drug sources, deterministic merge collisions); NPSL serializer negative-zero preservation (numeric `-0` token emission, `Object.is` round trip incl. nested unknown fields/arrays, look-alike strings untouched, collision-proof placeholder with an explicit collision-branch round trip (source data containing the initial marker as a value and as an extension key plus the first extended candidate, so the loop advances twice; marker-like strings and `-0` both verified after `JSON.parse` — audit DI-04 follow-up), byte-stable output for `-0`-free documents, NaN/Infinity still rejected — audit DI-04) |
-| Schema migration tests | done — v1→v2 upgrade: bookkeeping only, scientific + unknown fields survive |
+| Schema migration tests | done — v1→v2 upgrade: bookkeeping only, scientific + unknown fields survive (jsdom + `fake-indexeddb`; the same paths re-run against real Chromium in the next row) |
+| Real-Chromium migration tests (phase 23, audit NV-2 evidence) | done — `e2e/migration.spec.ts` (3 tests, ordinary e2e suite): raw-IndexedDB synthetic legacy databases seeded at the authentic native versions 10/20/30 (dexie@4.4.6 opens at declared × 10 — the same version every historical build used) with store/index layouts verified against the original schema commits, created from an intercepted same-origin page that never loads the app bundle, then upgraded in place by the real application's normal open path; raw snapshots prove the v1→v2 backfill runs bookkeeping-only (one shared stamp for both-missing timestamps, existing values / complete rows / metadata / unknown fields byte-identical), no spurious backfill from v2/v3 (bookkeeping-incomplete tripwire rows), additive v3/v4 stores present and empty, full hydration with zero quarantined records, and reopen stability; **audit NV-2 itself remains OPEN — no authentic legacy user database obtained or inspected** |
 | Repository tests | done — CRUD, metadata stamping, quarantine, atomic replace/import rollback (duplicate drug ids; duplicate target ids leave every stored row byte-identical), NPSL round trip, reload, extension-field matrix (replace/merge/hydration/edit/export/re-import/rollback), targets-replacing unknown-extension preservation (import baseline, reordered same-id replacement + unrelated edit with per-position raw-row asserts, removal/new-id non-transfer boundary — audit GAP-1), merge-vs-quarantined-row collision (rejection with `QUARANTINE_CONFLICT`, raw row byte-identical incl. unknown extension, whole-document no-write with metadata untouched, valid same-id merge still succeeds, authoritative `fromRecord` failure classes enum/structure — audit GAP-3), literal-`-0` NPSL import → raw-row `Object.is` → export token → re-import provenance identity (audit DI-04), optimistic concurrency (phase 20, audit GAP-4): stale token rejected atomically with row + revision + metadata byte-identical, two concurrent writers (one and two connections) never both committing, fresh-token commit advancing the revision exactly once, VALIDATION-rejected writes not advancing it, delete→recreate tombstone monotonicity, merge/replace/restore/import invalidating prior tokens, `CONFLICT`/`NOT_FOUND`/`VALIDATION` codes distinguishable, the token never appearing in rows, exports or hand-edited NPSL (unknown-key carry strips it), hydration attaching revision 0 / the stored entry, partial-`DrugChanges` merge semantics preserved (phase 19 describe), and revision-guarded deletion (review fix): stale delete rejected atomically with row+revision+metadata byte-identical (provenance and source references asserted), current-revision delete succeeding with the tombstone kept and deliberately NOT advanced, repeat deletes failing `NOT_FOUND` regardless of token, delete→re-import invalidating pre-delete edit AND delete tokens while the current token still deletes, and concurrent deletion attempts (one connection and two connections) with exactly one success and the loser failing `NOT_FOUND` |
 | Import pipeline tests | done — parse/schema/semantic/preview classification, metadata extension resolution, envelope-field warning, per-drug duplicate-target-id rejection (rejection, per-drug scope, schema authority for missing/empty ids, mixed-document atomicity, preview reporting) |
 | Store + library UI tests | done — hydration guard, quarantine report, form safeguards, target-metadata preservation on edit (unrelated edit, rename, parameter change, multiple targets, removal + position shift, remove-and-recreate, absent fields stay absent, create mode), identifier-metadata preservation on edit (unrelated rename, synonyms/tags/notes edits, lone description, lone casNumber, absent stays absent, editable fields from form state, no source mutation, create mode), negative-zero parameter preservation on edit (untouched `-0` value + complete provenance kept exactly, `+0` control, explicit-change restamp, cross-target isolation — audit DI-04), transactional `importLibrary` outcome (ok / invalid / failed / committed-refresh-failed), stale-save conflict outcome (phase 20, audit GAP-4): typed `UpdateDrugResult` conflict leaving session drugs/metadata/status and storage untouched, an ordinary failure still setting the session error, fresh-token retry committing; form conflict UI: mount-time token submitted with the edit, create mode token-less, distinct alert with the draft and edit session preserved, dismissal keeping the draft (and the stale token — re-saving conflicts again), open-latest (keeps draft) / reload (labeled: discards draft) recovery actions, ordinary failures shown without recovery actions, double-submit guard dropping a second activation while a save is in flight; delete outcomes (review fix): typed `DeleteDrugResult` conflict with the session error untouched, storage and session preserved, fresh-token retry deleting, `error` outcome for a missing id with the message surfaced, and the detail-view delete-conflict UI (distinct alert naming the conflict and the non-deletion, record view intact, no session banner, single attempt with the page's token, delete action disabled until the explicit reload/recovery action re-hydrates) |

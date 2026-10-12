@@ -453,11 +453,17 @@ A missing test alone is not a defect; each gap below states what the code
 | --- | --- | --- | --- |
 | NV-3 | Exhaustive per-column CSV round trip (all 57 columns) | `src/features/import-export/csv/csvColumnContract.test.ts` (25 committed tests, run with the unit suite): the full ordered 57-header pinned as an independent literal against `CSV_HEADERS` (drift detection); a fully populated marker library asserting the intended exported value of **every** column (all five provenance variants with JSON remainders, negative and scientific-notation numbers, hostile text — commas/quotes/newlines/semicolons/leading whitespace/formula triggers); one-row-per-target, drug-level repetition and the single empty-target row; the complete 56-destination import surface (bijection asserted, `origin` the sole tested exclusion) round-tripped through the real `parseCsv` → explicit mapping → NPSL schema validation → real Dexie repository commit and read-back (raw row + hydrated record incl. `revision`); every transformation/loss boundary asserted as policy (guard apostrophes kept verbatim, edge trim, empty→absent, provenance stamping `{type:'user'}`, `origin` re-stamp, metadata `dataStatus`/`updatedAt` stamping, unknown-field drop, `-0`→`'0'`, list `';'` semantics, conflicting repeated metadata / duplicate target ids / unknown action / invalid provenance blocking the whole import). Contract table: `docs/csv-column-contract.md` | **Verified.** All 57 columns have an explicit, executable contract; every importable column's destination value is asserted after mapping/import, not just via export snapshots. CSV remains a **lossy projection by contract** (not a backup): the deliberate losses above are documented per column and the export-panel CSV-loss warning stays in place. No silent data-loss or scientific-integrity defect was found; no production code changed. Remaining limits: the UI mapping flow is covered by one end-to-end component test (not per column); CSV cannot carry `-0`, unknown fields, or the pre-import `origin` by design |
 
+**Evidence upgraded in Phase 23 (NV-2 remains open):**
+
+| ID | Path | Method and evidence | Result |
+| --- | --- | --- | --- |
+| NV-2 | v1/v2/v3 → v4 schema migration (upgrade mechanism) | Real-Chromium migration suite `e2e/migration.spec.ts` (3 tests in the ordinary `npm run test:e2e` suite; `docs/testing.md` §4.13): synthetic legacy databases created with the RAW IndexedDB API at the authentic Dexie-native versions — `dexie@4.4.6`, the version every historical build used, opens at `declared × 10` (v1/v2/v3 eras = native 10/20/30; current declared v4 = native 40) — with store/index layouts copied from the original schema commits (v1/v2 `b178c0d`, v3 `5146264`, v4 `de95c95`), not from the migration-test fixtures. Seeding runs in a same-origin intercepted document that never loads the app bundle (raw-IDB create + one write transaction, connection closed, DOM readiness — no sleeps; each scenario in its own isolated browser context); only then does the real application open the same database and drive Chromium's actual versionchange upgrade. All storage assertions are direct raw `indexedDB.open` snapshots (version, per-store index names, every row structured-cloned) — no Dexie, no app code: **v1 → current** reaches the current schema (native 40 ⇔ declared 4) with ONLY the documented v1→v2 bookkeeping backfill — missing `persistenceVersion` added; both-missing timestamps get one shared generated stamp; a lone `createdAt` backfills `updatedAt` from itself; pre-existing timestamps, a fully complete row and metadata byte-identical; unknown fields at five nesting levels byte-identical; additive v3/v4 stores present and empty. **v2 → current** and **v3 → current**: every row byte-identical across all pre-existing stores — with a bookkeeping-incomplete tripwire row proving the v1→v2 backfill never fires on an already-v2/v3 database — `revisions` added empty, no drug row rewritten by the additive upgrade. All three: the app hydrates every synthetic record with zero quarantined records (UI-level), and a close/reopen (fresh page load + fresh raw connection) deep-equals the post-migration snapshot. Fixtures are unmistakably synthetic (`NV23 …` markers, `example.invalid` URLs); no production code, schema or migration behavior was modified | **Evidence improved; NV-2 NOT verified — remains open.** The upgrade mechanism is now proven in real Chromium (previously only `fake-indexeddb`) against synthetic legacy rows built from the verified historical schemas. It cannot establish correctness against authentic legacy user data: no real user database has been obtained or inspected, none was simulated, and real historical rows' full content diversity (formats actually written by deployed builds, hand-edited or foreign-writer databases) remains unverified. No migration defect was observed |
+
 **Not verified (blocker stated):**
 
 | ID | Path | Blocker |
 | --- | --- | --- |
-| NV-2 | v1→v2 migration against real legacy user data | No real user database is accessible (by design); only synthetic fixtures (`database.test.ts`) |
+| NV-2 | v1→v2 migration against real legacy user data | No real user database is accessible (by design), and **none has ever been obtained or inspected**. Evidence now spans two synthetic layers — the `fake-indexeddb` unit fixtures (`database.test.ts`) and, since Phase 23, real-Chromium synthetic legacy databases at the verified historical schemas and authentic native versions (§6 "Evidence upgraded in Phase 23") — but synthetic data cannot substitute for authentic historical user databases; NV-2 stays open until appropriately authorized real data becomes available |
 
 ---
 
@@ -547,7 +553,10 @@ the remaining open item is the unverified path NV-2, reported
 separately for prioritization (NV-1 was closed by the Phase 21
 real-browser crash harness — §6 "Verified in Phase 21"; NV-3 was
 closed by the Phase 22 exhaustive CSV column-contract suite — §6
-"Verified in Phase 22").
+"Verified in Phase 22"). Phase 23 upgraded NV-2's EVIDENCE — real
+Chromium migration coverage against synthetic legacy databases —
+without closing it (§6 "Evidence upgraded in Phase 23"); its
+authentic-user-data requirement remains unmet.
 
 **No finding in this audit warrants emergency remediation ahead of the normal
 sequence:** every loss requires a specific trigger (records carrying
@@ -564,10 +573,16 @@ description/CAS, a spec-violating file, comma-bearing lists, `-0` values), and
    IndexedDB; transaction semantics in NV-1 were therefore not
    exercised *by this report's reproductions*. Phase 21 later exercised
    them in real Chromium with a process-kill harness (§6 "Verified in
-   Phase 21"); the jsdom/`fake-indexeddb` limitation still applies to
-   every other reproduction in this report.
-3. **No real user data was accessed.** Migration verdicts rest on synthetic
-   fixtures (NV-2).
+   Phase 21"), and Phase 23 exercised the schema-migration upgrade
+   paths in real Chromium against synthetic legacy databases (§6
+   "Evidence upgraded in Phase 23"); the jsdom/`fake-indexeddb`
+   limitation still applies to every other reproduction in this report.
+3. **No real user data was accessed.** Migration verdicts rest on
+   synthetic fixtures (NV-2) — at two layers since Phase 23:
+   `fake-indexeddb` unit fixtures and the real-Chromium synthetic
+   legacy databases seeded from the verified historical schemas.
+   Neither is authentic historical user data, which remains
+   unavailable (NV-2 open).
 4. **Seven temporary experiments (`R1`–`R7`)** are local results recorded in
    §5/§6 — they are *not* committed tests; only the committed suites named in
    §4 constitute permanent coverage. All scratch code was removed before this
