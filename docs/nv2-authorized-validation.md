@@ -133,11 +133,16 @@ Chromium's layout:
   profile**; older Chromium builds must not be introduced to "match"
   history. The browser may upgrade profile internals **in place** —
   another reason only the disposable copy is ever opened.
-- **Locking and completeness.** The copy must be made while the source
-  browser is not running (owner-supplied copies satisfy this), and the
-  copy must include the whole profile directory (or at minimum the
-  origin's `IndexedDB` subtree plus the minimal profile metadata next to
-  it). No second process may hold the disposable copy open.
+- **Locking and completeness.** The source browser — and any other
+  process that could write the profile — must have been **fully exited
+  before the copy was made**, and the owner must confirm and document
+  that fact. Merely owning the copy does not prove it was taken from a
+  quiescent, consistent profile. If the owner cannot confirm a
+  fully-exited copy, request a fresh, consistent owner-prepared copy or
+  stop — never open the original to inspect it. The copy must include
+  the whole profile directory (or at minimum the origin's `IndexedDB`
+  subtree plus the minimal profile metadata next to it), and no second
+  process may hold the disposable copy open.
 - **Profile-format constraints.** The disposable profile is opened only
   by this Chromium build via a supervised launch — never merged back
   into, or compared with, the owner's profile layout.
@@ -152,18 +157,30 @@ record the best available pre-migration evidence **through raw APIs
 only** (no Dexie, no app code — the same discipline as
 `e2e/migration.spec.ts`):
 
-1. Inventory without opening: `indexedDB.databases()` from a
-   same-origin probe page lists the database name and its **current
-   native version** without any upgrade.
-2. Schema without upgrading: a versionless `indexedDB.open(name)` (no
-   version argument) opens the existing database at its existing
-   version — no `versionchange` fires. Read `objectStoreNames`, each
-   store's `keyPath` and its index names/paths inside a read-only
-   transaction.
-3. Compare against the expected generations (`src/data/db/database.ts`,
+1. Inventory first, on the correct origin: call
+   `indexedDB.databases()` from a same-origin probe page. It lists
+   database names and their **current native versions** without
+   opening anything — and therefore without any upgrade.
+2. Locate the exact expected database by name
+   (`neuropharmacology-sandbox`, `src/data/db/database.ts`).
+3. Confirm that it **exists** and that its **`version` is defined**.
+   If the database is absent, or its version is undefined, **stop
+   without ever calling `indexedDB.open(name)`** and document why:
+   per MDN, a versionless `indexedDB.open(name)` against a database
+   that does not exist **creates** it at version 1 — fabricating a
+   misleading empty "historical" database inside the disposable copy
+   and blurring a missing or wrong origin partition with a real one.
+4. Only now inspect the schema without upgrading: a versionless
+   `indexedDB.open(name)` (no version argument) opens the *existing*
+   database at its existing version — no `versionchange` fires. Read
+   `objectStoreNames`, each store's `keyPath` and its index
+   names/paths inside a read-only transaction.
+5. Compare against the expected generations (`src/data/db/database.ts`,
    schemas verified from the original commits `b178c0d` / `5146264` /
    `de95c95`): native 10 ⇔ declared v1, 20 ⇔ v2, 30 ⇔ v3, 40 ⇔ current
-   v4. **Anything else is an unexpected schema — stop (§8).**
+   v4. **Anything else is an unexpected schema — stop (§8).** The
+   starting version also fixes which migration path the run may later
+   claim — see the table in §5 step 2.
 
 The probe page is a minimal same-origin document served by request
 interception (or a tiny static file on the app server) that never loads
@@ -182,17 +199,32 @@ then drive it over CDP (`chromium.connectOverCDP`). Steps:
    checksum, pristine disposable copy, working path outside the repo.
 2. **Pre-migration evidence** (§4.3) against the disposable copy:
    native version, store/index inventory, sanitized per-store counts.
-   If the native version is not one of 10/20/30/40 → stop.
+   If the native version is not one of 10/20/30/40 → stop. The
+   starting version fixes which migration path this run can evidence:
+   - **native 10** — the only starting point that exercises the
+     **v1→v2 bookkeeping hook** (the path NV-2 is specifically about),
+     followed by the additive v3/v4 upgrades;
+   - **native 20 or 30** — starts at v2/v3; the v1→v2 hook does
+     **not** run. These starts can yield useful authentic
+     preservation/hydration evidence, but the report must state
+     explicitly that the v1→v2 path was **not exercised**;
+   - **native 40** — already the current schema; opening it exercises
+     **no historical upgrade** (baseline/hydration check only) and
+     must never be reported as a legacy-migration pass.
 3. **Serve the current app on the exact historical origin** (dev or
-   preview server on the recorded port) and start network containment
-   (§7) on the validation context *before* navigation.
+   preview server on the recorded port) and establish + **verify** the
+   independently enforced outbound-network boundary (§7) — with the
+   supplementary request interception installed on the validation
+   context — *before* any navigation. If the boundary cannot be
+   established and verified, stop here: no app navigation happens.
 4. **Run the current application** against the disposable copy: navigate
    the supervised browser to the app origin; the normal open path
    performs the real upgrade (v1-era DBs get exactly the documented
    v1→v2 bookkeeping backfill — shared-stamp semantics; v2/v3-era DBs
    get the additive v3/v4 stores only; `src/data/db/database.ts`).
-   Record: upgrade outcome (expected native 40), console/storage errors,
-   request-log state.
+   Record: the migration path actually exercised (per step 2's
+   starting version), upgrade outcome (expected native 40),
+   console/storage errors, boundary and interception-log state.
 5. **In-app validation, sanitized.** Library hydration via the UI
    (drug list, count, quarantine banner) plus raw post-migration
    snapshots (version, store/index inventory, counts). Record only
@@ -202,8 +234,9 @@ then drive it over CDP (`chromium.connectOverCDP`). Steps:
    version (expect 40 — reopening must not mutate again) and compare
    sanitized snapshots/hydration counts with step 5.
 7. **Preserve evidence, then deliberate cleanup.** Write the sanitized
-   report (§7 template) and keep the provenance statement, pre-migration
-   evidence and request-log summary at the local working path. Then
+   report (§7 template) and keep the provenance statement,
+   pre-migration evidence, boundary-verification record and
+   interception-log summary at the local working path. Then
    delete **only** the disposable copy (documented, deliberate command —
    e.g. removing that one directory); the owner-supplied original and
    all reports remain untouched.
@@ -252,8 +285,13 @@ Hard rules — the report and the repository must obey all of them:
     reopen/persistence result);
   - sanitized counts: records read, hydrated, quarantined, failed or
     otherwise unhandled, per store; metadata/revision summary;
-  - network-containment summary (§ below) and test-execution metadata
-    (tool versions, dates, operator role).
+  - the migration path actually exercised (starting native version;
+    whether the v1→v2 hook ran — stated explicitly as "not exercised"
+    for native-20/30 starts and "no historical upgrade" for native-40);
+  - network-boundary summary (§ below): the mechanism actually
+    enforced, how its enforcement was verified, supplementary
+    interception-log counts, and its limitations — plus
+    test-execution metadata (tool versions, dates, operator role).
 - **No record contents.** Never print names, notes, citations, source
   URLs, provenance objects or arbitrary extension values. When errors
   must identify affected records, report **counts and field paths**
@@ -261,18 +299,59 @@ Hard rules — the report and the repository must obey all of them:
 - **Checksums/fingerprints stay local** (§3.5): they exist for
   transfer integrity and reproducibility, and are shared only with
   explicit owner approval.
-- **Verified local-only claim.** The run may claim "no data left the
-  machine" only if containment was actually verified: the validation
-  context installs request interception **before** navigation —
-  loopback (the local app server) is allowed; every other request is
-  **logged (method + host only) and aborted**; the session ends with an
-  assertion that the log contains no external hosts and no data-derived
-  strings in URLs, and the sanitized log summary goes into the report.
-  This verifies the *validation browser session's* network activity —
-  the report must say exactly that, and nothing broader. The
-  application normally does reach external data sources at runtime;
-  during validation those attempts are blocked and counted, not
-  permitted.
+- **Network containment — an enforced boundary, not a browser request
+  log.** Playwright request interception (`context.route()` and
+  friends) is **supplementary observability and blocking for the
+  requests it actually intercepts — never the security boundary**.
+  Playwright documents that `BrowserContext.route()` does not
+  intercept requests handled by Service Workers and recommends
+  disabling Service Workers when relying on routing; a reopened
+  physical profile may also carry extensions, persisted Service
+  Workers, sync and browser background networking that generate
+  traffic outside the ordinary page-request path. A request log, or
+  the mere absence of requests in one, is **not** proof of outbound
+  denial.
+- **"No data left the machine" requires an independently enforced
+  outbound-network boundary** for the browser process (or the whole
+  isolated validation environment): the only permitted destination is
+  the explicitly approved loopback app/probe server, and outbound
+  traffic to **every other destination must be blocked by a mechanism
+  outside the browser** (an OS firewall rule set, a network
+  namespace/container with loopback-only egress, an offline machine,
+  or an equivalent, actually-enforced local mechanism). This protocol
+  deliberately provides no universal command for every operating
+  system — the operator selects a mechanism appropriate to the
+  environment, **enforces it, and independently verifies that it
+  actually denies outbound traffic** (e.g. an outbound attempt from an
+  equivalent process is observed to fail) before the application is
+  navigated. If a boundary cannot be established and verified, the run
+  **stops before navigating the current application** and must not
+  claim local-only.
+- **Profile-side traffic sources, accounted for before validation.**
+  On the disposable copy, before navigation: extensions
+  disabled/removed; persisted Service Workers disabled or removed and
+  verified absent for the app origin, so a stale worker **cannot make
+  the browser execute an old application bundle instead of the
+  current application** (verify the served bundle the page actually
+  runs); sync and browser background networking disabled. Anything
+  that cannot be disabled is explicitly inspected and accounted for
+  in the report.
+- **The supplementary interception log stays.** With the boundary
+  enforced, the validation context still installs request
+  interception before navigation — loopback allowed, everything else
+  logged (method + host only) and aborted — and the sanitized log
+  summary (counts by host, any data-derived strings in URLs) goes
+  into the report as corroborating observability. The application
+  normally does reach external data sources at runtime; under an
+  enforced boundary those attempts fail at the boundary and are
+  counted — never permitted.
+- **The claim never exceeds the mechanism.** The sanitized report
+  records the boundary mechanism actually enforced, how its denial
+  was verified, the supplementary log summary, and the mechanism's
+  limitations, and states exactly that and nothing broader. The
+  authenticity restrictions above are absolute regardless of
+  boundary: source data is never uploaded to GitHub, AI agents,
+  external services or CI in any scenario.
 
 ## 8. Hard stop conditions
 
@@ -286,8 +365,10 @@ and record the reason in the (sanitized) report:
   match no historical generation);
 - any indication the **original** (not the disposable copy) could be
   mutated or was touched;
-- any unexpected network transfer (containment log shows an external
-  host, or a request we cannot attribute to the local app server);
+- any unexpected network transfer (an external host observed in the
+  supplementary interception log, outbound traffic the enforced
+  boundary (§7) did not deny, or a request we cannot attribute to the
+  local app server);
 - unreadable database (probe fails, copy incomplete, LevelDB errors);
 - unsupported browser/origin setup (infeasible per §4.2);
 - migration failure, hydration failures or quarantine counts that the
@@ -314,7 +395,16 @@ sanitized evidence for independent review:
 - [ ] The migration ran through the **real application / IndexedDB
       upgrade path** on an isolated **copy** of the authentic database
       (Class A) — or an equally strong method, justified **in advance**
-      in the report and accepted on review.
+      in the report and accepted on independent review. The evidence
+      must actually exercise the **v1→v2 path** NV-2 is about: only a
+      Class A run whose authentic database starts at **native 10** does
+      so; a run starting at native 20 or 30 does **not** exercise the
+      v1→v2 hook and must say so explicitly (it cannot close NV-2 by
+      itself); a run starting at native 40 is **no legacy-migration
+      pass at all** (baseline/hydration only). Any substitute weaker
+      than an authentic native-10 upgrade requires the same explicit,
+      in-advance justification and independent-review acceptance as
+      the clause above.
 - [ ] Documented before/after result for the migration contract,
       including **failed, quarantined or otherwise unhandled records**
       (counts + field paths).
@@ -322,13 +412,15 @@ sanitized evidence for independent review:
       stated limitation if not).
 - [ ] Reproducible sanitized evidence sufficient for an independent
       reviewer to re-evaluate the conclusion (provenance statement,
-      versions, inventories, counts, containment summary — no contents).
+      versions, inventories, counts, boundary-verification and
+      interception-log summaries — no contents).
 - [ ] A transparent statement of remaining limitations (single owner's
       data ≠ universal; class actually achieved; anything untested).
 
 **Insufficient on its own, ever:** a synthetic database (class C), an
-undocumented export, a successful build, green CI, this runbook's
-existence, or any combination of those.
+undocumented export, a successful build, green CI, a Class A run that
+never exercised the v1→v2 path (native 20/30/40 starts), this
+runbook's existence, or any combination of those.
 
 ## 10. Outcome statement
 

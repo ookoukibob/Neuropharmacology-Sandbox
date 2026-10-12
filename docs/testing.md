@@ -435,10 +435,20 @@ Critical workflows only (each one is a spec-level guarantee):
       (`docs/nv2-authorized-validation.md`): an authorization-first
       runbook for validating an authentic legacy database in the
       future, against an isolated disposable copy on the exact
-      historical origin. Documentation-only readiness — the synthetic
-      coverage above remains mechanism evidence (evidence class C in
-      the runbook's taxonomy) and never a substitute for authentic
-      data; NV-2 stays open.
+      historical origin. Review-hardened in the same PR: documented
+      owner confirmation that the profile was copied after its
+      browser fully exited; a never-create probe order
+      (`indexedDB.databases()` existence/version check *before* any
+      versionless `open`, which would otherwise create an empty
+      database); an **independently enforced outbound-network
+      boundary** required for any local-only claim (Playwright
+      routing is supplementary observability, not the boundary);
+      and explicit reporting of which starting native version's
+      path was exercised (only native 10 runs the v1→v2 hook).
+      Documentation-only readiness — the synthetic coverage above
+      remains mechanism evidence (evidence class C in the runbook's
+      taxonomy) and never a substitute for authentic data; NV-2
+      stays open.
 
 Config: `playwright.config.ts` (chromium; dev server auto-started) for
 the ordinary suite; `playwright.crash.config.ts` (chromium, 1 worker;
