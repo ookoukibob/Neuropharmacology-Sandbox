@@ -87,7 +87,7 @@ async function fillPK(page: Page, c0: string, time: string, halfLife: string): P
  * Used instead of hover labels because plotly hover is not reliably bound
  * in the dev-server e2e environment.
  */
-async function expectRenderedCurveEndpoints(
+async function expectCurveTraceEndpoints(
   page: Page,
   expected: { x0: number; xLast: number; y0: number; yLast: number },
 ): Promise<void> {
@@ -371,7 +371,7 @@ test('curve validation: a cleared C0 blocks Update curve with the schema message
 
   // Assert the chart rendered the expected PK curve with actual SVG path geometry:
   // C(0) = 100 µM and C(10) = 100 · 2^−10 ≈ 0.09765625 µM.
-  await expectRenderedCurveEndpoints(page, { x0: 0, xLast: 10, y0: 100, yLast: 0.09765625 })
+  await expectCurveTraceEndpoints(page, { x0: 0, xLast: 10, y0: 100, yLast: 0.09765625 })
 
   // The user clears C0 entirely: the existing report is marked stale.
   await page.getByTestId('input-c0-value').fill('')
@@ -404,7 +404,7 @@ test('curve validation: a cleared C0 blocks Update curve with the schema message
   await expect(page.getByTestId('curve-chart')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('no-curve')).toBeHidden()
   // Assert the recovered chart has re-rendered the curve with correct endpoints.
-  await expectRenderedCurveEndpoints(page, { x0: 0, xLast: 10, y0: 100, yLast: 0.09765625 })
+  await expectCurveTraceEndpoints(page, { x0: 0, xLast: 10, y0: 100, yLast: 0.09765625 })
 })
 
 test('curve validation: a cleared C0 also blocks the automatic scale-change re-apply (phase 27)', async ({
@@ -426,7 +426,7 @@ test('curve validation: a cleared C0 also blocks the automatic scale-change re-a
   await expect(page.getByTestId('x-scale-linear')).toBeChecked()
   // Assert the chart rendered with actual SVG path geometry.
   // C(1) = 50 µM and C(10) ≈ 0.09765625 µM for the 1–10 h range.
-  await expectRenderedCurveEndpoints(page, { x0: 1, xLast: 10, y0: 50, yLast: 0.09765625 })
+  await expectCurveTraceEndpoints(page, { x0: 1, xLast: 10, y0: 50, yLast: 0.09765625 })
 
   // Clear C0, then change the x-axis scale: the store auto-applies the
   // curve settings, which must hit the same validation gate. The radio
