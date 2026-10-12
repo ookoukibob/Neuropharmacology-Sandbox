@@ -692,7 +692,7 @@ function csvRow(fields: Record<string, string>): string {
 }
 
 describe('CSV column contract — transformation and loss policy', () => {
-  it('loses the sign of negative zero: CSV emits "0" (NPSL sidecar remains the lossless path)', () => {
+  it('loses the sign of negative zero: CSV emits "0" (NPSL keeps the -0 token; the NPSB sidecar is the archive-only mechanism)', () => {
     const minusZero: Drug = {
       id: 'nv3-negzero',
       origin: 'user',

@@ -84,8 +84,14 @@ separate destinations; no substitution or inference is ever applied.
 | 32–36 | `ic50`, `ic50_unit`, `ic50_provenance_type`, `ic50_provenance_source`, `ic50_provenance_json` | `ic50.*` | same as Kd | Same five-column contract. |
 
 ¹ Exception within "exact": IEEE `-0` serializes as `'0'` (`String(-0)`)
-— CSV cannot carry the sign of negative zero. The `-0` numeric sidecar
-exists only in the NPSL/recovery formats (see `recovery-backup.md` §8).
+— CSV cannot carry the sign of negative zero. The two interchange
+formats do preserve it, by different mechanisms: **NPSL** (`.npsl`) is a
+JSON document whose serializer emits the numeric JSON token `-0`, so the
+sign round-trips as a plain number — not a sidecar (`npsl-format.md`,
+"Numbers stay numbers"); the **NPSB** recovery archive stores raw rows
+that plain `JSON.stringify` cannot represent faithfully and therefore
+uses its documented numeric sidecar (`recovery-backup.md` §6.3). CSV is
+the only one of the three that loses the sign.
 
 ## Pharmacokinetic columns (37–57)
 
