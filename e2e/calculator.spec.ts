@@ -72,33 +72,76 @@ async function fillPK(page: Page, c0: string, time: string, halfLife: string): P
 }
 
 /**
- * Assert the endpoints the rendered chart actually drew, read back from
- * the chart's committed trace data (the exact arrays plotly rendered the
- * SVG from). Used instead of hover labels because plotly hover is not
- * reliably bound in the dev-server e2e environment.
+ * Assert that Plotly has actually rendered the expected curve with visible
+ * SVG path geometry, not merely that trace data exists in memory.
+ *
+ * This helper verifies:
+ * 1. The Plotly graph container exists and has initialized (gd.data present).
+ * 2. A scatter trace line path with non-empty geometry has been drawn
+ *    (path.js-line with d attribute of substantial length).
+ * 3. The trace's endpoint data matches the expected values within tolerance.
+ *
+ * Used instead of hover labels because plotly hover is not reliably bound
+ * in the dev-server e2e environment.
  */
 async function expectRenderedCurveEndpoints(
   page: Page,
   expected: { x0: number; xLast: number; y0: number; yLast: number },
 ): Promise<void> {
   const drawn = await page.evaluate(() => {
-    const gd = document.querySelector('[data-testid="curve-chart"] .js-plotly-plot') as
+    const chartContainer = document.querySelector('[data-testid="curve-chart"]')
+    if (!chartContainer) return { error: 'No chart container found' }
+
+    const gd = chartContainer.querySelector('.js-plotly-plot') as
       | (Element & { data?: Array<{ x?: number[]; y?: number[] }> })
       | null
-    const trace = gd?.data?.[0]
-    if (!trace?.x || !trace.y || trace.x.length === 0) return null
+    if (!gd) return { error: 'No .js-plotly-plot found' }
+
+    const trace = gd.data?.[0]
+    if (!trace?.x || !trace.y || trace.x.length === 0) {
+      return { error: 'No trace data in gd.data[0]' }
+    }
+
+    // Verify actual rendered line path exists with non-empty geometry.
+    // For line traces (mode: 'lines'), Plotly renders a path.js-line with
+    // a d attribute containing the SVG path commands.
+    const linePath = chartContainer.querySelector('.scatterlayer .trace path.js-line')
+    if (!linePath) return { error: 'No rendered line path found (.scatterlayer .trace path.js-line)' }
+
+    const dAttr = linePath.getAttribute('d')
+    if (!dAttr || dAttr.length < 10) {
+      return {
+        error: 'Line path has no substantial geometry',
+        dLength: dAttr?.length || 0,
+      }
+    }
+
     return {
       x0: trace.x[0],
       xLast: trace.x[trace.x.length - 1],
       y0: trace.y[0],
       yLast: trace.y[trace.y.length - 1],
+      pathRendered: true,
+      pathLength: dAttr.length,
     }
   })
-  expect(drawn).not.toBeNull()
-  expect(drawn?.x0).toBe(expected.x0)
-  expect(drawn?.xLast).toBe(expected.xLast)
-  expect(drawn?.y0).toBe(expected.y0)
-  expect(drawn?.yLast).toBeCloseTo(expected.yLast, 10)
+
+  // Assert no errors occurred
+  expect(drawn).not.toHaveProperty('error')
+  expect(drawn).toHaveProperty('pathRendered', true)
+  expect(drawn).toHaveProperty('pathLength')
+  // Path length > 100 indicates a real curve was drawn (not just a stub)
+  if (typeof drawn === 'object' && 'pathLength' in drawn) {
+    expect(drawn.pathLength).toBeGreaterThan(100)
+  }
+
+  // Assert endpoint values match expectations
+  if (typeof drawn === 'object' && 'x0' in drawn) {
+    expect(drawn.x0).toBe(expected.x0)
+    expect(drawn.xLast).toBe(expected.xLast)
+    expect(drawn.y0).toBe(expected.y0)
+    expect(drawn.yLast).toBeCloseTo(expected.yLast, 10)
+  }
 }
 
 test('occupancy: calculates [D]/([D]+Kd) and shows result, formula and trace', async ({
@@ -314,11 +357,8 @@ test('curve validation: a cleared C0 blocks Update curve with the schema message
   await expect(page.getByTestId('curve-chart')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('range-not-configured')).toBeHidden()
 
-  // The chart renders its SVG and drew the expected PK endpoints:
+  // Assert the chart rendered the expected PK curve with actual SVG path geometry:
   // C(0) = 100 µM and C(10) = 100 · 2^−10 ≈ 0.09765625 µM.
-  await expect(page.getByTestId('curve-chart').locator('svg').first()).toBeVisible({
-    timeout: 20_000,
-  })
   await expectRenderedCurveEndpoints(page, { x0: 0, xLast: 10, y0: 100, yLast: 0.09765625 })
 
   // The user clears C0 entirely: the existing report is marked stale.
@@ -351,9 +391,7 @@ test('curve validation: a cleared C0 blocks Update curve with the schema message
   await page.getByTestId('apply-curve').click()
   await expect(page.getByTestId('curve-chart')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('no-curve')).toBeHidden()
-  await expect(page.getByTestId('curve-chart').locator('svg').first()).toBeVisible({
-    timeout: 20_000,
-  })
+  // Assert the recovered chart has re-rendered the curve with correct endpoints.
   await expectRenderedCurveEndpoints(page, { x0: 0, xLast: 10, y0: 100, yLast: 0.09765625 })
 })
 
@@ -374,9 +412,7 @@ test('curve validation: a cleared C0 also blocks the automatic scale-change re-a
   await page.getByTestId('apply-curve').click()
   await expect(page.getByTestId('curve-chart')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('x-scale-linear')).toBeChecked()
-  await expect(page.getByTestId('curve-chart').locator('svg').first()).toBeVisible({
-    timeout: 20_000,
-  })
+  // Assert the chart rendered with actual SVG path geometry.
   // C(1) = 50 µM and C(10) ≈ 0.09765625 µM for the 1–10 h range.
   await expectRenderedCurveEndpoints(page, { x0: 1, xLast: 10, y0: 50, yLast: 0.09765625 })
 
