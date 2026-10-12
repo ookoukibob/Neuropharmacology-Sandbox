@@ -431,6 +431,14 @@ Critical workflows only (each one is a spec-level guarantee):
     - Run individually with `npx playwright test e2e/migration.spec.ts`
       (dev server auto-started); it also runs in CI's `E2E smoke
       test` job with the rest of the ordinary suite.
+    - Phase 24 prepared the **NV-2 authorized-validation protocol**
+      (`docs/nv2-authorized-validation.md`): an authorization-first
+      runbook for validating an authentic legacy database in the
+      future, against an isolated disposable copy on the exact
+      historical origin. Documentation-only readiness — the synthetic
+      coverage above remains mechanism evidence (evidence class C in
+      the runbook's taxonomy) and never a substitute for authentic
+      data; NV-2 stays open.
 
 Config: `playwright.config.ts` (chromium; dev server auto-started) for
 the ordinary suite; `playwright.crash.config.ts` (chromium, 1 worker;
