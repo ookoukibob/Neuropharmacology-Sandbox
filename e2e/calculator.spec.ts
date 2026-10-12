@@ -8,6 +8,9 @@ import { expect, test, type Page } from '@playwright/test'
  * C  drug record → calculator with provenance, explicit candidate loading only
  * D  stale-state semantics (input edits and library loads mark stale)
  * E  curve workflow: explicit range → chart, settings-stale indication
+ * F  blank-input curve validation (phase 27): a cleared input blocks both
+ *    the "Update curve" action and the automatic scale-change re-apply
+ *    with the schema message — never a silent zero curve
  *
  * Every value used here is synthetic. Records created by these tests are
  * tagged `synthetic-fixture` and carry an explicit note — no real
@@ -52,6 +55,50 @@ async function fillOccupancy(page: Page, concentration: string, kd: string): Pro
   await page.getByTestId('input-concentration-unit').selectOption('nM')
   await page.getByTestId('input-kd-value').fill(kd)
   await page.getByTestId('input-kd-unit').selectOption('nM')
+}
+
+/**
+ * Fill the first-order PK model with synthetic values (C0 in µM, t and t½
+ * in h). The µM symbol is the literal U+00B5 micro sign — the canonical
+ * symbol the unit catalog normalizes to (verified by codepoint).
+ */
+async function fillPK(page: Page, c0: string, time: string, halfLife: string): Promise<void> {
+  await page.getByTestId('input-c0-value').fill(c0)
+  await page.getByTestId('input-c0-unit').selectOption('µM')
+  await page.getByTestId('input-time-value').fill(time)
+  await page.getByTestId('input-time-unit').selectOption('h')
+  await page.getByTestId('input-halfLife-value').fill(halfLife)
+  await page.getByTestId('input-halfLife-unit').selectOption('h')
+}
+
+/**
+ * Assert the endpoints the rendered chart actually drew, read back from
+ * the chart's committed trace data (the exact arrays plotly rendered the
+ * SVG from). Used instead of hover labels because plotly hover is not
+ * reliably bound in the dev-server e2e environment.
+ */
+async function expectRenderedCurveEndpoints(
+  page: Page,
+  expected: { x0: number; xLast: number; y0: number; yLast: number },
+): Promise<void> {
+  const drawn = await page.evaluate(() => {
+    const gd = document.querySelector('[data-testid="curve-chart"] .js-plotly-plot') as
+      | (Element & { data?: Array<{ x?: number[]; y?: number[] }> })
+      | null
+    const trace = gd?.data?.[0]
+    if (!trace?.x || !trace.y || trace.x.length === 0) return null
+    return {
+      x0: trace.x[0],
+      xLast: trace.x[trace.x.length - 1],
+      y0: trace.y[0],
+      yLast: trace.y[trace.y.length - 1],
+    }
+  })
+  expect(drawn).not.toBeNull()
+  expect(drawn?.x0).toBe(expected.x0)
+  expect(drawn?.xLast).toBe(expected.xLast)
+  expect(drawn?.y0).toBe(expected.y0)
+  expect(drawn?.yLast).toBeCloseTo(expected.yLast, 10)
 }
 
 test('occupancy: calculates [D]/([D]+Kd) and shows result, formula and trace', async ({
@@ -243,4 +290,120 @@ test('curve: explicit range generates the chart and settings changes are flagged
   await page.getByTestId('apply-curve').click()
   await expect(page.getByTestId('curve-settings-stale')).toBeHidden()
   await expect(page.getByTestId('curve-chart')).toBeVisible()
+})
+
+test('curve validation: a cleared C0 blocks Update curve with the schema message, then recovers (phase 27)', async ({
+  page,
+}) => {
+  await page.goto('/calculator')
+  await expect(page.getByTestId('calculator-view')).toBeVisible()
+  await page.getByTestId('model-select').selectOption('pk.first-order-one-compartment')
+
+  // Synthetic inputs: C0 = 100 µM, t = 1 h, t½ = 1 h → C(1) = 50 µM.
+  await fillPK(page, '100', '1', '1')
+  await page.getByTestId('calculate-btn').click()
+  await expect(page.getByTestId('result-panel')).toBeVisible()
+  await expect(page.getByTestId('calculation-errors')).toBeHidden()
+  await expect(page.getByTestId('result-stale')).toBeHidden()
+  await expect(page.getByTestId('result-outputs')).toContainText('50')
+
+  // Explicit range 0–10 h (valid for the PK default linear x) draws the chart.
+  await page.getByTestId('range-min').fill('0')
+  await page.getByTestId('range-max').fill('10')
+  await page.getByTestId('apply-curve').click()
+  await expect(page.getByTestId('curve-chart')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('range-not-configured')).toBeHidden()
+
+  // The chart renders its SVG and drew the expected PK endpoints:
+  // C(0) = 100 µM and C(10) = 100 · 2^−10 ≈ 0.09765625 µM.
+  await expect(page.getByTestId('curve-chart').locator('svg').first()).toBeVisible({
+    timeout: 20_000,
+  })
+  await expectRenderedCurveEndpoints(page, { x0: 0, xLast: 10, y0: 100, yLast: 0.09765625 })
+
+  // The user clears C0 entirely: the existing report is marked stale.
+  await page.getByTestId('input-c0-value').fill('')
+  await expect(page.getByTestId('result-stale')).toBeVisible()
+
+  // "Update curve" must refuse the blank input — never a silent zero curve.
+  await page.getByTestId('apply-curve').click()
+  await expect(page.getByTestId('input-c0-value')).toHaveAttribute('aria-invalid', 'true')
+  await expect(page.getByTestId('error-c0')).toContainText('Enter a value.')
+  // The message is reachable through the input's aria-describedby relationship.
+  const describedBy = await page.getByTestId('input-c0-value').getAttribute('aria-describedby')
+  expect(describedBy).toBeTruthy()
+  await expect(page.locator(`#${describedBy}`)).toContainText('Enter a value.')
+  // The chart is removed — no all-zero replacement is drawn.
+  await expect(page.getByTestId('curve-chart')).toBeHidden()
+  await expect(page.getByTestId('no-curve')).toBeVisible()
+  // No misleading engine zero-rejection for a field the user left blank.
+  await expect(page.getByTestId('curve-errors')).toBeHidden()
+  await expect(page.getByTestId('calculation-errors')).toBeHidden()
+  // The previous report survives only as a stale result (C(1) = 50 µM).
+  await expect(page.getByTestId('result-panel')).toBeVisible()
+  await expect(page.getByTestId('result-stale')).toBeVisible()
+  await expect(page.getByTestId('result-outputs')).toContainText('50')
+
+  // Recovery: editing the field clears the inline error, and Update curve
+  // regenerates the chart with the original endpoints.
+  await page.getByTestId('input-c0-value').fill('100')
+  await expect(page.getByTestId('error-c0')).toBeHidden()
+  await page.getByTestId('apply-curve').click()
+  await expect(page.getByTestId('curve-chart')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('no-curve')).toBeHidden()
+  await expect(page.getByTestId('curve-chart').locator('svg').first()).toBeVisible({
+    timeout: 20_000,
+  })
+  await expectRenderedCurveEndpoints(page, { x0: 0, xLast: 10, y0: 100, yLast: 0.09765625 })
+})
+
+test('curve validation: a cleared C0 also blocks the automatic scale-change re-apply (phase 27)', async ({
+  page,
+}) => {
+  await page.goto('/calculator')
+  await page.getByTestId('model-select').selectOption('pk.first-order-one-compartment')
+
+  await fillPK(page, '100', '1', '1')
+  await page.getByTestId('calculate-btn').click()
+  await expect(page.getByTestId('result-panel')).toBeVisible()
+
+  // Range valid for BOTH linear and log x (min > 0) so a range-validation
+  // error can never mask the input-validation behaviour under test.
+  await page.getByTestId('range-min').fill('1')
+  await page.getByTestId('range-max').fill('10')
+  await page.getByTestId('apply-curve').click()
+  await expect(page.getByTestId('curve-chart')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('x-scale-linear')).toBeChecked()
+  await expect(page.getByTestId('curve-chart').locator('svg').first()).toBeVisible({
+    timeout: 20_000,
+  })
+  // C(1) = 50 µM and C(10) ≈ 0.09765625 µM for the 1–10 h range.
+  await expectRenderedCurveEndpoints(page, { x0: 1, xLast: 10, y0: 50, yLast: 0.09765625 })
+
+  // Clear C0, then change the x-axis scale: the store auto-applies the
+  // curve settings, which must hit the same validation gate. The radio
+  // input itself is visually hidden (sr-only), so the visible label text
+  // inside the X-axis radiogroup is the real click target.
+  await page.getByTestId('input-c0-value').fill('')
+  await page
+    .getByRole('radiogroup', { name: 'X axis scale' })
+    .getByText('log', { exact: true })
+    .click()
+
+  // No curve from the blank value; the chart is removed, not zeroed.
+  await expect(page.getByTestId('x-scale-log')).toBeChecked()
+  await expect(page.getByTestId('curve-chart')).toBeHidden()
+  await expect(page.getByTestId('no-curve')).toBeVisible()
+  // The same schema-level contract as the explicit Update curve path.
+  await expect(page.getByTestId('input-c0-value')).toHaveAttribute('aria-invalid', 'true')
+  await expect(page.getByTestId('error-c0')).toContainText('Enter a value.')
+  const describedBy = await page.getByTestId('input-c0-value').getAttribute('aria-describedby')
+  expect(describedBy).toBeTruthy()
+  await expect(page.locator(`#${describedBy}`)).toContainText('Enter a value.')
+  // No engine zero-rejection surfaced merely because the value was blank.
+  await expect(page.getByTestId('curve-errors')).toBeHidden()
+  await expect(page.getByTestId('calculation-errors')).toBeHidden()
+  // The prior scalar report remains, marked stale.
+  await expect(page.getByTestId('result-stale')).toBeVisible()
+  await expect(page.getByTestId('result-outputs')).toContainText('50')
 })
