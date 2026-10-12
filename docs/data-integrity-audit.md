@@ -70,7 +70,13 @@ monotonic revision token compared and bumped inside one IndexedDB
 transaction, stale saves rejected atomically as a typed `CONFLICT` with
 the draft and edit session preserved plus explicit recovery, proven in
 repository tests and a real two-tab browser test.
-**Not verified: 3** (environment/asset blockers).
+**Not verified: 3** at audit time (environment/asset blockers) —
+**now 1**: NV-1 was closed by the Phase 21 real-browser crash harness
+and NV-3 by the Phase 22 CSV column-contract suite (§6 "Verified in
+Phase 21/22"); **NV-2 remains open** — its evidence was upgraded with
+real-Chromium synthetic coverage in Phase 23 and an authorized-
+validation protocol was prepared in Phase 24 (§6), but no authentic
+historical user database has ever been obtained or inspected.
 
 | ID | Severity | Confidence | One-line summary |
 | --- | --- | --- | --- |
@@ -432,7 +438,10 @@ code/reproduction evidence; **Not verified** = blocker stated.
 ## 6. Coverage gaps and unverified paths
 
 A missing test alone is not a defect; each gap below states what the code
-*appears* to do and why that is insufficient evidence.
+*appears* to do and why that is insufficient evidence. (A compact
+claim→evidence-type matrix for the phase 22–24 items below:
+`docs/data-integrity-evidence-matrix.md`, added by the phase 25
+post-merge audit.)
 
 | ID | Area | What the code does (inspected) | Why it is a gap | Local experiment |
 | --- | --- | --- | --- | --- |
@@ -558,7 +567,9 @@ closed by the Phase 22 exhaustive CSV column-contract suite — §6
 "Verified in Phase 22"). Phase 23 upgraded NV-2's EVIDENCE — real
 Chromium migration coverage against synthetic legacy databases —
 without closing it (§6 "Evidence upgraded in Phase 23"); its
-authentic-user-data requirement remains unmet.
+authentic-user-data requirement remains unmet. Phase 24 prepared the
+authorization-first validation protocol (§6 "Protocol prepared in
+Phase 24") without changing that status.
 
 **No finding in this audit warrants emergency remediation ahead of the normal
 sequence:** every loss requires a specific trigger (records carrying
