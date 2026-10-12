@@ -247,6 +247,11 @@ CSV is structurally weaker than JSON:
   drug and are tied together by `drug_id`. Nested provenance beyond
   type+source is serialized as a JSON string in the `_provenance_json`
   cell; storage `origin` stays its own column, distinct from provenance.
+  The complete per-column contract — all 57 headers in order, each
+  column's source field, import destination (or the explicit reason it
+  has none, e.g. `origin`), round-trip class and tested loss boundary —
+  is `csv-column-contract.md`, pinned executable by
+  `csvColumnContract.test.ts` (Phase 22 audit closure NV-3).
   The UI shows an always-visible warning that CSV is a lossy projection
   and recommends `.npsl` for backup (see `spec-review.md` §6).
 - **Export — spreadsheet formula-injection guard.** Spreadsheets can

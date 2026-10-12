@@ -187,7 +187,7 @@ code/reproduction evidence; **Not verified** = blocker stated.
 | E2 | Zero-target drug export | Pass | `rowsForDrug` emits one row (`csvExport.ts:149-152`); documented `validation.md` §7 |
 | E3 | Warning accuracy vs actual loss | Pass | `ExportPanel.tsx:98-105`: flattening, JSON provenance cells, unknown-field drop, and "CSV is not a substitute" all match observed behavior; target-level unknown fields are *not* in CSV (contract columns only, `csvExport.ts:57-78`) and are covered by the warning's "drops fields the current schema does not know" |
 | E4 | Re-import implications (origin/timestamps/target ids) | Pass (documented) | `csvImport.ts:703` sets `origin: 'imported'`; `docs/testing.md:266-270` and `validation.md:218,230-232` disclose origin re-stamp, timestamp derivation, and fresh target ids |
-| E5 | Exhaustive per-column round trip of all 57 columns | Not verified (NV-3) | Core value/unit/provenance columns tested (`docs/testing.md:267-268`); line-by-line enumeration of every column's test was not performed |
+| E5 | Exhaustive per-column round trip of all 57 columns | **Pass (Phase 22)** | `csvColumnContract.test.ts` (25 tests): every header pinned literally, all 57 columns asserted against intended cell values, 56 import destinations round-tripped through export → `parseCsv` → mapping → NPSL validation → real repository, every transformation/loss boundary tested; full contract in `docs/csv-column-contract.md` |
 
 ### F. NPSB recovery backup and restore
 
@@ -447,12 +447,17 @@ A missing test alone is not a defect; each gap below states what the code
 | --- | --- | --- | --- |
 | NV-1 | Browser-level durability if the process crashes mid-transaction | A supervised-browser harness (`e2e-crash/crash-durability.spec.ts`, `npm run test:crash`, dedicated CI job; `docs/testing.md` §4.12) kills the Chromium PROCESS TREE from the outside (`taskkill /T /F` on Windows, SIGKILL to the detached process group on POSIX, awaiting the OS exit event) at a deterministic in-flight checkpoint of the REAL production restore transaction: test-only in-page instrumentation (`addInitScript`, no production failpoint) marks the `rw` transaction that clears the `drugs` store and, on its second completed drug `put`, blocks the renderer main thread inside the transaction's success dispatch with a synchronous XHR to a test-owned HTTP server — the server's receipt (evidence payload `clearSeen: 1, putsInTx: 2`) is the observable proof the checkpoint was reached, and the withheld response keeps the transaction open and uncommitted until the kill. The same disposable profile is reopened in a fresh Chromium process and compared against a pre-crash RAW snapshot of `drugs`/`meta`/`revisions`. Positive control with the same harness: a committed restore, killed after commit, survives restart with the full restored state | **Verified.** Process killed mid-transaction: the entire pre-crash library is present byte-identically (unknown extension fields, provenance, ChEMBL source references), metadata is exactly the pre-crash row, revision entries are exactly `{r1: 2, r2: 1}` (no partial bumps survive), the old-only record is intact (no half-restored mixture), and no false restore success is reported. Committed restore: archive rows and metadata byte-equal after restart (incl. the `-0` sidecar row materialized back — pinned in-page with `Object.is`), revisions advanced by exactly one per restored id, the old-only record's row absent with no invented revision entry. 8/8 consecutive local full-suite runs green. Remaining limits: this is PROCESS-CRASH durability only — hardware power loss, OS/kernel crash, physical disk failure and storage-controller failure are still NOT proven |
 
+**Verified in Phase 22 (was NV-3):**
+
+| ID | Path | Method and evidence | Result |
+| --- | --- | --- | --- |
+| NV-3 | Exhaustive per-column CSV round trip (all 57 columns) | `src/features/import-export/csv/csvColumnContract.test.ts` (25 committed tests, run with the unit suite): the full ordered 57-header pinned as an independent literal against `CSV_HEADERS` (drift detection); a fully populated marker library asserting the intended exported value of **every** column (all five provenance variants with JSON remainders, negative and scientific-notation numbers, hostile text — commas/quotes/newlines/semicolons/leading whitespace/formula triggers); one-row-per-target, drug-level repetition and the single empty-target row; the complete 56-destination import surface (bijection asserted, `origin` the sole tested exclusion) round-tripped through the real `parseCsv` → explicit mapping → NPSL schema validation → real Dexie repository commit and read-back (raw row + hydrated record incl. `revision`); every transformation/loss boundary asserted as policy (guard apostrophes kept verbatim, edge trim, empty→absent, provenance stamping `{type:'user'}`, `origin` re-stamp, metadata `dataStatus`/`updatedAt` stamping, unknown-field drop, `-0`→`'0'`, list `';'` semantics, conflicting repeated metadata / duplicate target ids / unknown action / invalid provenance blocking the whole import). Contract table: `docs/csv-column-contract.md` | **Verified.** All 57 columns have an explicit, executable contract; every importable column's destination value is asserted after mapping/import, not just via export snapshots. CSV remains a **lossy projection by contract** (not a backup): the deliberate losses above are documented per column and the export-panel CSV-loss warning stays in place. No silent data-loss or scientific-integrity defect was found; no production code changed. Remaining limits: the UI mapping flow is covered by one end-to-end component test (not per column); CSV cannot carry `-0`, unknown fields, or the pre-import `origin` by design |
+
 **Not verified (blocker stated):**
 
 | ID | Path | Blocker |
 | --- | --- | --- |
 | NV-2 | v1→v2 migration against real legacy user data | No real user database is accessible (by design); only synthetic fixtures (`database.test.ts`) |
-| NV-3 | Exhaustive per-column CSV round trip (all 57 columns) | Not enumerated line-by-line; core value/unit/provenance columns and the documented loss contract were verified |
 
 ---
 
@@ -538,9 +543,11 @@ recovery, and the same interleavings that used to overwrite silently
 now proven harmless in repository tests and a rewritten real two-tab
 browser test (identity, provenance, source references, unrelated
 records and metadata all intact).** All eight S-items are now closed;
-the remaining open items are the unverified paths NV-2..3, reported
+the remaining open item is the unverified path NV-2, reported
 separately for prioritization (NV-1 was closed by the Phase 21
-real-browser crash harness — §6 "Verified in Phase 21").
+real-browser crash harness — §6 "Verified in Phase 21"; NV-3 was
+closed by the Phase 22 exhaustive CSV column-contract suite — §6
+"Verified in Phase 22").
 
 **No finding in this audit warrants emergency remediation ahead of the normal
 sequence:** every loss requires a specific trigger (records carrying
@@ -567,8 +574,9 @@ description/CAS, a spec-violating file, comma-bearing lists, `-0` values), and
    commit.
 5. The audit **inspected** the paths named in §4 and does not claim exhaustive
    proof of correctness; untested combinations beyond those named (for example
-   NPSL files combining duplicate target ids with extension fields, or CSV
-   round trips of every column, NV-3) were not executed.
+   NPSL files combining duplicate target ids with extension fields) were not
+   executed. The CSV per-column round trip initially listed here as unexecuted
+   (NV-3) was executed and closed in Phase 22 (§6 "Verified in Phase 22").
 6. Findings concern **recognized-field handling at boundaries**; a broad
    refactoring-style review of UI state (filter text, panel state) was out of
    scope as non-persistent.
