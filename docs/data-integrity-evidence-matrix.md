@@ -24,9 +24,10 @@ evidence.
 
 **Unresolved limitations (stated, not guessed):**
 
-- No authentic legacy database exists for NV-2; the only unblock is an
-  owner-authorized artifact (runbook §3/§9) — no amount of synthetic
-  fixtures, CI passes or documentation substitutes for it.
+- No authentic historical database has been obtained or inspected for
+  NV-2 in this project; the only unblock is an owner-authorized
+  artifact (runbook §3/§9) — no amount of synthetic fixtures, CI
+  passes or documentation substitutes for it.
 - CSV contract coverage says nothing about files produced outside this
   application (row 1).
 - The audit's line-number citations refer to commit `e36a899` and drift
