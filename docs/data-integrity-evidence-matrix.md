@@ -9,8 +9,8 @@ references the authoritative sections rather than repeating them.
 been obtained or inspected; no authentic-data validation was performed
 in phase 25.** Evidence type legend: *synthetic* = fixtures created by
 this repository's tests; *authentic* = real historical user data
-(none exists for NV-2); *procedure* = a documented process, not
-evidence.
+(none has been obtained or inspected for NV-2 in this project);
+*procedure* = a documented process, not evidence.
 
 | # | Claim | Source (file/test/commit/CI) | Actually exercised / observed | Evidence type | Does NOT establish | Status |
 | --- | --- | --- | --- | --- | --- | --- |
