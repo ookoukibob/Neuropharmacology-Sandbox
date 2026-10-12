@@ -12,7 +12,8 @@ import { expect, test, type Page } from '@playwright/test'
  * written by v1/v2/v3 builds in place — only the documented bookkeeping
  * backfill (v1→v2) runs, additive stores appear empty, and every
  * scientific value, provenance object and unknown (future) field survives
- * byte-identically, across close/reopen as well.
+ * unchanged — the complete raw record snapshots remain deeply equal — across
+ * close/reopen as well.
  *
  * Native version numbers (verified from dexie@4.4.6 — the same version
  * every historical build used — in node_modules/dexie/dist/dexie.mjs):
@@ -230,7 +231,7 @@ const V1_ALPHA = withUnknownFields({
   notes: NV23_NOTE,
 })
 
-/** v1 row B: complete bookkeeping — must remain byte-identical. */
+/** v1 row B: complete bookkeeping — must remain deeply equal. */
 const V1_BETA = withUnknownFields({
   id: 'nv23-v1-beta',
   origin: 'user',
@@ -313,7 +314,7 @@ const V2_EPSILON = withUnknownFields({
   // Tripwire: bookkeeping deliberately left incomplete, as a foreign
   // writer would leave it. If the v1→v2 backfill hook were to fire on this
   // already-v2 database, it would add `persistenceVersion` and stamp
-  // `updatedAt` from `createdAt` — and the whole-row byte-identity
+  // `updatedAt` from `createdAt` — and the whole-row deep-equality
   // assertion in the v2 test would fail. Complete rows alone could not
   // detect a spuriously-firing (no-op) hook.
   createdAt: '2025-05-03T00:00:00.000Z',
@@ -438,6 +439,9 @@ async function seedHistoricalDatabase(page: Page, config: SeedConfig): Promise<v
 /**
  * Direct raw-IndexedDB read (no Dexie, no app code): version, per-store
  * index names and every row, structured-cloned out of the browser.
+ * Snapshots are compared with deep equality — value/structure
+ * preservation, not a physical-byte comparison of the database's
+ * internal storage.
  */
 async function rawSnapshot(page: Page, name: string): Promise<RawSnapshot> {
   return page.evaluate(async (dbName) => {
@@ -494,7 +498,7 @@ function omitKeys(row: Record<string, unknown>, keys: readonly string[]): Record
 /* Scenarios                                                           */
 /* ------------------------------------------------------------------ */
 
-test('v1 database upgrades to v4 in real Chromium: bookkeeping backfill only, science and unknown fields byte-identical', async ({
+test('v1 database upgrades to v4 in real Chromium: bookkeeping backfill only; science and unknown field values unchanged under deep comparison', async ({
   page,
 }) => {
   const config: SeedConfig = {
@@ -528,7 +532,8 @@ test('v1 database upgrades to v4 in real Chromium: bookkeeping backfill only, sc
   expect(migrated.version).toBe(NATIVE_V4)
   expect(migrated.stores).toEqual(EXPECTED_V4_STORES)
 
-  // Row A: only the documented keys are added; everything else identical.
+  // Row A: only the documented keys are added; everything else stays
+  // deeply equal.
   const alpha = findRow(migrated.rows['drugs']!, 'nv23-v1-alpha')
   const alphaPre = findRow(seeded.rows['drugs']!, 'nv23-v1-alpha')
   expect(omitKeys(alpha, ['persistenceVersion', 'createdAt', 'updatedAt'])).toEqual(alphaPre)
@@ -567,7 +572,7 @@ test('v1 database upgrades to v4 in real Chromium: bookkeeping backfill only, sc
   expect(await rawSnapshot(page, DB_NAME)).toEqual(migrated)
 })
 
-test('v2 database upgrades to v4 in real Chromium: stored rows byte-identical, no spurious backfill', async ({
+test('v2 database upgrades to v4 in real Chromium: stored rows unchanged under deep comparison, no spurious backfill', async ({
   page,
 }) => {
   const config: SeedConfig = {
@@ -595,7 +600,7 @@ test('v2 database upgrades to v4 in real Chromium: stored rows byte-identical, n
   expect(migrated.stores).toEqual(EXPECTED_V4_STORES)
 
   // The v1→v2 backfill must NOT run on an already-v2 database: every row
-  // is byte-identical — and V2_EPSILON (missing persistenceVersion and
+  // remains deeply equal — and V2_EPSILON (missing persistenceVersion and
   // updatedAt) is the tripwire that would reveal a spuriously-firing hook,
   // which would have rewritten it.
   expect(migrated.rows['drugs']).toEqual(seeded.rows['drugs'])
@@ -646,8 +651,8 @@ test('v3 database upgrades to v4 in real Chromium: source-data rows preserved, r
   expect(migrated.version).toBe(NATIVE_V4)
   expect(migrated.stores).toEqual(EXPECTED_V4_STORES)
 
-  // Every pre-existing store is byte-identical — no drug row is rewritten
-  // merely because the revisions table was added.
+  // Every pre-existing store's raw snapshot remains deeply equal — no
+  // drug row is rewritten merely because the revisions table was added.
   expect(migrated.rows['drugs']).toEqual(seeded.rows['drugs'])
   expect(migrated.rows['meta']).toEqual(seeded.rows['meta'])
   expect(migrated.rows['compounds']).toEqual(seeded.rows['compounds'])
