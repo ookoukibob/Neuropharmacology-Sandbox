@@ -539,6 +539,92 @@ describe('calculator store', () => {
     })
   })
 
+  describe('blank fields are missing input on the curve path (phase 26)', () => {
+    it('refuses a PK curve after C0 was cleared — blank is missing, never a numeric 0', () => {
+      const store = setupStore()
+      store.getState().setModel('pk.first-order-one-compartment')
+      store.getState().setDraftField('c0', { value: '100', unit: 'µM' })
+      store.getState().setDraftField('time', { value: '1', unit: 'h' })
+      store.getState().setDraftField('halfLife', { value: '1', unit: 'h' })
+      store.getState().calculate()
+      expect(store.getState().report?.ok).toBe(true)
+
+      // The user clears C0 (empty text = missing input by contract).
+      store.getState().setDraftField('c0', { value: '' })
+      store.getState().setRange({ min: '0', max: '10' })
+      store.getState().applyCurveSettings()
+
+      const state = store.getState()
+      expect(state.curve).toBeNull() // never a silently zeroed curve
+      expect(state.curveErrors).toHaveLength(0) // not an engine error either
+      expect(state.draftErrors['c0']).toBe('Enter a value.')
+      // The previously computed report is untouched, still flagged stale.
+      expect(state.report?.ok).toBe(true)
+      expect(state.stale).toBe(true)
+    })
+
+    it('refuses a Hill curve after E0 was cleared — no silent E0 = 0 curve', () => {
+      const store = setupStore()
+      store.getState().setModel('dose-response.hill')
+      store.getState().setDraftField('e0', { value: '2', unit: '%' })
+      store.getState().setDraftField('emax', { value: '98', unit: '%' })
+      store.getState().setDraftField('ec50', { value: '10', unit: 'nM' })
+      store.getState().setDraftField('hillCoefficient', { value: '1', unit: '1' })
+      store.getState().setDraftField('concentration', { value: '10', unit: 'nM' })
+      store.getState().calculate()
+      expect(store.getState().report?.ok).toBe(true)
+
+      store.getState().setDraftField('e0', { value: '' })
+      store.getState().setRange({ min: '1', max: '100' })
+      store.getState().applyCurveSettings()
+
+      const state = store.getState()
+      expect(state.curve).toBeNull()
+      expect(state.curveErrors).toHaveLength(0)
+      expect(state.draftErrors['e0']).toBe('Enter a value.')
+    })
+
+    it('surfaces a cleared Kd as a draft error, not the engine ZERO_NOT_ALLOWED for a silent 0', () => {
+      const store = setupStore()
+      store.getState().setDraftField('concentration', { value: '10', unit: 'nM' })
+      store.getState().setDraftField('kd', { value: '50', unit: 'nM' })
+      store.getState().calculate()
+      expect(store.getState().report?.ok).toBe(true)
+
+      store.getState().setDraftField('kd', { value: '' })
+      store.getState().setRange({ min: '1', max: '1000' })
+      store.getState().applyCurveSettings()
+
+      const state = store.getState()
+      expect(state.curve).toBeNull()
+      expect(state.curveErrors).toHaveLength(0)
+      expect(state.draftErrors['kd']).toBe('Enter a value.')
+    })
+
+    it('still generates the curve once the cleared field is filled in again', () => {
+      const store = setupStore()
+      store.getState().setModel('pk.first-order-one-compartment')
+      store.getState().setDraftField('c0', { value: '100', unit: 'µM' })
+      store.getState().setDraftField('time', { value: '1', unit: 'h' })
+      store.getState().setDraftField('halfLife', { value: '1', unit: 'h' })
+      store.getState().calculate()
+      store.getState().setDraftField('c0', { value: '' })
+      store.getState().setRange({ min: '0', max: '10' })
+      store.getState().applyCurveSettings()
+      expect(store.getState().curve).toBeNull()
+
+      store.getState().setDraftField('c0', { value: '100', unit: 'µM' })
+      store.getState().applyCurveSettings()
+      const state = store.getState()
+      expect(state.curve).not.toBeNull()
+      expect(state.draftErrors).toEqual({})
+      const ys = state.curve?.series[0]?.points.map((p) => p.y) ?? []
+      // C0 = 100 with t½ = 1 h: C(0) = 100, C(10) = 100·2^−10 ≈ 0.0977
+      expect(ys[0]).toBe(100)
+      expect(ys[ys.length - 1] ?? Number.NaN).toBeCloseTo(100 * Math.pow(2, -10), 9)
+    })
+  })
+
   describe('curve settings stale tracking', () => {
     it('marks curveSettingsStale on range change', () => {
       const store = setupStore()

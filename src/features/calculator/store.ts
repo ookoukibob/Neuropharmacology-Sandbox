@@ -300,6 +300,23 @@ export function createCalculatorStore(): UseBoundStore<StoreApi<CalculatorState>
       const { draft, report, settings } = get()
       if (!report?.ok) return
 
+      // Same Zod gate as calculate(): the engine receives a draft only after
+      // structural validation. A blank field is missing input — it must
+      // surface as "Enter a value." rather than reaching the engine as the
+      // numeric 0 that Number('') produces (which would silently zero a
+      // curve or misreport the blank as ZERO_NOT_ALLOWED).
+      const draftValidation = validateDraft(draft)
+      if (Object.keys(draftValidation.fields).length > 0 || draftValidation.issues.length > 0) {
+        set({
+          draftErrors: draftValidation.fields,
+          draftIssues: [...draftValidation.issues],
+          curve: null,
+          curveErrors: [],
+          curveSettingsStale: false,
+        })
+        return
+      }
+
       const s = settings[draft.model]
       const range = s.range
 
