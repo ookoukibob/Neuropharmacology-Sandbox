@@ -200,7 +200,7 @@ describe('SettingsPage — data management, about and reset', () => {
     renderSettings()
 
     expect(screen.getByTestId('about-version')).toHaveTextContent(
-      'Version 0.0.0 · License PolyForm-Noncommercial-1.0.0',
+      'Version 0.1.0-alpha.1 · License PolyForm-Noncommercial-1.0.0',
     )
     expect(screen.getByTestId('about-repository-link')).toHaveAttribute(
       'href',
