@@ -14,7 +14,7 @@
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --maxWorkers=2",
     "test:e2e": "playwright test",
     "test:crash": "playwright test -c playwright.crash.config.ts"
   },
