@@ -24,32 +24,47 @@ and unverified data. It never invents pharmacological parameters.
 - Not a replacement for authoritative pharmacology databases.
 - Not a black-box simulator: every result exposes its full calculation trace.
 
+## First public preview
+
+The first public preview is versioned **`v0.1.0-alpha.1`** — a
+**pre-release**, not a stable `1.0.0`. Preview scope and known
+limitations are tracked in [CHANGELOG.md](CHANGELOG.md); the auditable
+release procedure lives in [docs/releasing.md](docs/releasing.md).
+
+What preview users should know up front:
+
+- **NV-2 remains open:** no authentic historical user database has been
+  obtained or inspected. Schema-migration evidence comes from synthetic
+  legacy databases only — historical-database compatibility has **not**
+  been validated against real user data.
+- There is **no bundled authoritative pharmacology database**. External
+  data (PubChem/ChEMBL) are retrieved only when you explicitly request
+  them, and imported records keep their source attribution.
+- Model results are mathematical outputs under declared inputs and
+  assumptions — not clinical predictions and not medical advice.
+- Your data stay in this browser's local storage (see
+  [Data storage and backup](#data-storage-and-backup) below).
+
+## Data storage and backup
+
+- All scientific data live in the browser's IndexedDB, tied to **this
+  origin and this browser profile**. There is no server copy and no
+  account system.
+- Clearing browser or site storage may permanently remove your library.
+  Export your data regularly and keep the exported files somewhere safe.
+- `.npsb` recovery backups (full-storage snapshots consumed by the
+  Recovery tab) and ordinary `.npsl`/JSON interchange files serve
+  **different purposes and are not interchangeable** — each import path
+  deliberately rejects the other file type.
+- Moving the application to a different origin does **not** carry the
+  library with it; the app will open an empty database at the new
+  origin.
+
 ## Current status
 
-**Phase 1 — technical foundation (complete).**
-**Phase 2 — scientific calculation engine (complete, after a hardening pass).**
-**Phase 3 — drug library + local persistence (complete).**
-**Phase 4 — calculator + scientific visualization (complete, after a
-hardening and closure pass).**
-**Phase 5 — import/export workflows (complete).**
-**Phase 6 — accessibility, keyboard workflows and end-to-end library
-persistence (complete).**
-**Phase 8 — recovery backup/restore (`.npsb`, complete).**
-**Phase 9 — settings & persistent presentation preferences (complete).**
-**Phase 10 — target-metadata preservation on drug edits (complete).**
-**Phase 11 — repository data integrity audit (complete).**
-**Phase 12 — identifier-metadata preservation on drug edits (complete).**
-**Phase 13 — duplicate-target-id rejection in NPSL imports (complete).**
-**Phase 14 — untouched list/text preservation on drug edits (complete).**
-**Phase 15 — negative-zero preservation in NPSL round trips (complete).**
-**Phase 16 — GAP-1/GAP-2 regression coverage and -0 collision coverage (complete).**
-**Phase 17 — GAP-3 quarantine-vs-merge import collision protection (complete).**
-**Phase 18 — on-demand external data sources, PubChem/ChEMBL with a
-three-layer model (compound / measurements / parameters) (complete).**
-**Phase 19 — multi-tab write-semantics audit: defect observed and
-documented (complete).**
-**Phase 20 — optimistic concurrency for drug writes: stale saves
-rejected atomically with conflict recovery (complete).**
+Development proceeds in numbered review phases; the table below is the
+authoritative record. Phases 1–24 are summarized with their full
+deliverables; the most recent phases (25–33) follow:
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -78,6 +93,14 @@ a visible warning) and CSV (lossy, with a visible warning), component + CSV unit
 | 22 | Data integrity (audit NV-3): exhaustive 57-column CSV contract — every actual header pinned literally and asserted cell-by-cell against intended export values (marker library covering all five provenance variants, negative/scientific-notation numbers, hostile text), all 56 import destinations (`origin` the sole tested, deliberately non-importable column) round-tripped through export → `parseCsv` → explicit mapping → NPSL validation → real repository commit/read-back, every deliberate loss boundary tested as policy (formula-guard apostrophes kept verbatim, trim, empty→absent, `-0`→`'0'`, unknown-field drop, provenance stamping, `origin` re-stamp, list `';'` semantics, blocking rules); test-only — no production code, schema or format change; complete contract table in `docs/csv-column-contract.md`, audit NV-3 closed, NV-2 remains open (no real user database obtainable by design) | done |
 | 23 | Data integrity (audit NV-2 evidence upgrade): real-Chromium schema migration tests — synthetic legacy databases created with the raw IndexedDB API at the authentic Dexie-native versions (10/20/30; `dexie@4.4.6` opens at declared × 10, the same version every historical build used) with store/index layouts verified against the original schema commits, seeded from an intercepted same-origin page that never loads the app bundle and closed before the real application opens the same database and upgrades it to native 40 (declared 4); raw-snapshot assertions prove the v1→v2 backfill runs bookkeeping-only (one shared stamp for both-missing timestamps; existing values / complete rows / metadata / unknown fields preserved — raw snapshots deeply equal), no spurious backfill from v2/v3 (bookkeeping-incomplete tripwire rows), additive v3/v4 stores empty, full hydration with zero quarantined records and reopen stability; test-only — no production migration change; harness contract in `docs/testing.md` §4.13, audit NV-2 evidence upgraded but **remains open** (no authentic legacy user database obtained or inspected) | done |
 | 24 | Data integrity (audit NV-2): authorized-validation protocol prepared — `docs/nv2-authorized-validation.md`, an authorization-first runbook for validating an authentic legacy database in the future if its owner explicitly authorizes it: provenance/authorization gate, original-preserving isolated disposable-copy handling on the exact historical origin (supervised-Chromium feasibility constraints, documented copy-consistency confirmation, never-create raw probe order), evidence classes A (authentic physical database) / B (authentic row payloads reseeded) / C (synthetic) kept explicitly distinct, starting-version migration-path reporting (only a native-10 start exercises the v1→v2 hook; 20/30/40 runs must not be reported as validating it), sanitized local-only evidence rules requiring an independently enforced outbound-network boundary (Playwright request logs are explicitly not the boundary), hard stop conditions, and an explicit NV-2 closure checklist; documentation-only — no authentic database obtained, inspected or fabricated, no code or test change, and the runbook itself verifies nothing | done |
+| 25 | Post-merge evidence audit: documentation-level traceability audit mapping every data-integrity claim to its concrete test evidence, with evidence-type wording bounded to project evidence and the NV-2 limitation re-scoped to evidence-bounded claims (PR #14) | done |
+| 26 | Scientific-calculation audit: blank calculator fields no longer become silent numeric zeros on the curve path — production fix with regression coverage (PR #15) | done |
+| 27 | Curve-validation E2E regression suite: explicit-undefined trace keys no longer blank Plotly charts (production fix), real Plotly curve rendering asserted end-to-end, and the curve-adapter trace contract pinned with regression tests (PR #16) | done |
+| 28 | Coverage scope: `src/components/charts/curveAdapter.ts` included in the Vitest v8 coverage report; the adapter reaches 100 % statements/functions/lines with its remaining branch gap documented as unreachable empty-unit fallbacks (PR #17) | done |
+| 29 | Test infrastructure: the coverage run caps workers (`--maxWorkers=2`) so slow instrumented tests stay under the default per-test budget; timeout root-cause forensics recorded (PR #18) | done |
+| 30 | CI hardening: an independent, blocking `Coverage` job runs `npm run test:coverage` on every push and pull request; coverage-scope documentation aligned with the configuration (PR #19) | done |
+| 31–32 | Release-integration audit and execution: the Phase 28–30 stacked pull requests were audited for merge readiness (cumulative-diff, CI and ancestry evidence), then integrated into `main` through three verified merge commits with per-step CI and content acceptance (PRs #17–#19) | done |
+| 33 | Repository governance: `main` is protected — changes must arrive through pull requests, force pushes and branch deletion are rejected, and four CI checks (`Quality gates`, `Coverage`, `E2E smoke test`, `NV-1 crash durability`) are required before merging, each source-bound to GitHub Actions | done |
 
 ### What works today
 
@@ -141,7 +164,8 @@ a visible warning) and CSV (lossy, with a visible warning), component + CSV unit
 - Fully static: no backend, no accounts, no cloud sync.
 
 All quality gates run locally and in CI (`.github/workflows/ci.yml`):
-typecheck, lint, tests, build, and the Playwright end-to-end workflows.
+typecheck, lint, tests, build, a blocking coverage run, and the
+Playwright end-to-end and crash-durability suites.
 
 See [docs/architecture.md](docs/architecture.md) for the roadmap and
 [docs/spec-review.md](docs/spec-review.md) for specification issues found
@@ -159,12 +183,18 @@ npm run typecheck      # strict TypeScript check (tsc -b)
 npm run typecheck:e2e  # strict TypeScript check for the Playwright specs
 npm run lint           # oxlint
 npm run build          # production build to dist/ (static hosting ready)
+npm run preview        # serve the production build locally (vite preview)
 npm run test:e2e       # Playwright end-to-end tests (needs: npx playwright install chromium)
 npm run test:crash     # NV-1 crash-durability suite (supervised Chromium, dedicated config; same install)
 ```
 
 The build output in `dist/` is a static frontend deployable to Cloudflare
-Pages, GitHub Pages or any equivalent static host. There is no backend.
+Pages, GitHub Pages or any equivalent static host. There is no backend,
+no API key and no build-time service dependency — the initial shell
+renders from static assets alone. Packaged preview builds (static ZIP
+plus a SHA-256 checksum) are published as **pre-release** GitHub Releases
+following [docs/releasing.md](docs/releasing.md); nothing has been
+publicly released until that page says so.
 
 ## Documentation
 
@@ -178,6 +208,8 @@ Pages, GitHub Pages or any equivalent static host. There is no backend.
 | [docs/validation.md](docs/validation.md) | Layered validation and the import pipeline |
 | [docs/data-sources.md](docs/data-sources.md) | On-demand PubChem/ChEMBL retrieval: three-layer model, provenance/licensing, explicit selection and import rules |
 | [docs/testing.md](docs/testing.md) | Test strategy, required test matrix, round-trip testing |
+| [docs/releasing.md](docs/releasing.md) | Release procedure for the static build: checks, tagging, ZIP + SHA-256, GitHub pre-release |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes per version, starting with the `0.1.0-alpha.1` preview |
 | [docs/decisions.md](docs/decisions.md) | Architecture decision records (ADR) with rationale |
 | [docs/spec-review.md](docs/spec-review.md) | Weaknesses in the specification and proposed corrections |
 
