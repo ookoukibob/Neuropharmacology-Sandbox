@@ -8,6 +8,9 @@ import { expect, test, type Page } from '@playwright/test'
  * C  drug record → calculator with provenance, explicit candidate loading only
  * D  stale-state semantics (input edits and library loads mark stale)
  * E  curve workflow: explicit range → chart, settings-stale indication
+ * F  blank-input curve validation (phase 27): a cleared input blocks both
+ *    the "Update curve" action and the automatic scale-change re-apply
+ *    with the schema message — never a silent zero curve
  *
  * Every value used here is synthetic. Records created by these tests are
  * tagged `synthetic-fixture` and carry an explicit note — no real
@@ -52,6 +55,105 @@ async function fillOccupancy(page: Page, concentration: string, kd: string): Pro
   await page.getByTestId('input-concentration-unit').selectOption('nM')
   await page.getByTestId('input-kd-value').fill(kd)
   await page.getByTestId('input-kd-unit').selectOption('nM')
+}
+
+/**
+ * Fill the first-order PK model with synthetic values (C0 in µM, t and t½
+ * in h). The µM symbol is the literal U+00B5 micro sign — the canonical
+ * symbol the unit catalog normalizes to (verified by codepoint).
+ */
+async function fillPK(page: Page, c0: string, time: string, halfLife: string): Promise<void> {
+  await page.getByTestId('input-c0-value').fill(c0)
+  await page.getByTestId('input-c0-unit').selectOption('µM')
+  await page.getByTestId('input-time-value').fill(time)
+  await page.getByTestId('input-time-unit').selectOption('h')
+  await page.getByTestId('input-halfLife-value').fill(halfLife)
+  await page.getByTestId('input-halfLife-unit').selectOption('h')
+}
+
+/**
+ * Assert that Plotly has actually rendered the expected curve with visible
+ * SVG path geometry, not merely that trace data exists in memory.
+ *
+ * This helper verifies:
+ * 1. The Plotly graph container exists and has initialized (gd.data present).
+ * 2. A scatter trace line path with non-empty geometry has been drawn
+ *    (path.js-line with d attribute of substantial length).
+ * 3. The trace's endpoint data matches the expected values within tolerance.
+ *
+ * Uses Playwright's auto-retrying locator assertions to wait for Plotly's
+ * asynchronous rendering to complete before evaluating geometry.
+ *
+ * Used instead of hover labels because plotly hover is not reliably bound
+ * in the dev-server e2e environment.
+ */
+async function expectCurveTraceEndpoints(
+  page: Page,
+  expected: { x0: number; xLast: number; y0: number; yLast: number },
+): Promise<void> {
+  const chartContainer = page.getByTestId('curve-chart')
+
+  // Wait for the actual rendered line path to appear with auto-retry.
+  // This is the SVG path element that Plotly renders for line traces.
+  // Plotly rendering is asynchronous, so we must wait for the path element
+  // to exist before checking its geometry.
+  const linePath = chartContainer.locator('.scatterlayer .trace path.js-line')
+  await expect(linePath).toBeVisible({ timeout: 20_000 })
+
+  // Now that the path is visible, evaluate its geometry and trace data.
+  const drawn = await page.evaluate(() => {
+    const chartContainer = document.querySelector('[data-testid="curve-chart"]')
+    if (!chartContainer) return { error: 'No chart container found' }
+
+    const gd = chartContainer.querySelector('.js-plotly-plot') as
+      | (Element & { data?: Array<{ x?: number[]; y?: number[] }> })
+      | null
+    if (!gd) return { error: 'No .js-plotly-plot found' }
+
+    const trace = gd.data?.[0]
+    if (!trace?.x || !trace.y || trace.x.length === 0) {
+      return { error: 'No trace data in gd.data[0]' }
+    }
+
+    // The path already passed visibility check above; now verify its geometry.
+    const linePath = chartContainer.querySelector('.scatterlayer .trace path.js-line')
+    if (!linePath) return { error: 'No rendered line path found' }
+
+    const dAttr = linePath.getAttribute('d')
+    if (!dAttr || dAttr.length < 10) {
+      return {
+        error: 'Line path has no substantial geometry',
+        dLength: dAttr?.length || 0,
+      }
+    }
+
+    return {
+      x0: trace.x[0],
+      xLast: trace.x[trace.x.length - 1],
+      y0: trace.y[0],
+      yLast: trace.y[trace.y.length - 1],
+      pathRendered: true,
+      pathLength: dAttr.length,
+    }
+  })
+
+  // Assert no errors occurred during evaluation
+  if (typeof drawn === 'object' && 'error' in drawn) {
+    throw new Error(`Curve rendering check failed: ${drawn.error}`)
+  }
+
+  // Assert path geometry is substantial (> 100 chars indicates real curve)
+  expect(drawn).toHaveProperty('pathRendered', true)
+  expect(drawn).toHaveProperty('pathLength')
+  if (typeof drawn === 'object' && 'pathLength' in drawn) {
+    expect(drawn.pathLength).toBeGreaterThan(100)
+  }
+
+  // Assert endpoint values match expectations
+  expect(drawn.x0).toBe(expected.x0)
+  expect(drawn.xLast).toBe(expected.xLast)
+  expect(drawn.y0).toBe(expected.y0)
+  expect(drawn.yLast).toBeCloseTo(expected.yLast, 10)
 }
 
 test('occupancy: calculates [D]/([D]+Kd) and shows result, formula and trace', async ({
@@ -243,4 +345,113 @@ test('curve: explicit range generates the chart and settings changes are flagged
   await page.getByTestId('apply-curve').click()
   await expect(page.getByTestId('curve-settings-stale')).toBeHidden()
   await expect(page.getByTestId('curve-chart')).toBeVisible()
+})
+
+test('curve validation: a cleared C0 blocks Update curve with the schema message, then recovers (phase 27)', async ({
+  page,
+}) => {
+  await page.goto('/calculator')
+  await expect(page.getByTestId('calculator-view')).toBeVisible()
+  await page.getByTestId('model-select').selectOption('pk.first-order-one-compartment')
+
+  // Synthetic inputs: C0 = 100 µM, t = 1 h, t½ = 1 h → C(1) = 50 µM.
+  await fillPK(page, '100', '1', '1')
+  await page.getByTestId('calculate-btn').click()
+  await expect(page.getByTestId('result-panel')).toBeVisible()
+  await expect(page.getByTestId('calculation-errors')).toBeHidden()
+  await expect(page.getByTestId('result-stale')).toBeHidden()
+  await expect(page.getByTestId('result-outputs')).toContainText('50')
+
+  // Explicit range 0–10 h (valid for the PK default linear x) draws the chart.
+  await page.getByTestId('range-min').fill('0')
+  await page.getByTestId('range-max').fill('10')
+  await page.getByTestId('apply-curve').click()
+  await expect(page.getByTestId('curve-chart')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('range-not-configured')).toBeHidden()
+
+  // Assert the chart rendered the expected PK curve with actual SVG path geometry:
+  // C(0) = 100 µM and C(10) = 100 · 2^−10 ≈ 0.09765625 µM.
+  await expectCurveTraceEndpoints(page, { x0: 0, xLast: 10, y0: 100, yLast: 0.09765625 })
+
+  // The user clears C0 entirely: the existing report is marked stale.
+  await page.getByTestId('input-c0-value').fill('')
+  await expect(page.getByTestId('result-stale')).toBeVisible()
+
+  // "Update curve" must refuse the blank input — never a silent zero curve.
+  await page.getByTestId('apply-curve').click()
+  await expect(page.getByTestId('input-c0-value')).toHaveAttribute('aria-invalid', 'true')
+  await expect(page.getByTestId('error-c0')).toContainText('Enter a value.')
+  // The message is reachable through the input's aria-describedby relationship.
+  const describedBy = await page.getByTestId('input-c0-value').getAttribute('aria-describedby')
+  expect(describedBy).toBeTruthy()
+  await expect(page.locator(`#${describedBy}`)).toContainText('Enter a value.')
+  // The chart is removed — no all-zero replacement is drawn.
+  await expect(page.getByTestId('curve-chart')).toBeHidden()
+  await expect(page.getByTestId('no-curve')).toBeVisible()
+  // No misleading engine zero-rejection for a field the user left blank.
+  await expect(page.getByTestId('curve-errors')).toBeHidden()
+  await expect(page.getByTestId('calculation-errors')).toBeHidden()
+  // The previous report survives only as a stale result (C(1) = 50 µM).
+  await expect(page.getByTestId('result-panel')).toBeVisible()
+  await expect(page.getByTestId('result-stale')).toBeVisible()
+  await expect(page.getByTestId('result-outputs')).toContainText('50')
+
+  // Recovery: editing the field clears the inline error, and Update curve
+  // regenerates the chart with the original endpoints.
+  await page.getByTestId('input-c0-value').fill('100')
+  await expect(page.getByTestId('error-c0')).toBeHidden()
+  await page.getByTestId('apply-curve').click()
+  await expect(page.getByTestId('curve-chart')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('no-curve')).toBeHidden()
+  // Assert the recovered chart has re-rendered the curve with correct endpoints.
+  await expectCurveTraceEndpoints(page, { x0: 0, xLast: 10, y0: 100, yLast: 0.09765625 })
+})
+
+test('curve validation: a cleared C0 also blocks the automatic scale-change re-apply (phase 27)', async ({
+  page,
+}) => {
+  await page.goto('/calculator')
+  await page.getByTestId('model-select').selectOption('pk.first-order-one-compartment')
+
+  await fillPK(page, '100', '1', '1')
+  await page.getByTestId('calculate-btn').click()
+  await expect(page.getByTestId('result-panel')).toBeVisible()
+
+  // Range valid for BOTH linear and log x (min > 0) so a range-validation
+  // error can never mask the input-validation behaviour under test.
+  await page.getByTestId('range-min').fill('1')
+  await page.getByTestId('range-max').fill('10')
+  await page.getByTestId('apply-curve').click()
+  await expect(page.getByTestId('curve-chart')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('x-scale-linear')).toBeChecked()
+  // Assert the chart rendered with actual SVG path geometry.
+  // C(1) = 50 µM and C(10) ≈ 0.09765625 µM for the 1–10 h range.
+  await expectCurveTraceEndpoints(page, { x0: 1, xLast: 10, y0: 50, yLast: 0.09765625 })
+
+  // Clear C0, then change the x-axis scale: the store auto-applies the
+  // curve settings, which must hit the same validation gate. The radio
+  // input itself is visually hidden (sr-only), so the visible label text
+  // inside the X-axis radiogroup is the real click target.
+  await page.getByTestId('input-c0-value').fill('')
+  await page
+    .getByRole('radiogroup', { name: 'X axis scale' })
+    .getByText('log', { exact: true })
+    .click()
+
+  // No curve from the blank value; the chart is removed, not zeroed.
+  await expect(page.getByTestId('x-scale-log')).toBeChecked()
+  await expect(page.getByTestId('curve-chart')).toBeHidden()
+  await expect(page.getByTestId('no-curve')).toBeVisible()
+  // The same schema-level contract as the explicit Update curve path.
+  await expect(page.getByTestId('input-c0-value')).toHaveAttribute('aria-invalid', 'true')
+  await expect(page.getByTestId('error-c0')).toContainText('Enter a value.')
+  const describedBy = await page.getByTestId('input-c0-value').getAttribute('aria-describedby')
+  expect(describedBy).toBeTruthy()
+  await expect(page.locator(`#${describedBy}`)).toContainText('Enter a value.')
+  // No engine zero-rejection surfaced merely because the value was blank.
+  await expect(page.getByTestId('curve-errors')).toBeHidden()
+  await expect(page.getByTestId('calculation-errors')).toBeHidden()
+  // The prior scalar report remains, marked stale.
+  await expect(page.getByTestId('result-stale')).toBeVisible()
+  await expect(page.getByTestId('result-outputs')).toContainText('50')
 })

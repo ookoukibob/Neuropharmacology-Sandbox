@@ -163,7 +163,19 @@ Critical workflows only (each one is a spec-level guarantee):
    - stale state: input edits and library loads mark the result stale
      until recalculated;
    - curve workflow: explicit range → chart container, settings changes
-     flagged until "Update curve".
+     flagged until "Update curve";
+   - blank-input curve validation (phase 27, regression for the phase 26
+     fix): after a valid PK calculation and curve, clearing C0 and
+     pressing "Update curve" — or changing the x-axis scale, which
+     auto-applies — surfaces the schema message "Enter a value." with the
+     input marked `aria-invalid` and wired through `aria-describedby`,
+     removes the chart instead of silently plotting a zero curve, keeps
+     the previous report only as a stale result, shows no misleading
+     engine `ZERO_NOT_ALLOWED` for the blank field, and regenerates the
+     curve after the field is corrected. The rendered chart is asserted
+     to contain its SVG and to have drawn the expected endpoints
+     (C(0) = 100 µM, C(10) ≈ 0.09765625 µM), read back from the chart's
+     committed trace data.
 3. Library persistence (`e2e/library.spec.ts`, implemented — real UI and
    real IndexedDB, no mocks, isolated context per test): create a
    synthetic record → save → the detail page shows name, target, value,
@@ -586,9 +598,9 @@ invalid provenance blocking the whole import) is tested as policy
 | Data-sources store tests | done — startup-no-seed with real adapters (zero fetch), search lifecycle (stale/cancel/source- and scope-switch), observation retrieval (merge paging, page-source snapshot, stale guard), import (identity resolution, whole-batch failure, no-op, advisory preview), Layer C apply rules (endpoint mapping, qualifiers, units, occupied-slot overwrite, unknown ids), existing-target mismatch safety (refusal naming both sides until `confirmTargetMismatch`, acknowledgement recorded in provenance notes, name-and-species match needs no ack, species-only mismatch refuses), portable attribution surviving an NPSL export → re-import round trip, user-visible transport failure distinctions (429 throttling, 503/504 temporarily unavailable, other HTTP generic-but-actionable, network/timeout/cancellation/invalid-response wording) (`src/features/data-sources/store.test.ts`) |
 | Data-sources UI tests | done — full chain against real repositories with fixture-stubbed `fetch`: picker, zero network on mount, search → preview → confirmed import, network-failure honesty, Layer C UI gates (incl. the target comparison block and the required mismatch-acknowledgement checkbox), identity-only library addition (`DataSourcesView.test.tsx`) |
 | Drug-form persistence integration tests | done — real detail → form → store → Dexie chain: whole provenance of unchanged parameters in the raw stored row, user stamp only on the changed parameter, supported target metadata (`gene` / `action` / `species` / `notes`) intact after an unrelated edit, no metadata migration after removal + same-name recreation, stored-only identifier metadata (`description` / `casNumber`) preserved byte-identical in the raw row after an unrelated edit (raw row + fresh repository read), untouched list/text fields (`synonyms` / `tags` / name / top-level notes) preserved byte-identical in the raw row after an unrelated edit (audit DI-03), a negative-zero parameter kept exact (`Object.is`) with its complete provenance in the raw row after an unrelated edit, and top-level `notes` absent/empty proven by raw-row own-property checks (audit DI-04 + DI-03 follow-up), unknown target extension fields surviving the form's targets-replacing save with a post-import baseline (record, target and provenance level, stable-id + non-transfer asserts — audit GAP-1), and the whole pharmacokinetics object (half-life, clearance, Vd, bioavailability: values, units, complete provenance incl. an unknown extension key) deep-equal in the raw row and a fresh read after an unrelated rename (audit GAP-2), and target `sourceReferences` intact (raw row + fresh read) after an unrelated edit with no migration onto survivors or recreated targets (phase 18I), and the full stale-write chain (phase 20, audit GAP-4): session hydrates → second writer commits → form save rejected with the typed conflict alert, form and draft open, error banner untouched, stored row (name, targets, provenance, source references, tags) exactly the other writer's commit with the revision advanced by that commit only, no `revision` key in the raw row, then unmount → hydrate → re-edit commits the draft against the fresh token (revision +1) |
-| Test suite total | 1030 unit tests (55 files) |
+| Test suite total | 1034 unit tests (55 files) |
 | Test harness async-wait budget (phase 20) | done — `src/tests/setup.ts` raises the Testing Library `findBy*`/`waitFor` default deadline from 1 s to 5 s (`configure({ asyncUtilTimeout: 5000 })`) so wall-clock waits are not exceeded by full-suite CPU contention (observed: load-induced deadline overruns in persistence/import/apply chains that pass in isolation); assertions, poll semantics and skip behavior are unchanged — a broken chain still fails, just after the longer budget |
-| Calculator + shell e2e | done — 6 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`) |
+| Calculator + shell e2e | done — 8 workflows (`e2e/shell.spec.ts`, `e2e/calculator.spec.ts`), incl. the phase 27 blank-input curve-validation regressions (Update curve and the automatic scale-change re-apply) |
 | Import/export e2e | done — 6 workflows (`e2e/importExport.spec.ts`) |
 | Library reload e2e | done — 2 workflows (`e2e/library.spec.ts`): create → detail → reload → edit → reload → delete via acknowledgement → reload; and target metadata: import user-origin record with `gene`/`action`/`species`/`notes` → unrelated edit → fields still shown → reload → persisted |
 | Keyboard e2e | done — 6 workflows (`e2e/keyboard.spec.ts`): skip link, navigation, drug form recovery, calculator, import/export confirmation, narrow-viewport operability |

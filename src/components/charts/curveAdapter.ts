@@ -43,14 +43,16 @@ function seriesToTrace(series: CurveSeries, _index: number) {
     name: series.name,
     mode: isModel ? 'lines' : 'markers',
     type: 'scatter',
-    line: isModel ? { width: 2 } : undefined,
-    marker: isModel ? undefined : { size: 6 },
+    // Emit only keys with defined values. An explicit `undefined` key
+    // satisfies plotly's presence guard in cleanData ('marker' in trace),
+    // which then throws on the undefined value — and react-plotly.js
+    // swallows that rejection (no onError prop), leaving a blank chart.
+    ...(isModel ? { line: { width: 2 } } : { marker: { size: 6 } }),
     hovertemplate:
       `${series.xUnit ? `${series.xUnit}: ` : ''}%{x}` +
       (series.yUnit ? `<br>${series.yUnit}: %{y}` : '') +
       '<extra></extra>',
-    // Only show legend if there are multiple series
-    showlegend: undefined, // decided by parent
+    // showlegend is decided by the parent layout — the key is omitted.
   }
 }
 

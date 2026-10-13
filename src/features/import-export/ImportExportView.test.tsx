@@ -82,7 +82,9 @@ describe('ImportExportView — NPSL import', () => {
         'Current library: 1 record',
       ),
     )
-    expect(screen.getByTestId('import-report')).toHaveTextContent('1 created, 0 updated')
+    // The import-report renders based on local component state that updates
+    // separately from the store-driven library count, so wait for it.
+    expect(await screen.findByTestId('import-report')).toHaveTextContent('1 created, 0 updated')
     // The committed preview is cleared so the report is the source of truth.
     expect(screen.queryByTestId('import-preview')).not.toBeInTheDocument()
     const stored = await libraryRepository.getAllDrugs()
