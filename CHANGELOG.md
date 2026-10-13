@@ -4,16 +4,14 @@ All notable changes to Neuropharmacology Sandbox are documented here.
 Versions follow Semantic Versioning; this project is a source-available,
 noncommercial static web application (see [LICENSE](LICENSE)).
 
-## [0.1.0-alpha.1] — prepared, not yet released
+## [0.1.0-alpha.1] — published 2026-10-13 (pre-release)
 
-> **Status: prepared for the first public preview.** This section
-> documents the intended scope of the `0.1.0-alpha.1` preview. The
-> existence of this changelog entry is **not** evidence that a tag, a
-> downloadable artifact, or a public GitHub Release exists — release
-> availability is determined solely by the actual Git tag and the
-> repository's GitHub Releases page, following
-> [docs/releasing.md](docs/releasing.md). Do not treat this section as
-> an available download.
+> **Status: published preview release** (2026-10-13). `v0.1.0-alpha.1`
+> is an **alpha** GitHub prerelease — not a stable release. The
+> download archive and its SHA-256 checksum on the
+> [GitHub Releases page](https://github.com/ookoukibob/Neuropharmacology-Sandbox/releases/tag/v0.1.0-alpha.1)
+> are the authoritative location for the downloadable artifact,
+> following [docs/releasing.md](docs/releasing.md).
 
 ### What this preview contains
 
