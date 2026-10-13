@@ -6,10 +6,12 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [0.1.0-alpha.1] — prepared, not yet released
 
-> **Status: prepared for the first public preview.** This version has
-> been merged to `main` and verified locally, but the tag and the
-> GitHub pre-release have **not** been created yet. Downloadable
-> artifacts exist only once the release is published following
+> **Status: prepared for the first public preview.** This section
+> documents the intended scope of the `0.1.0-alpha.1` preview. The
+> existence of this changelog entry is **not** evidence that a tag, a
+> downloadable artifact, or a public GitHub Release exists — release
+> availability is determined solely by the actual Git tag and the
+> repository's GitHub Releases page, following
 > [docs/releasing.md](docs/releasing.md). Do not treat this section as
 > an available download.
 
@@ -97,10 +99,16 @@ noncommercial static web application (see [LICENSE](LICENSE)).
   **not** validated against real user data. The authorized-validation
   runbook exists ([docs/nv2-authorized-validation.md](docs/nv2-authorized-validation.md))
   but verifies nothing by itself.
-- Multi-tab editing of the same record from several tabs can still lose
-  a change at the application level (mitigated by optimistic
-  concurrency, which surfaces conflicts explicitly; see
-  [docs/data-integrity-audit.md](docs/data-integrity-audit.md) GAP-4).
+- Editing the same record from several tabs can produce a conflict.
+  Stale writes and stale deletes are rejected atomically **before**
+  anything modifies the stored record, and the application surfaces an
+  explicit conflict instead of silently overwriting newer data. The
+  user resolves it through the supported recovery actions — open the
+  latest record in a new tab, or reload (dismissing the conflict
+  preserves the draft). Conflicting drafts are never merged
+  automatically, and re-applying some edits by hand may be required.
+  See [docs/data-integrity-audit.md](docs/data-integrity-audit.md)
+  GAP-4 and ADR-21 in [docs/decisions.md](docs/decisions.md).
 - `.npsb` recovery backups are not checksummed or authenticated — their
   fidelity boundary is stated in the UI.
 - Crash-durability evidence covers browser-process termination, not
