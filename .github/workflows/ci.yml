@@ -1,7 +1,8 @@
 name: CI
 
 # Makes the repository's local quality gates externally reproducible:
-# typecheck, lint, unit tests, build — plus the Playwright smoke test.
+# typecheck, lint, unit tests, build — plus the Playwright smoke test
+# and a separate blocking coverage run (`npm run test:coverage`).
 # Deliberately minimal: no deployment, no release automation, no containers.
 
 on:
@@ -40,6 +41,26 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+
+  # Coverage gate (phase 30, docs/testing.md): a SEPARATE blocking job so
+  # the instrumented vitest run neither competes for CPU with the ordinary
+  # unit run in `gates` nor hides its failure behind another job's result.
+  # It runs the repository's own `npm run test:coverage` unchanged (v8
+  # provider; the script caps workers at 2, phase 29, so slow-instrumented
+  # tests stay under the default per-test budget). The coverage summary
+  # tables print directly into this job's log; no artifact upload (the
+  # repository has no upload convention and coverage/ is gitignored).
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage
 
   e2e:
     name: E2E smoke test

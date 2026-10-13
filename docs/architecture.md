@@ -864,7 +864,7 @@ supplied by data.
 | `npm run typecheck` | Strict type check |
 | `npm run lint` | oxlint |
 | `npm test` | Vitest (unit, schema, component) |
-| `npm run test:coverage` | Coverage for domain/engine/data |
+| `npm run test:coverage` | Coverage for domain, engine, data, features + the curve adapter (blocking CI `Coverage` job) |
 | `npm run test:e2e` | Playwright (first run: `npx playwright install chromium`) |
 | `npm audit --omit=dev` | Dependency security: production advisories (blocking gate in CI) |
 | `npm audit` | Dependency security: full tree (reported by CI as non-blocking) |

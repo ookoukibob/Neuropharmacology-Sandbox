@@ -10,9 +10,14 @@ Harness (phase 1, working):
 | --- | --- | --- |
 | Vitest | unit, schema, component tests (`src/**/*.test.{ts,tsx}`) | `npm test` |
 | React Testing Library | component behaviour in jsdom | (same) |
-| Vitest coverage (v8) | `src/domain/**`, `src/engine/**`, `src/data/**` | `npm run test:coverage` |
+| Vitest coverage (v8) | `src/domain/**`, `src/engine/**`, `src/data/**`, `src/features/**`, `src/components/charts/curveAdapter.ts` | `npm run test:coverage` |
 | Playwright | end-to-end workflows (`e2e/`) | `npm run test:e2e` |
 | axe-core | automated accessibility scans inside Playwright (`e2e/a11y.spec.ts`) | `npm run test:e2e` |
+
+`npm run test:coverage` prints the coverage summary tables into the
+terminal and writes the full report under `coverage/` (gitignored); CI
+runs the same script as its own blocking `Coverage` job
+(`.github/workflows/ci.yml`), independently of the other three jobs.
 
 Setup: `vitest.config` in `vite.config.ts`, `src/tests/setup.ts`
 (jest-dom matchers), fixtures in `src/tests/fixtures/`.
