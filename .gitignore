@@ -28,3 +28,17 @@ coverage
 *.njsproj
 *.sln
 *.sw?
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+.wrangler/
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
