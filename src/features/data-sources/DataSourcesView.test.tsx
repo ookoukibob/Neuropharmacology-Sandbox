@@ -3,7 +3,10 @@
  * repositories through the app composition root): the full on-demand
  * chain — search against stubbed PubChem responses, explicit selection,
  * preview, confirmed import into IndexedDB — plus every Layer C apply
- * rule at the UI level (endpoint mapping, qualifiers, occupied slots).
+ * rule at the UI level (endpoint mapping, qualifiers, occupied slots),
+ * plus translator-style DOM mutation resilience: the status paragraphs
+ * must survive a page translator re-parenting their text nodes
+ * (facebook/react#11538).
  *
  * HTTP is never live: `fetch` is stubbed with checked-in fixtures or a
  * rejecting mock, and one test asserts that mounting the page performs
@@ -11,7 +14,7 @@
  * content is synthetic test data — not pharmacological information.
  */
 import 'fake-indexeddb/auto'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sourceDataRepository, useDataSourcesStore } from '@/app/dataSourcesStore'
 import { libraryRepository, useLibraryStore } from '@/app/libraryStore'
@@ -22,6 +25,7 @@ import {
   syntheticLibrary,
   syntheticObservation,
 } from '../../tests/fixtures'
+import type { DrugLibrary } from '../../domain/library/library'
 import type { RemoteObservation } from '../../domain/sources/observation'
 import cidsFixture from '../../tests/fixtures/sources/pubchem-cids.json'
 import propertiesFixture from '../../tests/fixtures/sources/pubchem-properties.json'
@@ -100,6 +104,7 @@ afterEach(() => {
 /** Seed real repositories, then reflect them into the session state. */
 async function seedStored(options: {
   readonly withLibrary?: boolean
+  readonly library?: DrugLibrary
   readonly observation?: RemoteObservation
 } = {}): Promise<void> {
   const report = await sourceDataRepository.importSourceRecords({
@@ -108,7 +113,7 @@ async function seedStored(options: {
   })
   expect(report.ok).toBe(true)
   if (options.withLibrary === true) {
-    await libraryRepository.replaceLibrary(syntheticLibrary([syntheticDrug()]))
+    await libraryRepository.replaceLibrary(options.library ?? syntheticLibrary([syntheticDrug()]))
   }
   await useDataSourcesStore.getState().hydrateStored()
 }
@@ -123,6 +128,53 @@ function unmappableObservation(): RemoteObservation {
   }
   delete clone['parameterKind']
   return clone as unknown as RemoteObservation
+}
+
+/**
+ * SIMULATION of the DOM mutation a page translator performs — not the real
+ * Google Translate extension. Translators re-parent React-rendered text
+ * nodes by wrapping them (Google Translate wraps text in <font> elements);
+ * when React later removes such a re-parented text node during a status
+ * transition, the commit throws
+ * "NotFoundError: Failed to execute 'removeChild' on 'Node'" and the tree
+ * unmounts (facebook/react#11538; reproduced against the production build).
+ * Wraps every non-empty text node under `root` in a <font> element and
+ * returns how many were wrapped (0 means the simulation did not apply).
+ */
+function wrapTextNodesLikeTranslator(root: HTMLElement): number {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  const textNodes: Text[] = []
+  while (walker.nextNode() !== null) {
+    const node = walker.currentNode
+    if (node instanceof Text && node.textContent.trim() !== '') textNodes.push(node)
+  }
+  for (const text of textNodes) {
+    const font = document.createElement('font')
+    font.setAttribute('style', 'vertical-align: inherit;')
+    text.parentNode?.insertBefore(font, text)
+    font.appendChild(text)
+  }
+  return textNodes.length
+}
+
+/** Collect uncaught window errors so tests can assert none occurred. */
+function trackWindowErrors(): { readonly errors: string[]; stop: () => void } {
+  const errors: string[] = []
+  const onError = (event: ErrorEvent): void => {
+    errors.push(event.message)
+  }
+  window.addEventListener('error', onError)
+  return {
+    errors,
+    stop: () => {
+      window.removeEventListener('error', onError)
+    },
+  }
+}
+
+/** The removeChild DOMException signature of the translator crash. */
+function removeChildErrors(errors: readonly string[]): string[] {
+  return errors.filter((message) => message.includes('removeChild'))
 }
 
 describe('DataSourcesView — startup and search', () => {
@@ -352,5 +404,148 @@ describe('DataSourcesView — stored panel actions', () => {
     expect(drugs[0]?.targets).toEqual([]) // no pharmacological values invented
     expect(drugs[0]?.notes).toContain('https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL99990001')
     expect(drugs[0]?.notes).toContain('CC BY-SA 3.0')
+  })
+})
+
+describe('DataSourcesView — translator-style DOM mutation resilience (facebook/react#11538)', () => {
+  /**
+   * The status paragraphs below used to render several mutually exclusive
+   * conditional text children. A translator re-parents those text nodes;
+   * the state transition then removes a text node that is no longer a child
+   * of the paragraph and React's commit throws NotFoundError, unmounting
+   * the app (reproduced against the production build). Each test wraps the
+   * live status text, drives a real state transition, and asserts that the
+   * UI survives, no removeChild exception is raised, and the correct text
+   * stays visible.
+   */
+
+  it('keeps the search status alive across results → searching → results after a text-node wrap', async () => {
+    stubPubChem()
+    render(<DataSourcesView />)
+
+    fireEvent.change(screen.getByTestId('query-input'), { target: { value: 'synthetic' } })
+    fireEvent.click(screen.getByTestId('search-button'))
+    await screen.findByText('1 result')
+    expect(screen.getByTestId('compound-results')).toBeInTheDocument()
+
+    // Reach into the live DOM exactly as a translator would.
+    expect(wrapTextNodesLikeTranslator(screen.getByTestId('search-status'))).toBe(1)
+
+    const tracker = trackWindowErrors()
+    fireEvent.click(screen.getByTestId('search-button'))
+    await waitFor(() => {
+      expect(screen.getByTestId('search-status')).toHaveTextContent('1 result')
+    })
+    tracker.stop()
+
+    expect(removeChildErrors(tracker.errors)).toEqual([])
+    expect(screen.getByTestId('data-sources-view')).toBeInTheDocument()
+    expect(screen.getByTestId('search-status')).toHaveTextContent('1 result')
+    expect(screen.getByTestId('compound-results')).toBeInTheDocument()
+  })
+
+  it('keeps the stored-data status alive across loading → ready after a text-node wrap', () => {
+    // Mount in 'loading' so the status text exists before the wrap. The
+    // store's hydrateStored() has an in-flight guard for this state, so the
+    // loading → ready transition it performs is driven directly on the
+    // store — the UI reconciliation is exactly what this test covers.
+    useDataSourcesStore.setState({
+      stored: {
+        status: 'loading',
+        error: null,
+        compounds: [],
+        observations: [],
+        drugs: [],
+        quarantinedCompounds: 0,
+        quarantinedObservations: 0,
+      },
+    })
+    render(<DataSourcesView />)
+    screen.getByText('Reading stored records…')
+
+    expect(wrapTextNodesLikeTranslator(screen.getByTestId('stored-status'))).toBe(1)
+
+    const tracker = trackWindowErrors()
+    act(() => {
+      useDataSourcesStore.setState({
+        stored: {
+          status: 'ready',
+          error: null,
+          compounds: [],
+          observations: [],
+          drugs: [],
+          quarantinedCompounds: 0,
+          quarantinedObservations: 0,
+        },
+      })
+    })
+    tracker.stop()
+
+    expect(removeChildErrors(tracker.errors)).toEqual([])
+    expect(screen.getByTestId('stored-status')).toHaveTextContent(
+      '0 compound identity records · 0 measurements · 0 drug records',
+    )
+    expect(screen.getByTestId('data-sources-view')).toBeInTheDocument()
+  })
+
+  it('keeps the measurements status alive across idle → loading after a text-node wrap', () => {
+    useDataSourcesStore.setState({ sourceId: 'chembl' })
+    render(<DataSourcesView />)
+
+    // ChEMBL offers measurements, so the live status paragraph is shown.
+    expect(screen.getByTestId('observations-status')).toHaveTextContent(
+      'No measurements fetched yet.',
+    )
+    expect(wrapTextNodesLikeTranslator(screen.getByTestId('observations-status'))).toBe(1)
+
+    const tracker = trackWindowErrors()
+    act(() => {
+      useDataSourcesStore.setState({
+        observations: { ...useDataSourcesStore.getState().observations, status: 'loading' },
+      })
+    })
+    tracker.stop()
+
+    expect(screen.getByTestId('observations-status')).toHaveTextContent('Fetching measurements…')
+    expect(removeChildErrors(tracker.errors)).toEqual([])
+    expect(screen.getByTestId('data-sources-view')).toBeInTheDocument()
+  })
+
+  it('keeps the selected-row comparison alive across a target switch after a text-node wrap', async () => {
+    // One fixture target reports a species, the other does not — switching
+    // between them makes the species suffix of the line disappear.
+    const drug = syntheticDrug({
+      targets: [
+        { id: 'fixture-target-1', name: 'TEST-R', species: 'Mus musculus' },
+        { id: 'fixture-target-2', name: 'TEST-S' },
+      ],
+    })
+    await seedStored({ withLibrary: true, library: syntheticLibrary([drug]) })
+    render(<DataSourcesView />)
+
+    fireEvent.click(await screen.findByTestId(`apply-to-parameter-${syntheticObservation().id}`))
+    fireEvent.change(screen.getByTestId('apply-drug-select'), {
+      target: { value: 'fixture-drug-1' },
+    })
+    fireEvent.change(screen.getByTestId('apply-target-select'), {
+      target: { value: 'fixture-target-1' },
+    })
+    await screen.findByTestId('apply-target-comparison')
+    expect(screen.getByTestId('apply-selected-target')).toHaveTextContent(
+      'Selected row: “TEST-R”, species “Mus musculus”',
+    )
+
+    expect(wrapTextNodesLikeTranslator(screen.getByTestId('apply-selected-target'))).toBe(1)
+
+    const tracker = trackWindowErrors()
+    fireEvent.change(screen.getByTestId('apply-target-select'), {
+      target: { value: 'fixture-target-2' },
+    })
+    tracker.stop()
+
+    expect(screen.getByTestId('apply-selected-target')).toHaveTextContent('Selected row: “TEST-S”')
+    expect(screen.getByTestId('apply-selected-target')).not.toHaveTextContent('species')
+    expect(removeChildErrors(tracker.errors)).toEqual([])
+    expect(screen.getByTestId('data-sources-view')).toBeInTheDocument()
   })
 })
