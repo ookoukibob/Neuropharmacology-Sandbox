@@ -199,6 +199,26 @@ function SearchResultsCard() {
 
   if (search.status === 'idle') return null
 
+  // One computed message rendered inside a keyed wrapper: when the status
+  // changes React swaps the whole <span> instead of removing a bare text
+  // node. A page translator (Google Translate wraps text nodes in <font>)
+  // re-parents those text nodes, and removing a re-parented text node is
+  // exactly the DOM mismatch behind facebook/react#11538
+  // ("Failed to execute 'removeChild' on 'Node'"). The message strings and
+  // their semantics are unchanged.
+  const resultCount =
+    search.compounds.length > 0 ? search.compounds.length : search.targets.length
+  const searchMessage =
+    search.status === 'searching'
+      ? 'Searching…'
+      : search.status === 'results'
+        ? `${resultCount} result${resultCount === 1 ? '' : 's'}`
+        : search.status === 'empty'
+          ? `No matches for “${state.query.trim()}”.`
+          : search.status === 'error'
+            ? 'The search failed.'
+            : null
+
   return (
     <Card>
       <CardHeader>
@@ -206,15 +226,7 @@ function SearchResultsCard() {
       </CardHeader>
       <CardContent className="space-y-3">
         <p role="status" aria-live="polite" data-testid="search-status">
-          {search.status === 'searching' && 'Searching…'}
-          {search.status === 'results' &&
-            `${search.compounds.length > 0 ? search.compounds.length : search.targets.length} result${
-              (search.compounds.length > 0 ? search.compounds.length : search.targets.length) === 1
-                ? ''
-                : 's'
-            }`}
-          {search.status === 'empty' && `No matches for “${state.query.trim()}”.`}
-          {search.status === 'error' && 'The search failed.'}
+          {searchMessage !== null && <span key={searchMessage}>{searchMessage}</span>}
         </p>
 
         {search.status === 'error' && (
@@ -369,6 +381,29 @@ function MeasurementsCard() {
       ? state.activeTarget !== null
       : state.selectedCompoundIds.length > 0
 
+  // Same translator-safe pattern as SearchResultsCard's status line: one
+  // computed message inside a keyed wrapper, so a status transition swaps
+  // the <span> element instead of removing a text node that Google
+  // Translate may have re-parented (facebook/react#11538). An 'error'
+  // status shows an empty live region here — exactly as before, where
+  // every conditional text slot rendered nothing. Message strings and
+  // semantics are unchanged.
+  const observationsMessage = fetching
+    ? 'Fetching measurements…'
+    : observations.status === 'ready'
+      ? `${observations.items.length} measurement${observations.items.length === 1 ? '' : 's'}${
+          observations.total !== null ? ` of ${observations.total}` : ''
+        } · fetched for ${observations.fetchedFor ?? 'the selection'} · endpoints: ${
+          endpointScopeLabel(state.endpointScope)
+        }${
+          observations.omitted > 0
+            ? ` · ${observations.omitted} supplied row(s) carried no usable measurement`
+            : ''
+        }`
+      : observations.status === 'idle'
+        ? 'No measurements fetched yet.'
+        : null
+
   return (
     <Card>
       <CardHeader>
@@ -404,14 +439,9 @@ function MeasurementsCard() {
         </div>
 
         <p role="status" aria-live="polite" data-testid="observations-status">
-          {fetching && 'Fetching measurements…'}
-          {observations.status === 'ready' &&
-            `${observations.items.length} measurement${observations.items.length === 1 ? '' : 's'}${
-              observations.total !== null ? ` of ${observations.total}` : ''
-            } · fetched for ${observations.fetchedFor ?? 'the selection'} · endpoints: ${
-              endpointScopeLabel(state.endpointScope)
-            }${observations.omitted > 0 ? ` · ${observations.omitted} supplied row(s) carried no usable measurement` : ''}`}
-          {observations.status === 'idle' && 'No measurements fetched yet.'}
+          {observationsMessage !== null && (
+            <span key={observationsMessage}>{observationsMessage}</span>
+          )}
         </p>
 
         {observations.status === 'error' && (

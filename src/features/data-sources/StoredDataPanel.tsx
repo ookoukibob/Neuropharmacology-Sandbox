@@ -187,6 +187,20 @@ function ApplyCard({
   const mismatch =
     comparesRow && target !== undefined ? findTargetMismatch(observation, target) : null
   const reportedSpecies = observation.species ?? observation.target.organism
+  // Translator-safe status line (facebook/react#11538): the selected row's
+  // sentence is computed as one message and rendered in a keyed wrapper, so
+  // switching the target row (the species suffix appearing or disappearing)
+  // swaps the whole <span> element instead of removing a bare text node that
+  // Google Translate may have re-parented into a <font> wrapper. The
+  // observation line above keeps plain text: its values are immutable while
+  // this card is open, so its text slots never transition. Visible content
+  // and semantics are unchanged.
+  const selectedTargetLine =
+    target !== undefined
+      ? `Selected row: “${target.name}”${
+          target.species !== undefined ? `, species “${target.species}”` : ''
+        }`
+      : null
 
   async function onApply(): Promise<void> {
     if (drugId === '') return
@@ -305,8 +319,9 @@ function ApplyCard({
               {reportedSpecies !== undefined && `, species “${reportedSpecies}”`}
             </p>
             <p data-testid="apply-selected-target">
-              Selected row: “{target.name}”
-              {target.species !== undefined && `, species “${target.species}”`}
+              {selectedTargetLine !== null && (
+                <span key={selectedTargetLine}>{selectedTargetLine}</span>
+              )}
             </p>
             {observation.target.sourceTargetId !== undefined && (
               <p className="text-xs text-muted-foreground" data-testid="apply-observation-source-id">
@@ -462,6 +477,25 @@ export function StoredDataPanel() {
     applyingId === null
       ? undefined
       : stored.observations.find((observation) => observation.id === applyingId)
+  // Translator-safe status line (facebook/react#11538): this paragraph really
+  // transitions on mount (idle → loading → ready) and after imports, so its
+  // message is computed once and rendered in a keyed wrapper — React swaps
+  // the <span> element instead of removing a re-parented text node. An
+  // 'error' status keeps showing the empty live region exactly as before
+  // (the error card below carries the detail). Strings and semantics are
+  // unchanged.
+  const storedMessage =
+    stored.status === 'loading'
+      ? 'Reading stored records…'
+      : stored.status === 'idle'
+        ? 'Not read yet.'
+        : stored.status === 'ready'
+          ? `${stored.compounds.length} compound identity record${
+              stored.compounds.length === 1 ? '' : 's'
+            } · ${stored.observations.length} measurement${
+              stored.observations.length === 1 ? '' : 's'
+            } · ${stored.drugs.length} drug record${stored.drugs.length === 1 ? '' : 's'}`
+          : null
 
   return (
     <Card data-testid="stored-panel">
@@ -470,10 +504,7 @@ export function StoredDataPanel() {
       </CardHeader>
       <CardContent className="space-y-4">
         <p role="status" aria-live="polite" data-testid="stored-status">
-          {stored.status === 'loading' && 'Reading stored records…'}
-          {stored.status === 'idle' && 'Not read yet.'}
-          {stored.status === 'ready' &&
-            `${stored.compounds.length} compound identity record${stored.compounds.length === 1 ? '' : 's'} · ${stored.observations.length} measurement${stored.observations.length === 1 ? '' : 's'} · ${stored.drugs.length} drug record${stored.drugs.length === 1 ? '' : 's'}`}
+          {storedMessage !== null && <span key={storedMessage}>{storedMessage}</span>}
         </p>
 
         {stored.status === 'error' && (
