@@ -7,10 +7,12 @@
  */
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mergeSourceRecord } from '../../domain/drug/source-data'
 import type { Compound } from '../../domain/sources/compound'
 import type { ExperimentalObservation } from '../../domain/sources/observation'
 import { syntheticCompound, syntheticObservation } from '../../tests/fixtures'
 import { SandboxDatabase } from '../db/database'
+import { DexieDrugRepository } from './dexieDrugRepository'
 import { DexieSourceDataRepository } from './dexieSourceDataRepository'
 
 let sequence = 0
@@ -425,5 +427,257 @@ describe('DexieSourceDataRepository', () => {
       skippedCompounds: 0,
       skippedObservations: 0,
     })
+  })
+
+  // --- deletion (phase 39) -------------------------------------------------
+
+  /** A second compound + observation, distinct from the primary fixture. */
+  const OTHER_COMPOUND: Compound = {
+    ...syntheticCompound(),
+    id: 'chembl:CHEMBL99990002',
+    sourceId: 'CHEMBL99990002',
+    name: 'Synthetic Fixture Compound B',
+    identifiers: { chemblId: 'CHEMBL99990002' },
+    provenance: {
+      ...syntheticCompound().provenance,
+      recordId: 'CHEMBL99990002',
+      url: 'https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL99990002',
+    },
+  }
+  const OTHER_OBSERVATION: ExperimentalObservation = {
+    ...syntheticObservation(),
+    id: 'chembl:99000007',
+    compoundId: 'chembl:CHEMBL99990002',
+    compoundSourceId: 'CHEMBL99990002',
+    compoundName: 'Synthetic Fixture Compound B',
+    provenance: { ...syntheticObservation().provenance, recordId: '99000007' },
+  }
+
+  async function seedTwoCompounds(): Promise<void> {
+    const report = await repo.importSourceRecords({
+      compounds: [syntheticCompound(), OTHER_COMPOUND],
+      observations: [syntheticObservation(), OTHER_OBSERVATION],
+    })
+    expect(report.ok).toBe(true)
+  }
+
+  it('deletes a compound together with exactly its observations', async () => {
+    await seedTwoCompounds()
+
+    const report = await repo.deleteCompound('chembl:CHEMBL99990001')
+    expect(report).toEqual({
+      ok: true,
+      deletedCompoundId: 'chembl:CHEMBL99990001',
+      deletedObservations: 1,
+    })
+
+    const compounds = await repo.listCompounds()
+    expect(compounds.records.map((record) => record.id)).toEqual(['chembl:CHEMBL99990002'])
+    const observations = await repo.listObservations()
+    expect(observations.records.map((record) => record.id)).toEqual(['chembl:99000007'])
+  })
+
+  it('deletes a compound that has no observations', async () => {
+    await repo.importSourceRecords({ compounds: [syntheticCompound()], observations: [] })
+    const report = await repo.deleteCompound('chembl:CHEMBL99990001')
+    expect(report).toEqual({
+      ok: true,
+      deletedCompoundId: 'chembl:CHEMBL99990001',
+      deletedObservations: 0,
+    })
+    expect(await db.compounds.count()).toBe(0)
+    expect(await db.observations.count()).toBe(0)
+  })
+
+  it('never deletes observations belonging to another compound', async () => {
+    await seedTwoCompounds()
+    // Delete the SECOND compound; the first compound and its measurement
+    // must survive byte-identical.
+    const before = structuredClone(await db.compounds.get('chembl:CHEMBL99990001'))
+    const beforeObservation = structuredClone(await db.observations.get('chembl:99000001'))
+
+    const report = await repo.deleteCompound('chembl:CHEMBL99990002')
+    expect(report.ok).toBe(true)
+    if (report.ok) expect(report.deletedObservations).toBe(1)
+
+    expect(await db.compounds.get('chembl:CHEMBL99990001')).toEqual(before)
+    expect(await db.observations.get('chembl:99000001')).toEqual(beforeObservation)
+    expect(await db.observations.count()).toBe(1)
+  })
+
+  it('never deletes a same-named observation of a different compound id', async () => {
+    // An observation whose DISPLAY NAME matches but whose compoundId does
+    // not: identity, not the name, decides what is removed.
+    const lookalike: ExperimentalObservation = {
+      ...syntheticObservation(),
+      id: 'chembl:99000009',
+      compoundId: 'chembl:CHEMBL99990002',
+      compoundSourceId: 'CHEMBL99990002',
+      compoundName: 'Synthetic Fixture Compound', // same name as the deleted one
+      provenance: { ...syntheticObservation().provenance, recordId: '99000009' },
+    }
+    await repo.importSourceRecords({
+      compounds: [syntheticCompound(), OTHER_COMPOUND],
+      observations: [lookalike],
+    })
+
+    const report = await repo.deleteCompound('chembl:CHEMBL99990001')
+    expect(report.ok).toBe(true)
+    if (report.ok) expect(report.deletedObservations).toBe(0)
+    expect(await db.observations.get('chembl:99000009')).toEqual(lookalike)
+  })
+
+  it('reports a missing compound and writes nothing', async () => {
+    await repo.importSourceRecords({ compounds: [syntheticCompound()], observations: [] })
+    const beforeCompounds = structuredClone(await db.compounds.toArray())
+
+    const report = await repo.deleteCompound('chembl:CHEMBL00000000')
+    expect(report.ok).toBe(false)
+    if (!report.ok) {
+      expect(report.failure.code).toBe('NOT_FOUND')
+      expect(report.failure.message).toContain('chembl:CHEMBL00000000')
+    }
+    expect(await db.compounds.toArray()).toEqual(beforeCompounds)
+  })
+
+  it('refuses to delete a quarantined compound row and preserves it byte-identically', async () => {
+    const rawRow = { id: 'chembl:CHEMBL99990001', source: 'chembl', futureField: 'keep-me' }
+    await db.compounds.put(rawRow as unknown as Compound)
+    const before = structuredClone(await db.compounds.toArray())
+
+    const report = await repo.deleteCompound('chembl:CHEMBL99990001')
+    expect(report.ok).toBe(false)
+    if (!report.ok) {
+      expect(report.failure.code).toBe('QUARANTINE_CONFLICT')
+      expect(report.failure.preservedIds).toEqual(['chembl:CHEMBL99990001'])
+      expect(report.failure.message).toContain('quarantined')
+    }
+    // Byte-identical, still reported as quarantined on read.
+    expect(await db.compounds.toArray()).toEqual(before)
+    const listed = await repo.listCompounds()
+    expect(listed.records).toEqual([])
+    expect(listed.quarantine.map((entry) => entry.id)).toEqual(['chembl:CHEMBL99990001'])
+  })
+
+  it('refuses to delete when an associated observation row is malformed, preserving everything', async () => {
+    await repo.importSourceRecords({ compounds: [syntheticCompound()], observations: [] })
+    const brokenObservation = { id: 'chembl:99000001', compoundId: 'chembl:CHEMBL99990001' }
+    await db.observations.put(brokenObservation as unknown as ExperimentalObservation)
+    const beforeCompounds = structuredClone(await db.compounds.toArray())
+    const beforeObservations = structuredClone(await db.observations.toArray())
+
+    const report = await repo.deleteCompound('chembl:CHEMBL99990001')
+    expect(report.ok).toBe(false)
+    if (!report.ok) {
+      expect(report.failure.code).toBe('ORPHAN_OBSERVATION')
+      expect(report.failure.message).toContain('chembl:99000001')
+      expect(report.failure.preservedIds).toContain('chembl:CHEMBL99990001')
+    }
+    expect(await db.compounds.toArray()).toEqual(beforeCompounds)
+    expect(await db.observations.toArray()).toEqual(beforeObservations)
+  })
+
+  it('rolls back atomically when the deletion transaction fails', async () => {
+    await seedTwoCompounds()
+    const beforeCompounds = structuredClone(await db.compounds.toArray())
+    const beforeObservations = structuredClone(await db.observations.toArray())
+
+    // Force a failure INSIDE the transaction, after the candidate read and
+    // before the commit, by making the observations table reject the
+    // bulkDelete it performs.
+    const originalBulkDelete = db.observations.bulkDelete.bind(db.observations)
+    db.observations.bulkDelete = (() => {
+      throw new Error('simulated storage failure')
+    }) as typeof db.observations.bulkDelete
+
+    try {
+      const report = await repo.deleteCompound('chembl:CHEMBL99990001')
+      expect(report.ok).toBe(false)
+      if (!report.ok) {
+        expect(report.failure.code).toBe('STORAGE')
+        expect(report.failure.message).toContain('nothing was deleted')
+      }
+    } finally {
+      db.observations.bulkDelete = originalBulkDelete
+    }
+
+    // The transaction aborted: both tables are byte-identical.
+    expect(await db.compounds.toArray()).toEqual(beforeCompounds)
+    expect(await db.observations.toArray()).toEqual(beforeObservations)
+  })
+
+  it('is idempotent-safe: a second deletion reports NOT_FOUND instead of failing silently', async () => {
+    await repo.importSourceRecords({ compounds: [syntheticCompound()], observations: [] })
+    const first = await repo.deleteCompound('chembl:CHEMBL99990001')
+    expect(first.ok).toBe(true)
+    const second = await repo.deleteCompound('chembl:CHEMBL99990001')
+    expect(second.ok).toBe(false)
+    if (!second.ok) expect(second.failure.code).toBe('NOT_FOUND')
+    expect(await db.compounds.count()).toBe(0)
+  })
+
+  it('leaves the drug library and its imported source snapshot completely untouched', async () => {
+    // Import the compound into the library first (the phase-36 snapshot),
+    // then delete the acquisition copy.
+    await repo.importSourceRecords({
+      compounds: [syntheticCompound()],
+      observations: [syntheticObservation()],
+    })
+    const drugRepo = new DexieDrugRepository(db)
+    const created = await drugRepo.createDrug({
+      identifiers: { name: 'Synthetic Fixture Compound', synonyms: ['SFC-1'] },
+      targets: [
+        {
+          id: 'fixture-target-1',
+          name: 'TEST-R',
+          kd: {
+            value: 12.4,
+            unit: 'nM',
+            provenance: { type: 'user', recordedAt: '2026-01-01T00:00:00.000Z' },
+          },
+        },
+      ],
+      notes: 'User note that must survive.',
+    })
+    const storedCompound = (await repo.listCompounds()).records[0]
+    const storedObservation = (await repo.listObservations()).records[0]
+    if (storedCompound === undefined || storedObservation === undefined) {
+      throw new Error('fixtures missing')
+    }
+    const merged = mergeSourceRecord(created.sourceRecords, {
+      source: storedCompound.source,
+      sourceId: storedCompound.sourceId,
+      ...(storedCompound.name !== undefined ? { name: storedCompound.name } : {}),
+      synonyms: [...storedCompound.synonyms],
+      identifiers: { ...storedCompound.identifiers },
+      provenance: { ...storedCompound.provenance },
+      observations: [{ ...storedObservation }],
+      importedAt: '2026-01-02T00:00:00.000Z',
+    })
+    const linked = await drugRepo.updateDrug(
+      created.id,
+      { sourceRecords: merged.records },
+      created.revision ?? 0,
+    )
+    expect(linked.sourceRecords).toHaveLength(1)
+
+    // Delete the acquisition copy.
+    const report = await repo.deleteCompound('chembl:CHEMBL99990001')
+    expect(report.ok).toBe(true)
+
+    // The Library record is byte-identical: snapshot, parameters, targets,
+    // notes and provenance all intact.
+    const reread = await drugRepo.getDrug(created.id)
+    expect(reread?.sourceRecords).toEqual(linked.sourceRecords)
+    expect(reread?.targets).toEqual(linked.targets)
+    expect(reread?.notes).toBe('User note that must survive.')
+    expect(reread?.identifiers).toEqual(linked.identifiers)
+    expect(reread?.sourceRecords?.[0]?.observations).toHaveLength(1)
+    expect(reread?.sourceRecords?.[0]?.provenance.licenseNotice).toContain('CC BY-SA 3.0')
+    // …and the raw stored row never carried a reference to the source store.
+    const raw = (await db.drugs.get(created.id)) as unknown as {
+      sourceRecords: { observations: unknown[] }[]
+    }
+    expect(raw.sourceRecords[0]?.observations).toHaveLength(1)
   })
 })

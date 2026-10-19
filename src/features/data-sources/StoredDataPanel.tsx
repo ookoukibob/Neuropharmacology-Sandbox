@@ -32,8 +32,18 @@
  * name match alone never selects a record: linking an existing record is an
  * explicit choice from a list, and it preserves that record's targets,
  * parameters and notes.
+ *
+ * Deleting a stored compound identity record (phase 39) is a two-step,
+ * keyboard-operable acknowledgement — never one stray click. The
+ * confirmation names the compound AND states how many measurement records
+ * go with it, because the deletion is irreversible. It removes only the
+ * local acquisition copy: the drug library, including any
+ * `Drug.sourceRecords` snapshot imported earlier, is never touched, and
+ * the confirmation says so. A failed deletion keeps the panel exactly as
+ * it was and shows the reason.
  */
-import { useState } from 'react'
+import { Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -106,13 +116,20 @@ function linkedDrug(
   return undefined
 }
 
-/** One stored compound with its attribution and the library bridge. */
+/** One stored compound with its attribution, the library bridge and deletion. */
 function StoredCompoundRow({ compound }: { readonly compound: Compound }) {
   const addToLibrary = useDataSourcesStore((s) => s.addToLibrary)
+  const deleteCompound = useDataSourcesStore((s) => s.deleteCompound)
   const drugs = useDataSourcesStore((s) => s.stored.drugs)
   const storedObservations = useDataSourcesStore((s) => s.stored.observations)
   const [busy, setBusy] = useState(false)
   const [linkTo, setLinkTo] = useState('')
+  // Deletion is irreversible, so it goes through an explicit acknowledgement
+  // step (the same convention the drug detail view uses) instead of one
+  // stray click.
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const wasConfirming = useRef(false)
 
   const name = compound.name ?? compound.sourceId
   const linked = linkedDrug(drugs, compound)
@@ -121,6 +138,31 @@ function StoredCompoundRow({ compound }: { readonly compound: Compound }) {
   const measurementCount = storedObservations.filter(
     (observation) => observation.compoundId === compound.id,
   ).length
+
+  // Focus follows the acknowledgement step: into the confirmation when it
+  // opens, back to the Delete button when it is cancelled (Escape or the
+  // Cancel button) — never on first render, so nothing is stolen on load.
+  useEffect(() => {
+    if (confirmingDelete) {
+      document.getElementById(`delete-compound-confirm-${compound.id}`)?.focus()
+    } else if (wasConfirming.current) {
+      document.getElementById(`delete-compound-${compound.id}`)?.focus()
+    }
+    wasConfirming.current = confirmingDelete
+  }, [confirmingDelete, compound.id])
+
+  async function onDelete(): Promise<void> {
+    setDeleting(true)
+    try {
+      // The store re-reads the stored panel on success AND reports a typed
+      // failure without writing anything, so this only has to close the
+      // confirmation and let the row disappear with the refreshed list.
+      const outcome = await deleteCompound(compound.id)
+      if (outcome.status === 'deleted') setConfirmingDelete(false)
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   async function onAdd(): Promise<void> {
     setBusy(true)
@@ -253,10 +295,73 @@ function StoredCompoundRow({ compound }: { readonly compound: Compound }) {
           size="sm"
           variant="outline"
           data-testid={`add-to-library-${compound.id}`}
-          disabled={busy}
+          disabled={busy || deleting}
           onClick={() => void onAdd()}
         >
           {busy ? 'Adding…' : 'Add the newer measurements'}
+        </Button>
+      )}
+
+      {confirmingDelete ? (
+        <div
+          className="space-y-2 rounded-md border border-destructive/40 p-2"
+          data-testid={`delete-compound-confirm-panel-${compound.id}`}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && !deleting) setConfirmingDelete(false)
+          }}
+        >
+          <p
+            id={`delete-compound-confirm-text-${compound.id}`}
+            className="text-sm text-destructive"
+            data-testid={`delete-compound-confirm-text-${compound.id}`}
+          >
+            Delete “{name}” ({compound.id}) permanently?{' '}
+            {measurementCount === 0
+              ? 'It has no stored measurement records.'
+              : `Its ${measurementCount} associated measurement record${
+                  measurementCount === 1 ? '' : 's'
+                } will be deleted with it.`}{' '}
+            This cannot be undone. The drug library is not affected — source data already imported
+            into a drug record stays on that record.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="destructive"
+              size="sm"
+              id={`delete-compound-confirm-${compound.id}`}
+              data-testid={`delete-compound-confirm-${compound.id}`}
+              aria-describedby={`delete-compound-confirm-text-${compound.id}`}
+              disabled={deleting}
+              onClick={() => void onDelete()}
+            >
+              <Trash2 aria-hidden="true" className="size-4" />
+              {deleting ? 'Deleting…' : 'Confirm delete'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              id={`delete-compound-cancel-${compound.id}`}
+              data-testid={`delete-compound-cancel-${compound.id}`}
+              disabled={deleting}
+              onClick={() => setConfirmingDelete(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          id={`delete-compound-${compound.id}`}
+          data-testid={`delete-compound-${compound.id}`}
+          disabled={busy || deleting}
+          title="Delete this stored compound identity record and its associated measurement records from local storage. The drug library is not affected."
+          onClick={() => setConfirmingDelete(true)}
+        >
+          <Trash2 aria-hidden="true" className="size-4" />
+          Delete
         </Button>
       )}
     </li>

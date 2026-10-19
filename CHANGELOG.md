@@ -6,6 +6,33 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Added — delete stored compound identity records (phase 39)
+
+- **A stored compound identity record can now be deleted** from the
+  Stored data panel, behind a two-step, keyboard-operable confirmation
+  that names the record and states how many measurement records go with
+  it (Escape cancels; nothing happens without the acknowledgement). It
+  removes only the local acquisition copy.
+- Deletion is identity-scoped and atomic: one read-write transaction
+  removes the compound row and exactly the observations whose validated
+  `compoundId` equals that compound's id — never a same-named record,
+  never another compound's measurement, and a failure rolls back with
+  nothing removed.
+- The same "protection wins" policy as import applies: a quarantined
+  compound row, or a measurement it owns that fails source-record
+  validation, makes the deletion refuse and preserves everything
+  byte-identical instead of being deleted by a path that cannot prove
+  what it is removing. A missing id reports `NOT_FOUND`; nothing fails
+  silently.
+- **The drug library is never touched.** A `Drug.sourceRecords`
+  snapshot imported earlier is an independent, durable copy: after the
+  source record is deleted, the library entry keeps its identifiers,
+  attribution, parameters, targets and notes (no cascading delete — the
+  confirmation and the success notice both say so).
+- The panel re-reads IndexedDB after every attempt: a success refreshes
+  the list and counts from storage; a failure shows the reason with the
+  row kept.
+
 ### Changed — complete Data Sources → Library import (phase 36)
 
 - **"Add to drug library" now imports the complete source record.** A

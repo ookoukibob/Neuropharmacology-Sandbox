@@ -56,7 +56,10 @@ and unverified data. It never invents pharmacological parameters.
   an external database only when you ask, shows every record with its
   source link, retrieval date and license before anything is written,
   and imports your explicit selection atomically — existing records
-  are never overwritten. ChEMBL measurements keep their exact
+  are never overwritten. A stored compound can also be deleted
+  individually with its measurements, behind a two-step confirmation;
+  a drug-library entry that already imported it is never touched.
+  ChEMBL measurements keep their exact
   endpoint, unit and qualifier (`<`, `>`), stored records are usable
   offline, and a measurement becomes a drug-record parameter only
   through an explicit "Use as parameter…" action that preserves the
