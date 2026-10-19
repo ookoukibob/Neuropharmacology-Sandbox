@@ -12,9 +12,9 @@
  *   atomically at commit time, so a stale list can never smuggle data in;
  * - rejected/failed imports say "nothing was written";
  * - measurement rows show the source record link, retrieval time and
- *   license, and the endpoint-filter selection is stated wherever the
- *   fetched list is shown (the label describes the data actually
- *   fetched, never the current setting).
+ *   license, and the endpoint selection is stated wherever the fetched
+ *   list is shown — changing the selection clears the list, so the label
+ *   can never describe data fetched under another filter.
  */
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -24,7 +24,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useDataSourcesStore } from '@/app/dataSourcesStore'
 import type { SearchScope } from '../../data/sources/types'
-import { importPreviewOf, type SourceSummary } from './store'
+import {
+  DEFAULT_ENDPOINT_SELECTION,
+  ENDPOINT_FILTER_OPTIONS,
+  importPreviewOf,
+  type EndpointFilterOption,
+  type EndpointSelection,
+  type SourceSummary,
+} from './store'
 import { ObservationSummary } from './ObservationSummary'
 import { StoredDataPanel } from './StoredDataPanel'
 
@@ -59,13 +66,29 @@ function SourceSearchCard() {
   const setSource = state.setSource
   const setScope = state.setScope
   const setQuery = state.setQuery
-  const setEndpointScope = state.setEndpointScope
+  const setEndpointSelection = state.setEndpointSelection
   const runSearch = state.runSearch
   const cancelSearch = state.cancelSearch
 
   const summary = state.sources.find((source) => source.id === state.sourceId)
   const searching = state.search.status === 'searching'
   const supportedScopes: readonly SearchScope[] = summary?.searchScopes ?? ['compounds']
+
+  // Endpoint multi-select: the four parameter endpoints are independent
+  // choices; "All reported endpoints" is a separate, mutually exclusive
+  // mode. An empty selection is a valid, explicit state — retrieval is
+  // disabled until at least one endpoint (or "all") is chosen.
+  const selection = state.endpointSelection
+  const endpointsEnabled = summary?.offersObservations === true
+  const selectedEndpoints = selection.mode === 'selected' ? selection.endpoints : []
+  const selectionEmpty = selection.mode === 'selected' && selectedEndpoints.length === 0
+
+  const toggleEndpoint = (endpoint: EndpointFilterOption): void => {
+    const next = selectedEndpoints.includes(endpoint)
+      ? selectedEndpoints.filter((candidate) => candidate !== endpoint)
+      : [...selectedEndpoints, endpoint]
+    setEndpointSelection({ mode: 'selected', endpoints: next })
+  }
 
   return (
     <Card>
@@ -93,29 +116,61 @@ function SourceSearchCard() {
               {summary?.description ?? 'No source configured.'}
             </p>
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="endpoint-scope-select">Measurement endpoints to retrieve</Label>
-            <select
-              id="endpoint-scope-select"
-              data-testid="endpoint-scope-select"
-              className={SELECT_CLASS}
-              value={state.endpointScope}
-              disabled={summary?.offersObservations !== true}
-              onChange={(e) => {
-                if (e.target.value === 'parameters' || e.target.value === 'all') {
-                  setEndpointScope(e.target.value)
-                }
-              }}
-            >
-              <option value="parameters">Model parameters (Ki, Kd, IC50, EC50)</option>
-              <option value="all">All reported endpoints</option>
-            </select>
+          <fieldset
+            className="grid gap-2"
+            data-testid="endpoint-selection"
+            disabled={!endpointsEnabled}
+          >
+            <legend className="text-sm leading-none font-medium">
+              Measurement endpoints to retrieve
+            </legend>
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              {ENDPOINT_FILTER_OPTIONS.map((endpoint) => (
+                <label key={endpoint} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="size-4"
+                    data-testid={`endpoint-option-${endpoint.toLowerCase()}`}
+                    checked={selectedEndpoints.includes(endpoint)}
+                    disabled={selection.mode === 'all'}
+                    onChange={() => toggleEndpoint(endpoint)}
+                  />
+                  {endpoint}
+                </label>
+              ))}
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="size-4"
+                data-testid="endpoint-option-all"
+                checked={selection.mode === 'all'}
+                onChange={(e) => {
+                  setEndpointSelection(
+                    e.target.checked ? { mode: 'all' } : DEFAULT_ENDPOINT_SELECTION,
+                  )
+                }}
+              />
+              All reported endpoints
+            </label>
+            {endpointsEnabled && selectionEmpty && (
+              <p
+                role="alert"
+                className="text-xs text-destructive"
+                data-testid="endpoint-selection-error"
+              >
+                Select at least one endpoint, or choose “All reported endpoints” — retrieval stays
+                disabled until then.
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">
-              This filter is sent to the source — only the chosen scope is downloaded. Records
-              fetched under another scope are cleared so the label always describes the data on
+              The checked endpoints are requested from the source — only endpoints the source
+              actually reports can be returned. “All reported endpoints” requests every endpoint
+              instead; these four are the model-parameter endpoints, not the full catalogue. Records
+              fetched under another selection are cleared so the label always describes the data on
               screen.
             </p>
-          </div>
+          </fieldset>
         </div>
 
         <div className="grid gap-2">
@@ -344,8 +399,9 @@ function SearchResultsCard() {
   )
 }
 
-function endpointScopeLabel(scope: 'parameters' | 'all'): string {
-  return scope === 'parameters' ? 'model parameters only' : 'all reported endpoints'
+function endpointSelectionLabel(selection: EndpointSelection): string {
+  if (selection.mode === 'all') return 'all reported endpoints'
+  return selection.endpoints.length > 0 ? selection.endpoints.join(', ') : 'none selected'
 }
 
 /** Fetch + select + page the measurements of the current selection. */
@@ -380,21 +436,24 @@ function MeasurementsCard() {
     state.scope === 'targets'
       ? state.activeTarget !== null
       : state.selectedCompoundIds.length > 0
+  const selectionEmpty =
+    state.endpointSelection.mode === 'selected' && state.endpointSelection.endpoints.length === 0
 
   // Same translator-safe pattern as SearchResultsCard's status line: one
   // computed message inside a keyed wrapper, so a status transition swaps
   // the <span> element instead of removing a text node that Google
   // Translate may have re-parented (facebook/react#11538). An 'error'
   // status shows an empty live region here — exactly as before, where
-  // every conditional text slot rendered nothing. Message strings and
-  // semantics are unchanged.
+  // every conditional text slot rendered nothing. The label states the
+  // selection the list was fetched under (changing the selection clears
+  // the list, so the two can never disagree).
   const observationsMessage = fetching
     ? 'Fetching measurements…'
     : observations.status === 'ready'
       ? `${observations.items.length} measurement${observations.items.length === 1 ? '' : 's'}${
           observations.total !== null ? ` of ${observations.total}` : ''
         } · fetched for ${observations.fetchedFor ?? 'the selection'} · endpoints: ${
-          endpointScopeLabel(state.endpointScope)
+          endpointSelectionLabel(state.endpointSelection)
         }${
           observations.omitted > 0
             ? ` · ${observations.omitted} supplied row(s) carried no usable measurement`
@@ -414,7 +473,7 @@ function MeasurementsCard() {
           <Button
             type="button"
             data-testid="fetch-observations-button"
-            disabled={fetching || !canFetch}
+            disabled={fetching || !canFetch || selectionEmpty}
             onClick={() => void fetchObservations()}
           >
             {fetching ? 'Fetching…' : 'Fetch measurements'}
@@ -429,11 +488,13 @@ function MeasurementsCard() {
               Clear list
             </Button>
           )}
-          {!canFetch && (
+          {(!canFetch || selectionEmpty) && (
             <p className="text-xs text-muted-foreground" data-testid="fetch-hint">
-              {state.scope === 'targets'
-                ? 'Select a target in the results first.'
-                : 'Select at least one compound in the results first.'}
+              {!canFetch
+                ? state.scope === 'targets'
+                  ? 'Select a target in the results first.'
+                  : 'Select at least one compound in the results first.'
+                : 'Select at least one endpoint (or “All reported endpoints”) above first.'}
             </p>
           )}
         </div>
@@ -453,8 +514,9 @@ function MeasurementsCard() {
 
         {observations.status === 'ready' && observations.items.length === 0 && (
           <p className="text-sm text-muted-foreground" data-testid="observations-empty">
-            No measurements matched{state.endpointScope === 'parameters' ? ' with this endpoint filter' : ''} —
-            nothing was written. Try the other endpoint scope, or search another compound.
+            No measurements matched
+            {state.endpointSelection.mode === 'selected' ? ' with the selected endpoints' : ''} —
+            nothing was written. Try different endpoint choices, or search another compound.
           </p>
         )}
 

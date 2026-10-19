@@ -27,6 +27,9 @@ import {
 } from '../../tests/fixtures'
 import type { DrugLibrary } from '../../domain/library/library'
 import type { RemoteObservation } from '../../domain/sources/observation'
+import activitiesFixture from '../../tests/fixtures/sources/chembl-activities.json'
+import moleculesFixture from '../../tests/fixtures/sources/chembl-molecules.json'
+import targetsFixture from '../../tests/fixtures/sources/chembl-targets.json'
 import cidsFixture from '../../tests/fixtures/sources/pubchem-cids.json'
 import propertiesFixture from '../../tests/fixtures/sources/pubchem-properties.json'
 import synonymsFixture from '../../tests/fixtures/sources/pubchem-synonyms.json'
@@ -52,6 +55,26 @@ function stubPubChem(): ReturnType<typeof vi.fn> {
   return spy
 }
 
+/** URL-based ChEMBL mock built from the checked-in fixtures. */
+function stubChEMBL(): ReturnType<typeof vi.fn> {
+  const spy = vi.fn(async (input: string) => {
+    const url = String(input)
+    if (url.includes('/target/search.json')) return json(targetsFixture)
+    if (url.includes('/activity.json')) return json(activitiesFixture)
+    if (url.includes('/molecule.json')) return json(moleculesFixture)
+    return json({ detail: 'not mocked' }, 404)
+  })
+  vi.stubGlobal('fetch', spy)
+  return spy
+}
+
+/** Every ChEMBL activity-request URL the spy has seen, in order. */
+function activityUrls(spy: ReturnType<typeof vi.fn>): string[] {
+  return spy.mock.calls
+    .map(([input]) => String(input))
+    .filter((url) => url.includes('/activity.json'))
+}
+
 beforeEach(async () => {
   await new SandboxDatabase().delete()
   useLibraryStore.setState({
@@ -64,9 +87,10 @@ beforeEach(async () => {
     filter: '',
   })
   useDataSourcesStore.setState({
+    sourceId: 'pubchem',
     query: '',
     scope: 'compounds',
-    endpointScope: 'parameters',
+    endpointSelection: { mode: 'selected', endpoints: ['Ki', 'Kd', 'IC50', 'EC50'] },
     search: { status: 'idle', error: null, errorCode: null, compounds: [], targets: [] },
     activeTarget: null,
     observations: {
@@ -649,6 +673,121 @@ describe('DataSourcesView — deleting a stored compound (phase 39)', () => {
     expect(error).toHaveTextContent('nothing was deleted')
     // No success notice is claimed.
     expect(screen.queryByTestId('apply-notice')).toBeNull()
+  })
+})
+
+describe('DataSourcesView — measurement endpoint multi-select (phase 40)', () => {
+  /** ChEMBL source, one searched-and-selected compound — ready to fetch. */
+  async function searchAndSelectCompound(): Promise<void> {
+    useDataSourcesStore.setState({ sourceId: 'chembl' })
+    render(<DataSourcesView />)
+    fireEvent.change(screen.getByTestId('query-input'), {
+      target: { value: 'synthetic fixture' },
+    })
+    fireEvent.click(screen.getByTestId('search-button'))
+    // The fixture search returns two compounds — wait for and select the
+    // one whose id the fetch helper targets.
+    fireEvent.click(await screen.findByTestId('compound-select-chembl:CHEMBL99990001'))
+  }
+
+  it('offers the four parameter endpoints as independent, accessible choices (default: all four)', () => {
+    const spy = stubChEMBL()
+    useDataSourcesStore.setState({ sourceId: 'chembl' })
+    render(<DataSourcesView />)
+
+    // The default selection matches the previous parameter-only behaviour.
+    expect(screen.getByTestId('endpoint-option-ki')).toBeChecked()
+    expect(screen.getByTestId('endpoint-option-kd')).toBeChecked()
+    expect(screen.getByTestId('endpoint-option-ic50')).toBeChecked()
+    expect(screen.getByTestId('endpoint-option-ec50')).toBeChecked()
+    expect(screen.getByTestId('endpoint-option-all')).not.toBeChecked()
+
+    // A properly labelled group; every option is an independently named,
+    // keyboard-operable checkbox.
+    const group = screen.getByRole('group', { name: 'Measurement endpoints to retrieve' })
+    expect(group).toBe(screen.getByTestId('endpoint-selection'))
+    for (const name of ['Ki', 'Kd', 'IC50', 'EC50', 'All reported endpoints']) {
+      expect(within(group).getByRole('checkbox', { name })).toBeInTheDocument()
+    }
+
+    // Choosing is a local decision — it performs no retrieval.
+    fireEvent.click(screen.getByTestId('endpoint-option-ki'))
+    expect(screen.getByTestId('endpoint-option-ki')).not.toBeChecked()
+    expect(activityUrls(spy)).toEqual([])
+  })
+
+  it('sends only the checked endpoints; "All reported endpoints" omits the filter', async () => {
+    const spy = stubChEMBL()
+    await searchAndSelectCompound()
+
+    fireEvent.click(screen.getByTestId('endpoint-option-ki')) // Ki off
+    fireEvent.click(screen.getByTestId('fetch-observations-button'))
+    await screen.findByTestId('observation-rows')
+    expect(activityUrls(spy)[0] ?? '').toContain('standard_type__in=Kd%2CIC50%2CEC50')
+    expect(screen.getByTestId('observations-status')).toHaveTextContent('endpoints: Kd, IC50, EC50')
+
+    // "All reported endpoints" disables the four individual choices while
+    // it is active — the modes cannot ambiguously combine...
+    fireEvent.click(screen.getByTestId('endpoint-option-all'))
+    expect(screen.getByTestId('endpoint-option-all')).toBeChecked()
+    expect(screen.getByTestId('endpoint-option-kd')).toBeDisabled()
+    expect(screen.getByTestId('endpoint-option-kd')).not.toBeChecked()
+
+    // ...and the request intentionally carries no endpoint filter.
+    fireEvent.click(screen.getByTestId('fetch-observations-button'))
+    await waitFor(() => expect(activityUrls(spy)).toHaveLength(2))
+    expect(activityUrls(spy)[1] ?? '').not.toContain('standard_type__in')
+    await waitFor(() =>
+      expect(screen.getByTestId('observations-status')).toHaveTextContent(
+        'endpoints: all reported endpoints',
+      ),
+    )
+  })
+
+  it('blocks retrieval with a validation message when no endpoint is selected', async () => {
+    const spy = stubChEMBL()
+    await searchAndSelectCompound()
+
+    for (const testId of [
+      'endpoint-option-ki',
+      'endpoint-option-kd',
+      'endpoint-option-ic50',
+      'endpoint-option-ec50',
+    ]) {
+      fireEvent.click(screen.getByTestId(testId))
+    }
+
+    expect(screen.getByTestId('endpoint-selection-error')).toHaveTextContent(
+      'Select at least one endpoint',
+    )
+    expect(screen.getByTestId('fetch-observations-button')).toBeDisabled()
+    expect(screen.getByTestId('fetch-hint')).toHaveTextContent('endpoint')
+
+    // A disabled button performs nothing — an empty selection can never
+    // become an unfiltered request.
+    fireEvent.click(screen.getByTestId('fetch-observations-button'))
+    expect(activityUrls(spy)).toEqual([])
+  })
+
+  it('clears already-fetched rows when the filter changes (the label cannot misdescribe them)', async () => {
+    const spy = stubChEMBL()
+    await searchAndSelectCompound()
+
+    fireEvent.click(screen.getByTestId('fetch-observations-button'))
+    await screen.findByTestId('observation-rows')
+    expect(screen.getByTestId('observations-status')).toHaveTextContent(
+      'endpoints: Ki, Kd, IC50, EC50',
+    )
+
+    fireEvent.click(screen.getByTestId('endpoint-option-ki')) // filter change
+    expect(screen.queryByTestId('observation-rows')).toBeNull()
+    expect(screen.getByTestId('observations-status')).toHaveTextContent(
+      'No measurements fetched yet.',
+    )
+
+    fireEvent.click(screen.getByTestId('fetch-observations-button'))
+    await waitFor(() => expect(activityUrls(spy)).toHaveLength(2))
+    expect(activityUrls(spy)[1] ?? '').toContain('standard_type__in=Kd%2CIC50%2CEC50')
   })
 })
 

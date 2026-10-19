@@ -212,14 +212,67 @@ export interface SourceSummary {
   readonly licenseUrl?: string
 }
 
+/**
+ * The four measurement endpoints the retrieval filter offers as
+ * independent choices (phase 40): the endpoints that map onto a model
+ * parameter slot. They are not a catalogue of every ChEMBL activity
+ * endpoint — `'All reported endpoints'` remains the way to retrieve
+ * everything the source reports.
+ */
+export const ENDPOINT_FILTER_OPTIONS = ['Ki', 'Kd', 'IC50', 'EC50'] as const
+export type EndpointFilterOption = (typeof ENDPOINT_FILTER_OPTIONS)[number]
+
+/**
+ * Endpoint retrieval filter chosen in the measurements panel: an explicit
+ * user-selected subset, or every endpoint the source reports. An empty
+ * `selected` list is a valid, explicit state — retrieval stays disabled
+ * until at least one endpoint (or `all`) is chosen, and an empty
+ * selection is never sent as "all".
+ */
+export type EndpointSelection =
+  | { readonly mode: 'selected'; readonly endpoints: readonly EndpointFilterOption[] }
+  | { readonly mode: 'all' }
+
+/** The default filter — all four parameter endpoints (previous behaviour). */
+export const DEFAULT_ENDPOINT_SELECTION: EndpointSelection = {
+  mode: 'selected',
+  endpoints: ENDPOINT_FILTER_OPTIONS,
+}
+
+/** Canonical order, deduplicated — deterministic filter strings and state. */
+function normalizeEndpointSelection(selection: EndpointSelection): EndpointSelection {
+  if (selection.mode === 'all') return selection
+  const chosen = new Set(selection.endpoints)
+  return { mode: 'selected', endpoints: ENDPOINT_FILTER_OPTIONS.filter((e) => chosen.has(e)) }
+}
+
+/** Same filter (after normalization) — a no-op change must not clear data. */
+function sameEndpointSelection(a: EndpointSelection, b: EndpointSelection): boolean {
+  if (a.mode !== b.mode) return false
+  if (a.mode !== 'selected' || b.mode !== 'selected') return true
+  return (
+    a.endpoints.length === b.endpoints.length &&
+    a.endpoints.every((endpoint, index) => endpoint === b.endpoints[index])
+  )
+}
+
+/**
+ * The adapter filter for a selection: the explicit endpoint list, or the
+ * intentional `'all'` (no endpoint filter). An empty list is passed
+ * through as an empty list — adapters must never interpret it as "all".
+ */
+function endpointTypesFor(selection: EndpointSelection): readonly string[] | 'all' {
+  return selection.mode === 'all' ? 'all' : [...selection.endpoints]
+}
+
 export interface DataSourcesState {
   readonly sourceId: string
   /** Static picker options — the UI never hardcodes source names. */
   readonly sources: readonly SourceSummary[]
   readonly scope: SearchScope
   readonly query: string
-  /** Endpoint filter for observation retrieval (labelled in the UI). */
-  readonly endpointScope: 'parameters' | 'all'
+  /** Endpoint filter for observation retrieval (chosen in the UI). */
+  readonly endpointSelection: EndpointSelection
   readonly search: SearchState
   readonly activeTarget: RemoteTarget | null
   readonly observations: ObservationsState
@@ -235,7 +288,7 @@ export interface DataSourcesState {
   setSource(id: string): void
   setScope(scope: SearchScope): void
   setQuery(query: string): void
-  setEndpointScope(scope: 'parameters' | 'all'): void
+  setEndpointSelection(selection: EndpointSelection): void
   /** User-initiated retrieval of the current query (never runs at startup). */
   runSearch(): Promise<void>
   cancelSearch(): void
@@ -679,7 +732,7 @@ export function createDataSourcesStore(
     sources,
     scope: 'compounds',
     query: '',
-    endpointScope: 'parameters',
+    endpointSelection: DEFAULT_ENDPOINT_SELECTION,
     search: emptySearch(),
     activeTarget: null,
     observations: emptyObservations(),
@@ -743,15 +796,16 @@ export function createDataSourcesStore(
       set({ query })
     },
 
-    setEndpointScope(scope) {
-      if (scope === get().endpointScope) return
+    setEndpointSelection(selection) {
+      const next = normalizeEndpointSelection(selection)
+      if (sameEndpointSelection(get().endpointSelection, next)) return
       // Changing the retrieval filter invalidates already-fetched data so
       // the list header can never describe records fetched under another.
       observationsSeq += 1
       observationsController?.abort()
       observationsController = null
       set({
-        endpointScope: scope,
+        endpointSelection: next,
         observations: emptyObservations(),
         selectedObservationIds: [],
         importOutcome: null,
@@ -927,6 +981,22 @@ export function createDataSourcesStore(
         return
       }
 
+      if (
+        state.endpointSelection.mode === 'selected' &&
+        state.endpointSelection.endpoints.length === 0
+      ) {
+        // An explicit empty selection is never an implicit "all" — the
+        // request is refused until at least one endpoint is chosen.
+        set({
+          observations: {
+            ...emptyObservations(),
+            status: 'error',
+            error: 'Select at least one measurement endpoint, or choose all reported endpoints.',
+          },
+        })
+        return
+      }
+
       observationsSeq += 1
       const seq = observationsSeq
       observationsController?.abort()
@@ -943,7 +1013,7 @@ export function createDataSourcesStore(
           signal: controller.signal,
           limit: PAGE_SIZE,
           offset: 0,
-          endpointScope: state.endpointScope,
+          endpointTypes: endpointTypesFor(state.endpointSelection),
         }
         let page: ObservationPage
         let fetchedFor: string
@@ -1038,6 +1108,11 @@ export function createDataSourcesStore(
       if (offset === null || source === null || state.observations.status !== 'ready') return
       const adapter = adapterOf(state.sourceId)
       if (adapter === null) return
+      const endpointTypes = endpointTypesFor(state.endpointSelection)
+      // Unreachable through the UI (changing the selection clears the
+      // list, so `nextOffset` is null), but an empty selection must never
+      // page an unfiltered request just because the list looked ready.
+      if (endpointTypes !== 'all' && endpointTypes.length === 0) return
       // Resolve the page fetcher BEFORE touching state, so a capability
       // gap can never leave the list stuck in `loading`.
       const pageFetcher = (
@@ -1070,7 +1145,7 @@ export function createDataSourcesStore(
           signal: controller.signal,
           limit: PAGE_SIZE,
           offset,
-          endpointScope: state.endpointScope,
+          endpointTypes,
         })
         if (seq !== observationsSeq) return
         const previous = state.observations

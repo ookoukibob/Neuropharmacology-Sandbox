@@ -16,7 +16,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --maxWorkers=2",
     "test:e2e": "playwright test",
-    "test:crash": "playwright test -c playwright.crash.config.ts"
+    "test:crash": "playwright test -c playwright.crash.config.ts",
+    "smoke:chembl": "node scripts/smoke-chembl-live.mjs"
   },
   "dependencies": {
     "@types/plotly.js": "^3.0.15",

@@ -8,9 +8,12 @@
  *   filter first and falls back to the synonym filter (so CAS-style and
  *   trade-name queries still find records);
  * - observation retrieval: one page of `activity` records for a compound
- *   (or for a whole target), optionally restricted to the endpoint types
- *   that map onto a model parameter slot (Ki, Kd, IC50, EC50);
- * - target search for discovery, with a batched molecule lookup so target
+ *   (or for a whole target), optionally restricted to a caller-chosen
+ *   endpoint list (default: the endpoint types that map onto a model
+ *   parameter slot — Ki, Kd, IC50, EC50);
+ * - target search for discovery, using the documented JSON format
+ *   (`target/search.json`, so the representation never depends on
+ *   content negotiation), with a batched molecule lookup so target
  *   results can be imported as complete Layer A + Layer B records.
  *
  * Every measurement keeps exactly what the source reports — endpoint,
@@ -58,7 +61,12 @@ export const CHEMBL_LICENSE_NOTICE =
   'ChEMBL data is licensed under CC BY-SA 3.0 (Attribution-ShareAlike). Attribute ChEMBL and share adaptations under the same license.'
 export const CHEMBL_LICENSE_URL = 'https://creativecommons.org/licenses/by-sa/3.0/'
 
-/** Endpoints that map onto a model parameter slot (the `parameters` scope). */
+/**
+ * Endpoints that map onto a model parameter slot — the default endpoint
+ * list when a caller passes none. A caller may restrict a retrieval to
+ * any non-empty subset of reported endpoint types, or pass `'all'` to
+ * request every endpoint the source reports.
+ */
 export const CHEMBL_PARAMETER_ENDPOINTS: readonly string[] = ['Ki', 'Kd', 'IC50', 'EC50']
 
 const MAX_SEARCH_RESULTS = 8
@@ -315,8 +323,11 @@ export function createChEMBLAdapter(options: ChEMBLAdapterOptions = {}): SourceA
   const http = options.http ?? {}
 
   async function request(path: string, signal?: AbortSignal): Promise<unknown> {
-    // `Accept: application/json` is a CORS-safelisted request header (no
-    // preflight) and is what makes the target-search endpoint answer JSON.
+    // Every request names its format explicitly (`.json`): the API
+    // documents XML as the default when no format is given, so the
+    // representation must not depend on content negotiation. The
+    // `Accept: application/json` header (CORS-safelisted — no preflight)
+    // is still sent for negotiation-friendly intermediaries.
     return await fetchJson(`${CHEMBL_BASE}/${path}`, {
       headers: { Accept: 'application/json' },
       ...http,
@@ -332,13 +343,18 @@ export function createChEMBLAdapter(options: ChEMBLAdapterOptions = {}): SourceA
   ): Promise<ObservationPage> {
     const limit = options?.limit ?? DEFAULT_PAGE_LIMIT
     const offset = options?.offset ?? 0
-    const scope = options?.endpointScope ?? 'parameters'
-    const scopeFilter =
-      scope === 'parameters' && CHEMBL_PARAMETER_ENDPOINTS.length > 0
-        ? `&standard_type__in=${encodeURIComponent(CHEMBL_PARAMETER_ENDPOINTS.join(','))}`
-        : ''
+    const requested = options?.endpointTypes ?? CHEMBL_PARAMETER_ENDPOINTS
+    if (requested !== 'all' && requested.length === 0) {
+      // An explicit empty selection retrieves nothing. It is never sent
+      // as an unfiltered request — no request is made at all.
+      return { items: [], total: 0, nextOffset: null, omitted: 0 }
+    }
+    const endpointFilter =
+      requested === 'all'
+        ? ''
+        : `&standard_type__in=${encodeURIComponent(requested.join(','))}`
     const body = await request(
-      `${path}&limit=${limit}&offset=${offset}${scopeFilter}`,
+      `${path}&limit=${limit}&offset=${offset}${endpointFilter}`,
       options?.signal,
     )
     const page = activityListSchema.safeParse(body)
@@ -421,7 +437,7 @@ export function createChEMBLAdapter(options: ChEMBLAdapterOptions = {}): SourceA
       const trimmed = query.trim()
       if (trimmed.length === 0) return []
       const body = await request(
-        `target/search?q=${encodeURIComponent(trimmed)}&limit=${MAX_SEARCH_RESULTS}`,
+        `target/search.json?q=${encodeURIComponent(trimmed)}&limit=${MAX_SEARCH_RESULTS}`,
         requestOptions.signal,
       )
       const list = targetListSchema.safeParse(body)
