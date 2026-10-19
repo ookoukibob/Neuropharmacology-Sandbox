@@ -106,10 +106,16 @@ async function seedStored(options: {
   readonly withLibrary?: boolean
   readonly library?: DrugLibrary
   readonly observation?: RemoteObservation
+  /** Store the compound with no measurements at all. */
+  readonly noObservations?: boolean
 } = {}): Promise<void> {
+  const observations =
+    options.noObservations === true
+      ? []
+      : [options.observation ?? syntheticObservation()]
   const report = await sourceDataRepository.importSourceRecords({
     compounds: [syntheticCompound()],
-    observations: [options.observation ?? syntheticObservation()],
+    observations,
   })
   expect(report.ok).toBe(true)
   if (options.withLibrary === true) {
@@ -471,6 +477,178 @@ describe('DataSourcesView — import outcome reporting (phase 36)', () => {
       .addToLibrary('chembl:CHEMBL99990001', { drugId: 'no-such-drug' })
     expect(outcome.status).toBe('failed')
     expect((await libraryRepository.getAllDrugs()).drugs).toHaveLength(1)
+  })
+})
+
+describe('DataSourcesView — deleting a stored compound (phase 37)', () => {
+  it('requires an explicit confirmation naming the compound and its measurement count', async () => {
+    await seedStored()
+    render(<DataSourcesView />)
+
+    // The row offers Delete, but nothing is deleted by the first click.
+    const deleteButton = await screen.findByTestId('delete-compound-chembl:CHEMBL99990001')
+    expect(deleteButton).toHaveTextContent('Delete')
+    fireEvent.click(deleteButton)
+
+    const confirmation = screen.getByTestId('delete-compound-confirm-text-chembl:CHEMBL99990001')
+    expect(confirmation).toHaveTextContent('Synthetic Fixture Compound')
+    expect(confirmation).toHaveTextContent('chembl:CHEMBL99990001')
+    expect(confirmation).toHaveTextContent('1 associated measurement record')
+    expect(confirmation).toHaveTextContent('cannot be undone')
+    // The library independence is stated up front.
+    expect(confirmation).toHaveTextContent('drug library is not affected')
+
+    // Focus moves into the acknowledgement step.
+    expect(document.activeElement).toBe(
+      screen.getByTestId('delete-compound-confirm-chembl:CHEMBL99990001'),
+    )
+    // Nothing was deleted yet.
+    expect((await sourceDataRepository.listCompounds()).records).toHaveLength(1)
+  })
+
+  it('cancelling leaves the record and its measurements in place', async () => {
+    await seedStored()
+    render(<DataSourcesView />)
+
+    fireEvent.click(await screen.findByTestId('delete-compound-chembl:CHEMBL99990001'))
+    fireEvent.click(screen.getByTestId('delete-compound-cancel-chembl:CHEMBL99990001'))
+
+    // Back to the Delete button, with focus restored.
+    expect(screen.queryByTestId('delete-compound-confirm-chembl:CHEMBL99990001')).toBeNull()
+    expect(document.activeElement).toBe(
+      screen.getByTestId('delete-compound-chembl:CHEMBL99990001'),
+    )
+    expect((await sourceDataRepository.listCompounds()).records).toHaveLength(1)
+    expect((await sourceDataRepository.listObservations()).records).toHaveLength(1)
+    expect(screen.getByTestId('stored-compounds')).toHaveTextContent('Synthetic Fixture Compound')
+  })
+
+  it('Escape cancels the confirmation', async () => {
+    await seedStored()
+    render(<DataSourcesView />)
+
+    fireEvent.click(await screen.findByTestId('delete-compound-chembl:CHEMBL99990001'))
+    const panel = screen.getByTestId('delete-compound-confirm-panel-chembl:CHEMBL99990001')
+    fireEvent.keyDown(panel, { key: 'Escape' })
+
+    expect(screen.queryByTestId('delete-compound-confirm-chembl:CHEMBL99990001')).toBeNull()
+    expect((await sourceDataRepository.listCompounds()).records).toHaveLength(1)
+  })
+
+  it('confirms, deletes both records, reports the count and refreshes the panel', async () => {
+    await seedStored()
+    render(<DataSourcesView />)
+    expect(screen.getByTestId('stored-status')).toHaveTextContent('1 compound identity record')
+
+    fireEvent.click(await screen.findByTestId('delete-compound-chembl:CHEMBL99990001'))
+    fireEvent.click(screen.getByTestId('delete-compound-confirm-chembl:CHEMBL99990001'))
+
+    const notice = await screen.findByTestId('apply-notice')
+    expect(notice).toHaveTextContent('Deleted')
+    expect(notice).toHaveTextContent('Synthetic Fixture Compound')
+    expect(notice).toHaveTextContent('1 associated measurement record')
+    expect(notice).toHaveTextContent('drug library was not changed')
+
+    // The panel re-read IndexedDB: both empty states are back.
+    await waitFor(() => {
+      expect(screen.getByTestId('stored-compounds-empty')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('stored-observations-empty')).toBeInTheDocument()
+    expect(screen.getByTestId('stored-status')).toHaveTextContent('0 compound identity records')
+    expect(screen.getByTestId('stored-status')).toHaveTextContent('0 measurements')
+
+    // Storage agrees.
+    expect((await sourceDataRepository.listCompounds()).records).toEqual([])
+    expect((await sourceDataRepository.listObservations()).records).toEqual([])
+  })
+
+  it('keeps other compounds and their measurements listed after a deletion', async () => {
+    await seedStored()
+    // A second compound with its own measurement, imported through the real
+    // repository.
+    const other = {
+      ...syntheticCompound(),
+      id: 'chembl:CHEMBL99990002',
+      sourceId: 'CHEMBL99990002',
+      name: 'Synthetic Fixture Compound B',
+      identifiers: { chemblId: 'CHEMBL99990002' },
+      provenance: {
+        ...syntheticCompound().provenance,
+        recordId: 'CHEMBL99990002',
+        url: 'https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL99990002',
+      },
+    }
+    const otherObservation = {
+      ...syntheticObservation(),
+      id: 'chembl:99000007',
+      compoundId: 'chembl:CHEMBL99990002',
+      compoundSourceId: 'CHEMBL99990002',
+      compoundName: 'Synthetic Fixture Compound B',
+      provenance: { ...syntheticObservation().provenance, recordId: '99000007' },
+    }
+    const report = await sourceDataRepository.importSourceRecords({
+      compounds: [other],
+      observations: [otherObservation],
+    })
+    expect(report.ok).toBe(true)
+    await useDataSourcesStore.getState().hydrateStored()
+
+    render(<DataSourcesView />)
+    fireEvent.click(await screen.findByTestId('delete-compound-chembl:CHEMBL99990001'))
+    fireEvent.click(screen.getByTestId('delete-compound-confirm-chembl:CHEMBL99990001'))
+
+    // The success notice appears only after the store has actually re-read
+    // IndexedDB, so waiting for it synchronises with the deletion; waiting
+    // on the Delete button would be trivially true while the confirmation
+    // panel was open. The refreshed list then drops the deleted row.
+    await screen.findByTestId('apply-notice')
+    await waitFor(() => {
+      expect(screen.getByTestId('stored-compounds')).not.toHaveTextContent(
+        'chembl:CHEMBL99990001',
+      )
+    })
+    const remaining = screen.getByTestId('stored-compounds')
+    expect(remaining).toHaveTextContent('Synthetic Fixture Compound B')
+    expect(remaining).not.toHaveTextContent('Synthetic Fixture Compound”')
+    // The other compound's measurement is still listed.
+    expect(screen.getByTestId('stored-observations')).toHaveTextContent('3.5 nM')
+    expect((await sourceDataRepository.listObservations()).records.map((o) => o.id)).toEqual([
+      'chembl:99000007',
+    ])
+  })
+
+  it('states honestly when a compound has no measurements to delete', async () => {
+    await seedStored({ noObservations: true })
+    render(<DataSourcesView />)
+
+    fireEvent.click(await screen.findByTestId('delete-compound-chembl:CHEMBL99990001'))
+    const confirmation = screen.getByTestId('delete-compound-confirm-text-chembl:CHEMBL99990001')
+    expect(confirmation).toHaveTextContent('no stored measurement records')
+
+    fireEvent.click(screen.getByTestId('delete-compound-confirm-chembl:CHEMBL99990001'))
+    const notice = await screen.findByTestId('apply-notice')
+    expect(notice).toHaveTextContent('0 associated measurement records')
+  })
+
+  it('shows an actionable error and keeps the row when deletion fails', async () => {
+    await seedStored()
+    render(<DataSourcesView />)
+    await screen.findByTestId('delete-compound-chembl:CHEMBL99990001')
+
+    // Force the repository's failure path: the stored row is quarantined.
+    await new SandboxDatabase().compounds.put({
+      id: 'chembl:CHEMBL99990001',
+      source: 'chembl',
+    } as never)
+
+    fireEvent.click(screen.getByTestId('delete-compound-chembl:CHEMBL99990001'))
+    fireEvent.click(screen.getByTestId('delete-compound-confirm-chembl:CHEMBL99990001'))
+
+    const error = await screen.findByTestId('apply-error')
+    expect(error).toHaveTextContent('quarantined')
+    expect(error).toHaveTextContent('nothing was deleted')
+    // No success notice is claimed.
+    expect(screen.queryByTestId('apply-notice')).toBeNull()
   })
 })
 

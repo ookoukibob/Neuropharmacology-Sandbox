@@ -46,6 +46,7 @@ import { findSourceRecord, mergeSourceRecord } from '../../domain/drug/source-da
 import type { DrugRepository, DrugInput, TargetInput } from '../../data/repositories/repository'
 import type {
   SourceDataRepository,
+  SourceDeleteFailureCode,
   SourceImportIssue,
 } from '../../data/repositories/sourceDataRepository'
 import {
@@ -160,6 +161,30 @@ export type AddToLibraryOutcome =
     }
   | { readonly status: 'failed'; readonly message: string }
 
+/**
+ * Outcome of deleting one stored compound identity record (phase 37).
+ *
+ * Mirrors `SourceDeleteReport` at the session boundary but adds the
+ * human-readable summary the panel shows, so a success states exactly what
+ * was removed instead of a generic "deleted".
+ *
+ * A failed deletion wrote nothing — the stored panel keeps its current
+ * contents and the message names the reason (missing row, quarantined row,
+ * unreadable measurement, or a rolled-back storage failure).
+ */
+export type DeleteCompoundOutcome =
+  | {
+      readonly status: 'deleted'
+      readonly compoundId: string
+      readonly deletedObservations: number
+      readonly message: string
+    }
+  | {
+      readonly status: 'failed'
+      readonly code: SourceDeleteFailureCode
+      readonly message: string
+    }
+
 export interface ApplyObservationRequest {
   readonly observationId: string
   readonly drugId: DrugId
@@ -238,6 +263,17 @@ export interface DataSourcesState {
     compoundId: string,
     options?: { readonly drugId?: DrugId },
   ): Promise<AddToLibraryOutcome>
+  /**
+   * Delete ONE stored compound identity record and exactly its associated
+   * measurements (phase 37), then re-read the stored panel from IndexedDB.
+   *
+   * This removes only the local Data Sources acquisition copy. It never
+   * touches the drug library: a `Drug.sourceRecords` snapshot imported
+   * earlier is an independent, durable copy, so the Library record keeps
+   * its source data, parameters, targets and notes. Cascading deletion into
+   * the library is deliberately not implemented.
+   */
+  deleteCompound(compoundId: string): Promise<DeleteCompoundOutcome>
   clearActionMessages(): void
 }
 
@@ -1433,6 +1469,63 @@ export function createDataSourcesStore(
         sourceRecord: snapshot,
         addedObservations: snapshot.observations.length,
         observationCount: snapshot.observations.length,
+      }
+    },
+
+    async deleteCompound(compoundId) {
+      // Resolve what the user is about to lose BEFORE deleting, so the
+      // success message reports real counts rather than a guess. The
+      // repository re-resolves and re-validates everything inside its own
+      // transaction — this is display information, never the safety
+      // boundary.
+      const state = get()
+      const compound = state.stored.compounds.find((candidate) => candidate.id === compoundId)
+      const label = compound === undefined ? compoundId : (compound.name ?? compound.sourceId)
+
+      let report: Awaited<ReturnType<SourceDataRepository['deleteCompound']>>
+      try {
+        report = await sourceRepository.deleteCompound(compoundId)
+      } catch (error) {
+        // The repository reports storage failures as a typed result; a throw
+        // here means something outside that contract failed. Either way
+        // nothing is assumed to have been written.
+        const message = `Could not delete "${label}" (${messageOf(error)}) — nothing was deleted.`
+        set({ actionError: message, actionNotice: null })
+        return { status: 'failed', code: 'STORAGE', message }
+      }
+
+      if (!report.ok) {
+        set({ actionError: report.failure.message, actionNotice: null })
+        // A failed deletion wrote nothing, so the panel keeps its contents;
+        // the refresh below is a cheap re-read that also keeps the panel
+        // honest if another tab changed the store meanwhile.
+        await get().hydrateStored()
+        return { status: 'failed', code: report.failure.code, message: report.failure.message }
+      }
+
+      // Success: re-read the stored panel so the list, the counts and the
+      // empty states all reflect IndexedDB rather than a local guess.
+      await get().hydrateStored()
+      // The applying/selected row may have belonged to the deleted compound.
+      const remainingObservationIds = new Set(
+        get().stored.observations.map((observation) => observation.id),
+      )
+      set((current) => ({
+        actionError: null,
+        actionNotice: `Deleted "${label}" (${report.deletedCompoundId}) and ${report.deletedObservations} associated measurement record${
+          report.deletedObservations === 1 ? '' : 's'
+        }. The drug library was not changed — any imported source data stays on its drug record.`,
+        selectedObservationIds: current.selectedObservationIds.filter((id) =>
+          remainingObservationIds.has(id),
+        ),
+      }))
+      return {
+        status: 'deleted',
+        compoundId: report.deletedCompoundId,
+        deletedObservations: report.deletedObservations,
+        message: `Deleted "${label}" and ${report.deletedObservations} measurement record${
+          report.deletedObservations === 1 ? '' : 's'
+        }.`,
       }
     },
 

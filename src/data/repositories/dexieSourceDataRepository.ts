@@ -20,6 +20,15 @@
  * overwritten, repaired, deleted or silently skipped; a storage failure
  * throws out of the transaction and Dexie rolls back — there is no
  * partial import in either direction.
+ *
+ * Deletion (phase 37) runs in ONE `rw` transaction over the same two
+ * tables and follows the same protection policy: the compound row is
+ * resolved with the authoritative parser FIRST, and a row that fails it is
+ * quarantined and preserved — deletion is refused before any `delete` call.
+ * Only observations whose validated `compoundId` equals the compound's id
+ * are removed; every other compound and measurement is untouched, and the
+ * drug library (including imported `Drug.sourceRecords` snapshots) is
+ * never part of this transaction at all.
  */
 import type { Compound } from '../../domain/sources/compound'
 import type { ExperimentalObservation } from '../../domain/sources/observation'
@@ -27,12 +36,17 @@ import type { SandboxDatabase } from '../db/database'
 import { parseCompoundRecord, parseObservationRecord } from '../schemas/sources'
 import type {
   SourceDataRepository,
+  SourceDeleteReport,
   SourceImportIssue,
   SourceImportReport,
   SourceImportRequest,
   SourceLoadResult,
 } from './sourceDataRepository'
 import type { QuarantinedRecord } from './repository'
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
 function recordKey(raw: unknown): string {
   if (typeof raw === 'object' && raw !== null) {
@@ -261,5 +275,88 @@ export class DexieSourceDataRepository implements SourceDataRepository {
           observations.unique.length - newObservations.length + observations.duplicates,
       }
     })
+  }
+
+  async deleteCompound(id: string): Promise<SourceDeleteReport> {
+    try {
+      return await this.db.transaction('rw', this.db.compounds, this.db.observations, async () => {
+        // Step 1 — resolve the row and validate it with the SAME parser
+        // hydration uses. A row that fails validation is quarantined: it is
+        // preserved byte-identical and the deletion is refused BEFORE any
+        // write, so a malformed row can never be discarded by a path that
+        // cannot prove what it is removing (the established policy).
+        const raw = await this.db.compounds.get(id)
+        if (raw === undefined) {
+          return {
+            ok: false,
+            failure: {
+              code: 'NOT_FOUND',
+              message: `no stored compound identity record with id "${id}" — it may have been deleted already; reload the stored records and try again`,
+            },
+          } satisfies SourceDeleteReport
+        }
+        const parsed = parseCompoundRecord(raw)
+        if (!parsed.ok) {
+          return {
+            ok: false,
+            failure: {
+              code: 'QUARANTINE_CONFLICT',
+              message: `stored compound "${id}" fails source-record validation and is quarantined; nothing was deleted and the raw row was preserved unchanged. Resolve the quarantined row before deleting this id.`,
+              preservedIds: [id],
+            },
+          } satisfies SourceDeleteReport
+        }
+
+        // Step 2 — identify the observations that reference EXACTLY this
+        // compound id. The index lookup is by the stored compoundId value,
+        // never by a display name, so a same-named compound's measurements
+        // can never be swept up.
+        const candidates = await this.db.observations
+          .where('compoundId')
+          .equals(parsed.record.id)
+          .toArray()
+
+        // An observation that references this compound but cannot be
+        // validated is a row whose meaning cannot be established. Deleting
+        // it would discard unvalidated data, and keeping it would leave a
+        // dangling measurement: refuse, preserving everything.
+        const unreadable = candidates.filter((candidate) => !parseObservationRecord(candidate).ok)
+        if (unreadable.length > 0) {
+          const ids = unreadable.map((candidate) => recordKey(candidate))
+          return {
+            ok: false,
+            failure: {
+              code: 'ORPHAN_OBSERVATION',
+              message: `${ids.length} stored measurement row(s) reference "${id}" but fail source-record validation (${ids.join(', ')}); nothing was deleted and every row was preserved unchanged. Resolve the quarantined measurement row(s) before deleting this compound.`,
+              preservedIds: [id, ...ids],
+            },
+          } satisfies SourceDeleteReport
+        }
+
+        // Step 3 — delete the compound and exactly those observations,
+        // inside this one transaction: any throw rolls both back.
+        const observationIds = candidates.map((candidate) => recordKey(candidate))
+        await this.db.observations.bulkDelete(observationIds)
+        await this.db.compounds.delete(parsed.record.id)
+
+        // Only observations matched by the compoundId index were removed;
+        // measurements of every other compound were never candidates.
+        return {
+          ok: true,
+          deletedCompoundId: parsed.record.id,
+          deletedObservations: observationIds.length,
+        } satisfies SourceDeleteReport
+      })
+    } catch (error) {
+      // Dexie rolled the transaction back: both tables are exactly as they
+      // were, so this is a failure with no partial write.
+      return {
+        ok: false,
+        failure: {
+          code: 'STORAGE',
+          message: `the deletion could not be committed (${messageOf(error)}) — the transaction was rolled back and nothing was deleted`,
+        },
+      }
+    }
   }
 }
