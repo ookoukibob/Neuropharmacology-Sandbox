@@ -62,11 +62,14 @@ export interface ObservationRequestOptions extends RequestOptions {
   readonly limit?: number
   readonly offset?: number
   /**
-   * `parameters` retrieves only the endpoints that map onto a model
-   * parameter slot (the adapter's documented set); `all` retrieves every
-   * endpoint type the source reports.
+   * Endpoint types to retrieve, passed through exactly as chosen:
+   * a non-empty list retrieves only those endpoints (ChEMBL sends them
+   * as `standard_type__in`); the literal `'all'` intentionally omits the
+   * endpoint filter and retrieves every endpoint the source reports;
+   * omitted means the adapter's documented default set. An EMPTY list is
+   * never treated as `'all'` — it retrieves nothing (no request is made).
    */
-  readonly endpointScope?: 'parameters' | 'all'
+  readonly endpointTypes?: readonly string[] | 'all'
 }
 
 /** One search scope a source may offer. */

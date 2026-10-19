@@ -263,10 +263,47 @@ describe('ChEMBL adapter — observations', () => {
     expect(observed?.target.sourceTargetUrl).toBeUndefined()
   })
 
-  it('drops the parameter-endpoint filter for the "all" scope', async () => {
+  it('sends the default parameter-endpoint filter when no endpoints are chosen', async () => {
     const { adapter, calls } = adapterWith(ACTIVITIES)
-    await adapter.fetchObservations?.('CHEMBL99990001', { endpointScope: 'all' })
+    await adapter.fetchObservations?.('CHEMBL99990001')
+    expect(calls[0]?.url).toContain('standard_type__in=Ki%2CKd%2CIC50%2CEC50')
+  })
+
+  it('restricts retrieval to a single chosen endpoint', async () => {
+    const { adapter, calls } = adapterWith(ACTIVITIES)
+    await adapter.fetchObservations?.('CHEMBL99990001', { endpointTypes: ['Kd'] })
+    expect(calls[0]?.url).toContain('standard_type__in=Kd')
+  })
+
+  it('restricts retrieval to a chosen subset (Kd + IC50)', async () => {
+    const { adapter, calls } = adapterWith(ACTIVITIES)
+    await adapter.fetchObservations?.('CHEMBL99990001', { endpointTypes: ['Kd', 'IC50'] })
+    expect(calls[0]?.url).toContain('standard_type__in=Kd%2CIC50')
+  })
+
+  it('sends a different valid subset unchanged (Ki + EC50 — never substituted)', async () => {
+    const { adapter, calls } = adapterWith(ACTIVITIES)
+    await adapter.fetchObservations?.('CHEMBL99990001', { endpointTypes: ['Ki', 'EC50'] })
+    expect(calls[0]?.url).toContain('standard_type__in=Ki%2CEC50')
+  })
+
+  it('omits the endpoint filter only for the explicit "all" selection', async () => {
+    const { adapter, calls } = adapterWith(ACTIVITIES)
+    await adapter.fetchObservations?.('CHEMBL99990001', { endpointTypes: 'all' })
     expect(calls[0]?.url).not.toContain('standard_type__in')
+  })
+
+  it('retrieves nothing without a request for an empty endpoint list', async () => {
+    const { adapter, calls } = adapterWith(ACTIVITIES)
+    const page = await adapter.fetchObservations?.('CHEMBL99990001', { endpointTypes: [] })
+    expect(page).toEqual({ items: [], total: 0, nextOffset: null, omitted: 0 })
+    expect(calls).toEqual([])
+  })
+
+  it('URL-encodes chosen endpoint types as one filter value', async () => {
+    const { adapter, calls } = adapterWith(ACTIVITIES)
+    await adapter.fetchObservations?.('CHEMBL99990001', { endpointTypes: ["Log K'", 'Ki'] })
+    expect(calls[0]?.url).toContain("standard_type__in=Log%20K'%2CKi")
   })
 
   it('computes the next offset from page metadata', async () => {
@@ -320,12 +357,16 @@ describe('ChEMBL adapter — observations', () => {
 })
 
 describe('ChEMBL adapter — targets and batch compounds', () => {
-  it('searches targets with JSON negotiation and maps the supplied fields', async () => {
+  it('searches targets through the documented JSON endpoint and maps the supplied fields', async () => {
     const { adapter, calls } = adapterWith([
-      { match: 'target/search', respond: () => json(targetsFixture) },
+      { match: 'target/search.json', respond: () => json(targetsFixture) },
     ])
     const results = await adapter.searchTargets?.('synthetic target', {})
-    expect(calls[0]?.url).toContain('target/search?q=synthetic%20target')
+    // The exact URL is pinned: the format suffix is part of the request,
+    // not an accident of the mock's routing.
+    expect(calls[0]?.url).toBe(
+      'https://www.ebi.ac.uk/chembl/api/data/target/search.json?q=synthetic%20target&limit=8',
+    )
     expect(calls[0]?.headers).toMatchObject(ACCEPT_JSON)
     expect(results).toEqual([
       {
@@ -337,9 +378,41 @@ describe('ChEMBL adapter — targets and batch compounds', () => {
     ])
   })
 
+  it('never falls back to the format-less target path (only .json is answered)', async () => {
+    // The mock answers the *bare* path only; a request without the format
+    // suffix would resolve here and pass. It must not: the scripted
+    // transport throws on the unexpected .json request instead.
+    const { adapter } = adapterWith([
+      { match: 'target/search?', respond: () => json({ targets: [] }) },
+    ])
+    await expect(adapter.searchTargets?.('synthetic', {})).rejects.toThrow('unexpected request')
+  })
+
+  it('keeps the real HTTP status of a target-search failure', async () => {
+    const { adapter } = adapterWith([
+      { match: 'target/search.json', respond: () => json({ detail: 'not found' }, 404) },
+    ])
+    await expect(adapter.searchTargets?.('synthetic', {})).rejects.toMatchObject({
+      code: 'http',
+      status: 404,
+    })
+  })
+
+  it('supports cancellation of a target search', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const { adapter, calls } = adapterWith([
+      { match: 'target/search.json', respond: () => json(targetsFixture) },
+    ])
+    await expect(
+      adapter.searchTargets?.('synthetic', { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: 'aborted' })
+    expect(calls).toEqual([])
+  })
+
   it('rejects a malformed target envelope as invalid-response', async () => {
     const { adapter } = adapterWith([
-      { match: 'target/search', respond: () => json({ targets: 7 }) },
+      { match: 'target/search.json', respond: () => json({ targets: 7 }) },
     ])
     await expect(adapter.searchTargets?.('synthetic', {})).rejects.toMatchObject({
       code: 'invalid-response',

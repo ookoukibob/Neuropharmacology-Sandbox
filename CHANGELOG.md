@@ -6,6 +6,47 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Fixed — ChEMBL target search requests the documented JSON format (phase 40)
+
+- **Target search now uses `target/search.json?q=…&limit=…`.** The
+  previous request used the format-less `target/search` path, whose
+  representation depends on HTTP content negotiation: the API documents
+  XML as the default when no format is given (live check: the same URL
+  without `Accept: application/json` answers `application/xml`), and its
+  `Vary: Accept, Origin` header shows one URL can answer in more than one
+  format. Every other ChEMBL request in the app already pinned `.json`;
+  the target search was the one exception. The `Accept:
+  application/json` header is still sent.
+- Regression tests pin the exact JSON URL (a reverted format-less path
+  fails the suite instead of being absorbed by the mocks), keep the
+  field mapping, the invalid-envelope `invalid-response` case, real HTTP
+  statuses, cancellation and the `Accept` header intact.
+
+### Changed — measurement endpoints are individually selectable (phase 40)
+
+- The single-choice "Measurement endpoints to retrieve" selector becomes
+  an accessible multi-select group: **Ki, Kd, IC50 and EC50 are
+  independent checkboxes** (the default selects all four — identical to
+  the previous behaviour), plus a separate, mutually exclusive **"All
+  reported endpoints"** mode that disables the individual choices and
+  intentionally omits the endpoint filter.
+- In selected mode the checked endpoints are sent to ChEMBL as
+  URL-encoded `standard_type__in=…`; the four choices are the
+  model-parameter endpoints — not a catalogue of every activity endpoint
+  a source may report — and only endpoints the source actually reports
+  can be returned.
+- **An empty selection is never sent as "all".** Retrieval stays disabled
+  with a clear validation message, the store refuses the request, and the
+  adapter retrieves nothing (without a request) for an empty list.
+- Changing the selection invalidates already-fetched measurements and
+  their selection — an in-flight request is aborted and a late answer is
+  discarded — so the fetched list always shows the filter it was fetched
+  under, and paging continues only under that same filter.
+- Measurement handling is unchanged: endpoint names, values, units,
+  relation qualifiers (`<`, `>`), assay/target/provenance/licensing data
+  and the explicit "Use as parameter…" promotion keep every existing
+  rule.
+
 ### Added — delete stored compound identity records (phase 39)
 
 - **A stored compound identity record can now be deleted** from the

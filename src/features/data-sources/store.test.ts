@@ -317,7 +317,7 @@ describe('data sources — search lifecycle', () => {
 })
 
 describe('data sources — observation retrieval', () => {
-  it('fetches a page for the selected compound with the endpoint scope', async () => {
+  it('fetches a page for the selected compound with the default endpoint selection', async () => {
     const requests: ObservationRequestOptions[] = []
     const store = makeStore([
       makeAdapter({
@@ -344,7 +344,7 @@ describe('data sources — observation retrieval', () => {
       sourceId: 'CHEMBL99990001',
     })
     expect(state.observations.fetchedFor).toContain('Synthetic Fixture Compound')
-    expect(requests[0]?.endpointScope).toBe('parameters')
+    expect(requests[0]?.endpointTypes).toEqual(['Ki', 'Kd', 'IC50', 'EC50'])
     expect(requests[0]?.limit).toBe(25)
   })
 
@@ -471,23 +471,211 @@ describe('data sources — observation retrieval', () => {
     expect(store.getState().observations.items).toEqual([OBSERVATION_B])
   })
 
-  it('changing the endpoint scope invalidates already-fetched records', async () => {
+  it('passes the chosen endpoint subset to the adapter; "all" is sent explicitly', async () => {
+    const requests: ObservationRequestOptions[] = []
     const store = makeStore([
       makeAdapter({
         searchCompounds: async () => [COMPOUND_A],
-        fetchObservations: async () => ({ items: [OBSERVATION_A], total: 1, nextOffset: null, omitted: 0 }),
+        fetchObservations: async (_id, options) => {
+          requests.push(options ?? {})
+          return { items: [OBSERVATION_A], total: 1, nextOffset: null, omitted: 0 }
+        },
+      }),
+    ])
+    store.getState().setQuery('synthetic')
+    await store.getState().runSearch()
+    store.getState().toggleCompound(COMPOUND_A.id)
+
+    store.getState().setEndpointSelection({ mode: 'selected', endpoints: ['IC50', 'Kd'] })
+    await store.getState().fetchObservations()
+    // Canonical order, deduplicated — the filter sent is exactly the choice.
+    expect(requests[0]?.endpointTypes).toEqual(['Kd', 'IC50'])
+
+    store.getState().setEndpointSelection({ mode: 'all' })
+    await store.getState().fetchObservations()
+    expect(requests[1]?.endpointTypes).toBe('all')
+  })
+
+  it('passes the same endpoint filter to target-based retrieval', async () => {
+    const requests: ObservationRequestOptions[] = []
+    const store = makeStore([
+      makeAdapter({
+        searchTargets: async () => [
+          { sourceTargetId: 'CHEMBL99991001', name: 'Synthetic Target A' },
+        ],
+        fetchObservationsByTarget: async (_id, options) => {
+          requests.push(options ?? {})
+          return { items: [OBSERVATION_B], total: 1, nextOffset: null, omitted: 0 }
+        },
+      }),
+    ])
+    store.getState().setScope('targets')
+    store.getState().setQuery('synthetic target')
+    await store.getState().runSearch()
+    store.getState().setActiveTarget({ sourceTargetId: 'CHEMBL99991001' })
+    store.getState().setEndpointSelection({ mode: 'selected', endpoints: ['EC50'] })
+    await store.getState().fetchObservations()
+    expect(requests[0]?.endpointTypes).toEqual(['EC50'])
+  })
+
+  it('passes the same endpoint filter to every compound of a multi-compound fetch', async () => {
+    const filters: (readonly string[] | 'all' | undefined)[] = []
+    const store = makeStore([
+      makeAdapter({
+        searchCompounds: async () => [COMPOUND_A, COMPOUND_B],
+        fetchObservations: async (_id, options) => {
+          filters.push(options?.endpointTypes)
+          return emptyPage()
+        },
+      }),
+    ])
+    store.getState().setQuery('synthetic')
+    await store.getState().runSearch()
+    store.getState().toggleCompound(COMPOUND_A.id)
+    store.getState().toggleCompound(COMPOUND_B.id)
+    store.getState().setEndpointSelection({ mode: 'selected', endpoints: ['IC50'] })
+    await store.getState().fetchObservations()
+    expect(filters).toEqual([['IC50'], ['IC50']])
+  })
+
+  it('changing the endpoint selection invalidates already-fetched records and selections', async () => {
+    const requests: ObservationRequestOptions[] = []
+    const store = makeStore([
+      makeAdapter({
+        searchCompounds: async () => [COMPOUND_A],
+        fetchObservations: async (_id, options) => {
+          requests.push(options ?? {})
+          return { items: [OBSERVATION_A], total: 50, nextOffset: 25, omitted: 0 }
+        },
       }),
     ])
     store.getState().setQuery('synthetic')
     await store.getState().runSearch()
     store.getState().toggleCompound(COMPOUND_A.id)
     await store.getState().fetchObservations()
+    store.getState().toggleObservation(OBSERVATION_A.id)
     expect(store.getState().observations.status).toBe('ready')
+    expect(store.getState().selectedObservationIds).toEqual([OBSERVATION_A.id])
 
-    store.getState().setEndpointScope('all')
+    store.getState().setEndpointSelection({ mode: 'selected', endpoints: ['Ki'] })
     expect(store.getState().observations.status).toBe('idle')
     expect(store.getState().observations.items).toEqual([])
-    expect(store.getState().endpointScope).toBe('all')
+    expect(store.getState().observations.nextOffset).toBeNull()
+    expect(store.getState().selectedObservationIds).toEqual([])
+    expect(store.getState().endpointSelection).toEqual({ mode: 'selected', endpoints: ['Ki'] })
+
+    // The next retrieval uses the new selection, from a fresh offset.
+    await store.getState().fetchObservations()
+    expect(requests[1]?.endpointTypes).toEqual(['Ki'])
+    expect(requests[1]?.offset).toBe(0)
+  })
+
+  it('a filter change discards an in-flight response from the previous selection', async () => {
+    const gate = deferred<ObservationPage>()
+    const requests: ObservationRequestOptions[] = []
+    const store = makeStore([
+      makeAdapter({
+        searchCompounds: async () => [COMPOUND_A],
+        fetchObservations: async (_id, options) => {
+          requests.push(options ?? {})
+          return await gate.promise
+        },
+      }),
+    ])
+    store.getState().setQuery('synthetic')
+    await store.getState().runSearch()
+    store.getState().toggleCompound(COMPOUND_A.id)
+    const pending = store.getState().fetchObservations()
+    expect(store.getState().observations.status).toBe('loading')
+
+    store.getState().setEndpointSelection({ mode: 'selected', endpoints: ['Kd'] })
+    expect(requests[0]?.signal?.aborted).toBe(true) // invalidated in flight
+
+    gate.resolve({ items: [OBSERVATION_A], total: 1, nextOffset: null, omitted: 0 })
+    await pending
+    // The late page from the previous selection never lands in state.
+    expect(store.getState().observations.status).toBe('idle')
+    expect(store.getState().observations.items).toEqual([])
+  })
+
+  it('pages with the filter the displayed list was fetched under', async () => {
+    const requests: ObservationRequestOptions[] = []
+    const store = makeStore([
+      makeAdapter({
+        searchCompounds: async () => [COMPOUND_A],
+        fetchObservations: async (_id, options) => {
+          requests.push(options ?? {})
+          return (options?.offset ?? 0) === 0
+            ? { items: [OBSERVATION_A], total: 50, nextOffset: 25, omitted: 0 }
+            : { items: [OBSERVATION_A], total: 50, nextOffset: null, omitted: 0 }
+        },
+      }),
+    ])
+    store.getState().setQuery('synthetic')
+    await store.getState().runSearch()
+    store.getState().toggleCompound(COMPOUND_A.id)
+    store.getState().setEndpointSelection({ mode: 'selected', endpoints: ['Kd', 'Ki'] })
+    await store.getState().fetchObservations()
+    await store.getState().loadMoreObservations()
+
+    expect(requests.map((request) => request.endpointTypes)).toEqual([
+      ['Ki', 'Kd'],
+      ['Ki', 'Kd'],
+    ])
+    expect(requests[1]?.offset).toBe(25)
+
+    // Changing the filter invalidates the pagination context entirely:
+    // nothing is fetched until the user retrieves a fresh page.
+    store.getState().setEndpointSelection({ mode: 'selected', endpoints: ['EC50'] })
+    expect(store.getState().observations.nextOffset).toBeNull()
+    await store.getState().loadMoreObservations()
+    expect(requests).toHaveLength(2)
+  })
+
+  it('refuses retrieval (and never requests all) for an empty endpoint selection', async () => {
+    let calls = 0
+    const store = makeStore([
+      makeAdapter({
+        searchCompounds: async () => [COMPOUND_A],
+        fetchObservations: async () => {
+          calls += 1
+          return emptyPage()
+        },
+      }),
+    ])
+    store.getState().setQuery('synthetic')
+    await store.getState().runSearch()
+    store.getState().toggleCompound(COMPOUND_A.id)
+    store.getState().setEndpointSelection({ mode: 'selected', endpoints: [] })
+
+    await store.getState().fetchObservations()
+    expect(calls).toBe(0)
+    expect(store.getState().observations.status).toBe('error')
+    expect(store.getState().observations.error).toContain('endpoint')
+  })
+
+  it('never pages an unfiltered request when the selection is empty (defensive)', async () => {
+    let calls = 0
+    const store = makeStore([
+      makeAdapter({
+        searchCompounds: async () => [COMPOUND_A],
+        fetchObservations: async () => {
+          calls += 1
+          return { items: [OBSERVATION_A], total: 50, nextOffset: 25, omitted: 0 }
+        },
+      }),
+    ])
+    store.getState().setQuery('synthetic')
+    await store.getState().runSearch()
+    store.getState().toggleCompound(COMPOUND_A.id)
+    await store.getState().fetchObservations()
+    expect(store.getState().observations.nextOffset).toBe(25)
+
+    // Direct state injection bypasses the setter — the guard still holds.
+    store.setState({ endpointSelection: { mode: 'selected', endpoints: [] } })
+    await store.getState().loadMoreObservations()
+    expect(calls).toBe(1)
+    expect(store.getState().observations.status).toBe('ready')
   })
 })
 
