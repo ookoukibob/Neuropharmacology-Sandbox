@@ -1,5 +1,10 @@
 import { z } from 'zod'
-import { httpsUrl } from './sources'
+import {
+  httpsUrl,
+  parameterKindSchema,
+  qualifierSchema,
+  sourceAttributionSchema,
+} from './sources'
 
 /**
  * NPSL — Neuropharmacology Sandbox Library format.
@@ -18,8 +23,9 @@ import { httpsUrl } from './sources'
  * - unknown keys inside `libraryMetadata`;
  * - unknown keys at every nesting level of `drugs`: the record root,
  *   `identifiers`, `targets[]`, the scientific parameters (`kd`/`ki`/`ec50`/
- *   `ic50`, PK values), their `provenance` objects, and
- *   `pharmacokinetics`.
+ *   `ic50`, PK values), their `provenance` objects,
+ *   `pharmacokinetics`, and (phase 36) `sourceRecords[]` with each
+ *   snapshot's `identifiers`, `provenance` and `observations[]`.
  * Merge policy for an existing id: an incoming extension is written (the
  * file wins a key collision); stored extensions the file never mentions
  * are kept (see `toStoredRecord`).
@@ -202,6 +208,168 @@ export const receptorTargetSchema = z.looseObject({
     .optional(),
 })
 
+// ---------------------------------------------------------------------------
+// Imported source-data snapshot (phase 36)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compound identifiers and chemical properties as reported by an external
+ * source (Layer A). Every field is optional: a source that supplies no
+ * CAS number, InChIKey, SMILES or molecular weight leaves the key absent —
+ * nothing is ever filled in, derived or guessed. `molecularWeight` is the
+ * source's average molecular weight in g/mol (the unit is part of the
+ * field's meaning, exactly as in `CompoundIdentifiers`).
+ */
+export const compoundIdentifiersSchema = z.looseObject({
+  pubchemCid: z.string().min(1).optional(),
+  chemblId: z.string().min(1).optional(),
+  inchiKey: z.string().min(1).optional(),
+  smiles: z.string().min(1).optional(),
+  molecularFormula: z.string().min(1).optional(),
+  molecularWeight: z.number().finite().optional(),
+  casNumber: z.string().min(1).optional(),
+})
+
+// Attribution, qualifier and parameter-kind shapes are the SAME schemas the
+// Layer A/B stores validate against (`schemas/sources.ts`): a snapshot is a
+// copy of those records, so its contract must never drift from theirs.
+
+export const observationTargetRefSchema = z.looseObject({
+  name: z.string().min(1).optional(),
+  sourceTargetId: z.string().min(1).optional(),
+  sourceTargetUrl: httpsUrl.optional(),
+  organism: z.string().min(1).optional(),
+})
+
+export const observationAssaySchema = z.looseObject({
+  assayId: z.string().min(1).optional(),
+  assayType: z.string().min(1).optional(),
+  description: z.string().min(1).optional(),
+})
+
+export const observationReferenceSchema = z.looseObject({
+  referenceId: z.string().min(1).optional(),
+  journal: z.string().min(1).optional(),
+  year: z.number().int().optional(),
+})
+
+/**
+ * One imported measurement, stored exactly as the source reported it.
+ *
+ * This is a *copy of a source record*, not a model parameter: `endpoint`
+ * keeps the source's own spelling ("Ki", "IC50", "Log K'"), `parameterKind`
+ * is present only when the endpoint is canonically one of the four named
+ * slots, and `value`/`unit`/`qualifier` are the reported numbers and
+ * context. Two records may disagree — they are kept side by side and are
+ * never averaged, merged or silently dropped.
+ */
+export const importedObservationSchema = z.looseObject({
+  id: z.string().min(1),
+  compoundId: z.string().min(1),
+  compoundSourceId: z.string().min(1),
+  compoundName: z.string().min(1).optional(),
+  target: observationTargetRefSchema,
+  endpoint: z.string().min(1),
+  parameterKind: parameterKindSchema.optional(),
+  value: z.number().finite(),
+  unit: z.string().min(1).optional(),
+  qualifier: qualifierSchema.optional(),
+  rawRelation: z.string().min(1).optional(),
+  species: z.string().min(1).optional(),
+  assay: observationAssaySchema.optional(),
+  reference: observationReferenceSchema.optional(),
+  activityComment: z.string().min(1).optional(),
+  dataValidityNote: z.string().min(1).optional(),
+  provenance: sourceAttributionSchema,
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime,
+})
+
+/**
+ * One imported external compound record attached to a drug (phase 36):
+ * its external identity (`source` + `sourceId`), the preferred name and
+ * every synonym, its structured identifiers/properties, the full source
+ * attribution with license terms, and the measurements stored for exactly
+ * that record.
+ *
+ * Cross-field invariants enforced here — at the ONE boundary every write
+ * path (import, create, edit, hydration, `.npsl`) passes through — are the
+ * same ones the source-data repository enforces on Layer A/B:
+ *
+ * - at most one snapshot per exact `source` string (a second record from
+ *   the same source system is a conflict, never merged or overwritten);
+ * - an observation may only be attached to the snapshot of the compound it
+ *   was reported for: its `compoundId` must equal
+ *   `${source}:${sourceId}` (a display-name match alone never links a
+ *   measurement);
+ * - an observation's own identity must match its provenance
+ *   (`${provenance.source}:${provenance.recordId}`), the same
+ *   deterministic rule the Layer B store enforces;
+ * - observation ids are unique within one snapshot, so a repeated import
+ *   can never duplicate a measurement.
+ */
+export const drugSourceRecordSchema = z
+  .looseObject({
+    source: z.string().min(1),
+    sourceId: z.string().min(1),
+    name: z.string().min(1).optional(),
+    synonyms: z.array(z.string()),
+    identifiers: compoundIdentifiersSchema,
+    provenance: sourceAttributionSchema,
+    observations: z.array(importedObservationSchema),
+    importedAt: isoDateTime,
+  })
+  .superRefine((record, ctx) => {
+    if (record.provenance.source !== record.source) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['provenance', 'source'],
+        input: record.provenance.source,
+        message: `provenance.source "${record.provenance.source}" does not match the snapshot's source "${record.source}"`,
+      })
+    }
+    if (record.provenance.recordId !== record.sourceId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['provenance', 'recordId'],
+        input: record.provenance.recordId,
+        message: `provenance.recordId "${record.provenance.recordId}" does not match the snapshot's sourceId "${record.sourceId}"`,
+      })
+    }
+    const expectedCompoundId = `${record.source}:${record.sourceId}`
+    const seen = new Map<string, number>()
+    record.observations.forEach((observation, index) => {
+      if (observation.compoundId !== expectedCompoundId) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['observations', index, 'compoundId'],
+          input: observation.compoundId,
+          message: `observation "${observation.id}" belongs to compound "${observation.compoundId}", not to this snapshot's compound "${expectedCompoundId}" — a measurement is linked by validated source identity, never by name`,
+        })
+      }
+      const expectedObservationId = `${observation.provenance.source}:${observation.provenance.recordId}`
+      if (observation.id !== expectedObservationId) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['observations', index, 'id'],
+          input: observation.id,
+          message: `observation id "${observation.id}" does not match its provenance "${expectedObservationId}"`,
+        })
+      }
+      const previous = seen.get(observation.id)
+      if (previous !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['observations', index, 'id'],
+          input: observation.id,
+          message: `duplicate observation "${observation.id}" already appears at index ${previous} — repeated imports never duplicate a measurement`,
+        })
+      } else {
+        seen.set(observation.id, index)
+      }
+    })
+  })
+
 export const pharmacokineticsSchema = z.looseObject({
   /** time unit expected (s, min, h, d). */
   halfLife: scientificValueSchema.optional(),
@@ -227,6 +395,36 @@ export const drugSchema = z.looseObject({
   targets: z.array(receptorTargetSchema).default([]),
   pharmacokinetics: pharmacokineticsSchema.default({}),
   notes: z.string().optional(),
+  /**
+   * Imported source-data snapshots (phase 36). Optional and additive:
+   * records and files without imported source data simply omit the key, so
+   * every legacy record and older `.npsl` file keeps loading unchanged
+   * (no version bump is needed for an optional key — see ADR-22).
+   *
+   * At most one snapshot per exact `source` string, mirroring
+   * `sourceReferences` (ADR-20): a second entry with the same source is
+   * malformed even when its `sourceId` is identical — it is rejected with
+   * the duplicate entry's path named, never merged or deduplicated.
+   */
+  sourceRecords: z
+    .array(drugSourceRecordSchema)
+    .superRefine((records, ctx) => {
+      const firstIndexBySource = new Map<string, number>()
+      records.forEach((record, index) => {
+        const previous = firstIndexBySource.get(record.source)
+        if (previous !== undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [index, 'source'],
+            input: record.source,
+            message: `duplicate source record: "${record.source}" already appears at index ${previous} — a drug carries at most one imported snapshot per source; duplicates are rejected, never merged or deduplicated`,
+          })
+        } else {
+          firstIndexBySource.set(record.source, index)
+        }
+      })
+    })
+    .optional(),
   createdAt: isoDateTime.optional(),
   updatedAt: isoDateTime.optional(),
 })

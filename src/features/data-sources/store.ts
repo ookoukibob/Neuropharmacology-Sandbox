@@ -35,12 +35,14 @@ import type {
 import { findSourceReference, mergeSourceReferences } from '../../domain/drug/drug'
 import type { ScientificValue } from '../../domain/pharmacology/scientific-value'
 import { unitCatalog } from '../../domain/pharmacology/unit-catalog'
-import type { Compound, RemoteCompound } from '../../domain/sources/compound'
+import { compoundId, type Compound, type RemoteCompound } from '../../domain/sources/compound'
 import type {
   ExperimentalObservation,
   ParameterKind,
   RemoteObservation,
 } from '../../domain/sources/observation'
+import type { DrugSourceRecord } from '../../domain/drug/source-data'
+import { findSourceRecord, mergeSourceRecord } from '../../domain/drug/source-data'
 import type { DrugRepository, DrugInput, TargetInput } from '../../data/repositories/repository'
 import type {
   SourceDataRepository,
@@ -114,6 +116,50 @@ interface ImportOkReport {
   readonly skippedObservations: number
 }
 
+/**
+ * Outcome of adding a stored compound to the drug library (phase 36).
+ *
+ * The import is a *complete* one — the record's identifiers, chemical
+ * properties, source attribution, license terms and every measurement
+ * stored for exactly that external compound are attached as a typed
+ * snapshot (`Drug.sourceRecords`) — so the result distinguishes the three
+ * cases a user must be able to tell apart:
+ *
+ * - `created` — a new drug record was created and the snapshot attached;
+ * - `linked` — an EXISTING drug record was explicitly chosen and the
+ *   snapshot attached to it. Nothing else about that record changed: its
+ *   targets, model parameters, target metadata and notes are preserved
+ *   verbatim, and a name match alone never selects it;
+ * - `already-linked` — this exact external record (same source + source
+ *   id) is already attached to the chosen record; nothing was written. Any
+ *   measurements stored since the last import were added, and
+ *   `addedObservations` reports how many.
+ *
+ * Failures are reported as a typed `conflict` (same source, different
+ * record id — never merged or overwritten) or `failed` (validation or
+ * storage; nothing was written). No path reports success for a partial
+ * operation.
+ */
+export type AddToLibraryOutcome =
+  | {
+      readonly status: 'created' | 'linked' | 'already-linked'
+      readonly drug: Drug
+      /** The snapshot attached (or already attached) to the record. */
+      readonly sourceRecord: DrugSourceRecord
+      /** Measurements newly attached by this call (0 for a repeat import). */
+      readonly addedObservations: number
+      /** Every measurement the record now carries for this source record. */
+      readonly observationCount: number
+    }
+  | {
+      readonly status: 'conflict'
+      /** The stored snapshot that already occupies this source. */
+      readonly existing: DrugSourceRecord
+      readonly drug: Drug
+      readonly message: string
+    }
+  | { readonly status: 'failed'; readonly message: string }
+
 export interface ApplyObservationRequest {
   readonly observationId: string
   readonly drugId: DrugId
@@ -178,7 +224,20 @@ export interface DataSourcesState {
   clearImportOutcome(): void
   hydrateStored(): Promise<void>
   applyObservation(request: ApplyObservationRequest): Promise<boolean>
-  addToLibrary(compoundId: string): Promise<Drug | null>
+  /**
+   * Add a stored compound to the drug library, preserving its complete
+   * source data (phase 36).
+   *
+   * `options.drugId` is the explicit link target: when supplied, the
+   * snapshot is attached to THAT record instead of creating a new one —
+   * the only way an existing manually-created drug acquires source data,
+   * and it never replaces anything the record already holds. Without it a
+   * new record is created. Neither path guesses a target by name.
+   */
+  addToLibrary(
+    compoundId: string,
+    options?: { readonly drugId?: DrugId },
+  ): Promise<AddToLibraryOutcome>
   clearActionMessages(): void
 }
 
@@ -471,6 +530,89 @@ function withParameter(
       : kind === 'ec50'
         ? { ec50: value }
         : { ic50: value }
+}
+
+/**
+ * Typed failure for the add-to-library flow: the session message is set (so
+ * the panel shows it) and the caller receives the `failed` outcome instead
+ * of a success-shaped value.
+ */
+function failAdd(
+  set: (partial: Partial<DataSourcesState>) => void,
+  message: string,
+): AddToLibraryOutcome {
+  set({ actionError: message, actionNotice: null })
+  return { status: 'failed', message }
+}
+
+/** Observation count phrasing shared by the add-to-library notices. */
+function describeObservations(count: number): string {
+  if (count === 0) return ' (no stored measurements were reported for it)'
+  return ` and ${count} stored measurement${count === 1 ? '' : 's'}`
+}
+
+/**
+ * Attach an imported snapshot to an EXISTING drug record (phase 36).
+ *
+ * Explicit and non-destructive by construction:
+ * - the caller names the record; nothing is matched by name, and a name
+ *   match never selects a record on its own;
+ * - only `sourceRecords` is submitted — the record's targets, model
+ *   parameters, target metadata, identifiers, tags and notes are never part
+ *   of the change, so they cannot be overwritten by the attach;
+ * - `mergeSourceRecord` decides what happens: a different source is
+ *   appended, the same external record only appends measurements it does
+ *   not already hold, and a same-source DIFFERENT record id is reported as
+ *   a conflict with the stored snapshot untouched (nothing merged);
+ * - the write carries the record's current revision token, so an attach
+ *   computed from a superseded session is rejected (CONFLICT) instead of
+ *   silently reviving stale data.
+ */
+async function attachToDrug(
+  drugRepository: DrugRepository,
+  drug: Drug,
+  snapshot: DrugSourceRecord,
+): Promise<AddToLibraryOutcome> {
+  const merged = mergeSourceRecord(drug.sourceRecords, snapshot)
+  if (merged.conflict !== undefined) {
+    return {
+      status: 'conflict',
+      existing: merged.conflict,
+      drug,
+      message: `"${drug.identifiers.name}" is already linked to a different ${snapshot.provenance.sourceName} record (id "${merged.conflict.sourceId}", not "${snapshot.sourceId}"). The stored source data was left exactly as it is — nothing was merged or overwritten. Link this compound to another drug record, or resolve the existing link first.`,
+    }
+  }
+  const sameRecord = findSourceRecord(drug.sourceRecords, snapshot.source)
+  if (sameRecord !== undefined && merged.addedObservations === 0) {
+    return {
+      status: 'already-linked',
+      drug,
+      sourceRecord: sameRecord,
+      addedObservations: 0,
+      observationCount: sameRecord.observations.length,
+    }
+  }
+  let updated: Drug
+  try {
+    updated = await drugRepository.updateDrug(
+      drug.id,
+      { sourceRecords: merged.records },
+      drug.revision ?? 0,
+    )
+  } catch (error) {
+    return {
+      status: 'failed',
+      message: `Could not attach the source record to "${drug.identifiers.name}" (${messageOf(error)}) — nothing was changed.`,
+    }
+  }
+  const attached = findSourceRecord(merged.records, snapshot.source)
+  return {
+    status: sameRecord !== undefined ? 'already-linked' : 'linked',
+    drug: updated,
+    sourceRecord: attached ?? snapshot,
+    addedObservations: merged.addedObservations,
+    observationCount: (attached ?? snapshot).observations.length,
+  }
 }
 
 export function createDataSourcesStore(
@@ -1211,13 +1353,56 @@ export function createDataSourcesStore(
       return true
     },
 
-    async addToLibrary(id) {
-      const compound = get().stored.compounds.find((candidate) => candidate.id === id)
+    async addToLibrary(id, options) {
+      const state = get()
+      const compound = state.stored.compounds.find((candidate) => candidate.id === id)
       if (compound === undefined) {
-        set({ actionError: 'That compound is not in the stored records.', actionNotice: null })
-        return null
+        return failAdd(set, 'That compound is not in the stored records.')
       }
-      const attribution = compound.provenance
+
+      // Measurements are linked by VALIDATED source identity — the stored
+      // observation's `compoundId` must equal `${source}:${sourceId}` — and
+      // never by a matching display name. The repository enforces the same
+      // rule on write, so an observation that belongs to a different
+      // source compound id can never be attached here.
+      const compoundKey = compoundId(compound.source, compound.sourceId)
+      const observations = state.stored.observations.filter(
+        (observation) => observation.compoundId === compoundKey,
+      )
+      const snapshot: DrugSourceRecord = {
+        source: compound.source,
+        sourceId: compound.sourceId,
+        ...(compound.name !== undefined ? { name: compound.name } : {}),
+        synonyms: [...compound.synonyms],
+        identifiers: { ...compound.identifiers },
+        provenance: { ...compound.provenance },
+        observations: observations.map((observation) => ({ ...observation })),
+        importedAt: new Date().toISOString(),
+      }
+
+      const target = options?.drugId
+      if (target !== undefined) {
+        const existing = state.stored.drugs.find((candidate) => candidate.id === target)
+        if (existing === undefined) {
+          return failAdd(set, 'That drug record is no longer in the library — reload and try again.')
+        }
+        const attached = await attachToDrug(drugRepository, existing, snapshot)
+        if (attached.status === 'conflict') {
+          set({ actionError: attached.message, actionNotice: null })
+          return attached
+        }
+        if (attached.status === 'failed') return failAdd(set, attached.message)
+        await get().hydrateStored()
+        set({
+          actionError: null,
+          actionNotice:
+            attached.status === 'linked'
+              ? `Linked the ${compound.provenance.sourceName} source record ${compound.sourceId} to "${existing.identifiers.name}"${describeObservations(attached.addedObservations)} — its targets, parameters and notes were preserved.`
+              : `"${existing.identifiers.name}" already carried this ${compound.provenance.sourceName} source record — ${attached.addedObservations === 0 ? 'nothing was written' : `${attached.addedObservations} new measurement${attached.addedObservations === 1 ? '' : 's'} added`}.`,
+        })
+        return attached
+      }
+
       const input: DrugInput = {
         identifiers: {
           name: compound.name ?? compound.sourceId,
@@ -1226,22 +1411,28 @@ export function createDataSourcesStore(
             ? { casNumber: compound.identifiers.casNumber }
             : {}),
         },
-        notes: `Compound identity imported from ${attribution.sourceName} (record ${attribution.recordId}) on ${attribution.retrievedAt}. Source: ${attribution.url}.${attribution.licenseNotice !== undefined ? ` ${attribution.licenseNotice}` : ''}`,
+        sourceRecords: [snapshot],
       }
+      let created: Drug
       try {
-        const drug = await drugRepository.createDrug(input)
-        await get().hydrateStored()
-        set({
-          actionError: null,
-          actionNotice: `Added "${input.identifiers.name}" to the drug library (identity only — no pharmacological parameters).`,
-        })
-        return drug
+        created = await drugRepository.createDrug(input)
       } catch (error) {
-        set({
-          actionError: `Could not add the compound to the library (${messageOf(error)}).`,
-          actionNotice: null,
-        })
-        return null
+        return failAdd(
+          set,
+          `Could not add the compound to the library (${messageOf(error)}) — nothing was written.`,
+        )
+      }
+      await get().hydrateStored()
+      set({
+        actionError: null,
+        actionNotice: `Added "${input.identifiers.name}" to the drug library with its complete ${compound.provenance.sourceName} source record${describeObservations(snapshot.observations.length)} — no model parameter was set (use "Use as parameter…" for that).`,
+      })
+      return {
+        status: 'created',
+        drug: created,
+        sourceRecord: snapshot,
+        addedObservations: snapshot.observations.length,
+        observationCount: snapshot.observations.length,
       }
     },
 

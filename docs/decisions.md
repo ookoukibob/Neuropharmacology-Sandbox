@@ -513,6 +513,88 @@ is not).
 
 ---
 
+## ADR-22 · Complete Data Sources → Library import as a typed snapshot on the drug record
+
+**Context.** "Add to drug library" reduced a stored compound to a name,
+synonyms and an optional CAS number, and pushed the rest of the source
+attribution into `Drug.notes`. Every other Layer A field (PubChem CID,
+ChEMBL id, InChIKey, SMILES, formula, molecular weight, source record id,
+retrieval time, license) and *every* stored Layer B measurement were
+discarded. The drug domain model had no structured place for source data,
+so the information could not be recovered from the library record at all.
+
+**Decision.** Attach a typed snapshot to the drug record:
+`Drug.sourceRecords?: DrugSourceRecord[]` — external identity
+(`source` + `sourceId`), name + all synonyms, the full
+`CompoundIdentifiers` shape, `SourceAttribution` (record URL, retrieval
+time, source version, license notice and URL), the measurements stored for
+exactly that record (`ExperimentalObservation[]`, i.e. the Layer B type
+itself, so the two can never drift) and `importedAt`.
+
+- **Snapshot, not a foreign key.** The Layer A/B stores are an on-demand,
+  replaceable acquisition cache; a drug record must keep its own complete
+  source data. A snapshot survives the source stores being cleared, and
+  needs no join, no second repository and no new table.
+- **Identity rules mirror ADR-20.** One snapshot per exact `source`
+  string; a different source system is appended, a same-source *different*
+  record id is a reported `conflict` (never merged or overwritten), and a
+  repeat of the same record only appends measurements it does not already
+  hold. `mergeSourceRecord` is the single implementation, unit-tested.
+- **Link by validated identity.** An observation joins a snapshot only when
+  `compoundId === `${source}:${sourceId}`` — enforced again by
+  `drugSourceRecordSchema`, so a name match can never associate a
+  measurement, and a hand-edited file cannot smuggle one in.
+- **Not Layer C.** Importing never writes `kd`/`ki`/`ec50`/`ic50`. The
+  measurements are preserved as measurements; promotion stays the explicit,
+  separately validated `applyObservation` flow.
+- **Explicit, non-destructive linking.** `addToLibrary(compoundId,
+  {drugId})` attaches to a *named* record and submits **only**
+  `sourceRecords`; targets, parameters, target metadata, identifiers, tags
+  and notes are untouched, and the write carries the record's revision
+  token, so a stale attach is rejected like any other stale write (ADR-21).
+  Nothing is ever selected by name.
+- **A known field, not an extension.** `sourceRecords` is written by the
+  persistence mapper and listed in the record's key contract, with
+  per-level key sets for the snapshot, its identifiers, its attribution and
+  its observations. Unknown keys inside those levels survive edits,
+  matched by `source` (snapshots) and deterministic observation `id`
+  (measurements) — never by position.
+- **Optional and additive: no version bump.** Absent on every legacy
+  record, written only when a record carries imported data (never `[]`),
+  and accepted by the same `drugSchema` used for storage, `.npsl` and
+  `.npsb` classification. `PERSISTENCE_VERSION` stays 2 and the Dexie
+  schema is unchanged (no new table, no migration), so existing databases
+  open byte-identically.
+- **Honest outcomes.** `addToLibrary` returns a typed
+  `created`/`linked`/`already-linked`/`conflict`/`failed` result; the
+  panel shows which one happened and never reports success for a partial
+  operation.
+
+**Rejected alternatives.** *A separate `drug_source_records` table keyed by
+drug id* — a second write path, a second transaction to keep consistent
+with the drug row, a Dexie version bump, and a dangling-reference problem
+when either side is deleted; the snapshot has none of these. *Storing the
+data as JSON in `notes`* — unstructured, unvalidated, unfilterable and
+inseparable from user notes. *Auto-creating target parameters from
+measurements* — violates the Kd ≠ Ki ≠ EC50 ≠ IC50 rule and the explicit
+promotion policy (ADR-20, data-sources.md §2). *Auto-merging a same-name
+compound into an existing drug* — names are labels, not identities.
+
+**Known limitation.** The CSV export is a flattened parameter projection
+and does not carry `sourceRecords` or the imported observations; `.npsl`
+and `.npsb` are the lossless carriers. The snapshot is a point-in-time
+retrieval, not a live mirror: refreshing it is a new explicit import, and
+a measurement removed at the source stays in the record until the user
+re-links deliberately.
+
+**Consequences.** A library record now retains everything the source
+supplied, displays it in structured sections (identifiers, chemical
+properties, attribution/license, imported observations), survives reloads,
+ordinary edits and both round-trip formats, and can be linked explicitly
+without losing anything it already held.
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

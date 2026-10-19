@@ -1,4 +1,5 @@
 import type { MaybeScientificValue } from '../pharmacology/scientific-value'
+import type { DrugSourceRecord } from './source-data'
 
 /** Opaque identifier (UUID v4 for user data, stable slugs for built-in data). */
 export type DrugId = string
@@ -127,6 +128,25 @@ export interface Drug {
   readonly targets: readonly ReceptorTarget[]
   readonly pharmacokinetics: Pharmacokinetics
   readonly notes?: string
+  /**
+   * Imported source records attached to this drug (phase 36): the typed
+   * snapshot of each external compound record this record was created from
+   * or explicitly linked to, with its identifiers, chemical properties,
+   * attribution/license terms and the measurements stored for exactly that
+   * external record.
+   *
+   * This is source data, NOT model parameters: nothing here is read by the
+   * engine, and the four named slots (`kd`/`ki`/`ec50`/`ic50`) are still
+   * filled only by the explicit "Use as parameter…" flow. Optional and
+   * additive — records without imported source data simply omit the key
+   * (never written as an empty array), so every legacy record, `.npsl`
+   * file and `.npsb` archive keeps loading unchanged.
+   *
+   * At most one snapshot per exact `source` string (the same rule as
+   * `TargetSourceReference`); different source systems coexist and none
+   * silently replaces another — see `mergeSourceRecord`.
+   */
+  readonly sourceRecords?: readonly DrugSourceRecord[]
   /** ISO 8601. Absent for legacy imports; the importer fills it. */
   readonly createdAt?: string
   readonly updatedAt?: string

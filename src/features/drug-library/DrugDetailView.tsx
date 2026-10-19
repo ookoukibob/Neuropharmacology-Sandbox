@@ -3,6 +3,11 @@
  * explicit units + provenance badges, PK parameters (read-only), storage
  * origin, bookkeeping timestamps, and edit/delete for user-entered records.
  *
+ * Phase 36 adds the imported source-data section (identifiers, chemical
+ * properties, attribution/license and the measurements stored for each
+ * external record) — rendered from typed fields, read-only, and completely
+ * separate from the model parameters above it.
+ *
  * Editing safeguards: only `origin === 'user'` records are editable in the
  * UI (demo/imported rows are read-only views); provenance is displayed,
  * never edited — nothing here can upgrade a value's provenance.
@@ -21,6 +26,7 @@ import { useLibraryStore } from '@/app/libraryStore'
 import { OriginBadge } from './components/OriginBadge'
 import { ProvenanceBadge } from './components/ProvenanceBadge'
 import { DrugForm } from './DrugForm'
+import { DrugSourceDataSection } from './DrugSourceData'
 
 function ParameterRow({
   label,
@@ -272,6 +278,8 @@ export function DrugDetailView({ drugId }: { drugId: string }) {
             )}
         </CardContent>
       </Card>
+
+      <DrugSourceDataSection records={drug.sourceRecords} />
 
       {drug.notes !== undefined && (
         <p className="text-sm whitespace-pre-wrap">{drug.notes}</p>

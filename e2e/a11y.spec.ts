@@ -94,6 +94,42 @@ test('a11y: the detail view and the edit form pass the axe scan', async ({ page 
   await scan(page, 'edit drug form')
 })
 
+test('a11y: the imported source-data detail view and the library indicator pass the axe scan', async ({
+  page,
+}) => {
+  await mockChEMBL(page)
+
+  // Store a compound identity record, then import it into the library.
+  await page.goto('/data-sources')
+  await page.getByTestId('source-select').selectOption('chembl')
+  await page.getByTestId('scope-targets').click()
+  await page.getByTestId('query-input').fill('synthetic target')
+  await page.getByTestId('search-button').click()
+  await page.getByTestId('target-select-CHEMBL99991001').click()
+  await page.getByTestId('fetch-observations-button').click()
+  await expect(page.getByTestId('observation-row').first()).toBeVisible()
+  await page.getByTestId('observation-select-chembl:99000001').check()
+  await page.getByTestId('confirm-import-button').click()
+  await expect(page.getByTestId('import-report')).toContainText('1 new measurement record')
+
+  // The stored panel's import controls are a scanned state too.
+  await scan(page, 'data sources (stored compound with import controls)')
+
+  await page.getByTestId('add-to-library-chembl:CHEMBL99990001').click()
+  await expect(page.getByTestId('apply-notice')).toContainText('complete ChEMBL source record')
+
+  // The library list with its source-origin indicator.
+  await page.goto('/library')
+  await expect(page.getByTestId('list-source-origin')).toBeVisible()
+  await scan(page, 'drug library (with imported source data)')
+
+  // The detail page with every imported-source section rendered.
+  await page.getByRole('link', { name: 'SYNTHETIC FIXTURE COMPOUND' }).click()
+  await expect(page.getByTestId('drug-source-data')).toBeVisible()
+  await expect(page.getByTestId('source-observations')).toBeVisible()
+  await scan(page, 'drug detail (imported source data)')
+})
+
 test('a11y: the calculator passes the axe scan with input, PK mode and result states', async ({
   page,
 }) => {

@@ -68,7 +68,8 @@ required by the specification. A bundled demo library ships with
 | `tags` | string[] | no (default `[]`) | |
 | `targets` | `ReceptorTarget[]` | no (default `[]`) | |
 | `pharmacokinetics` | object | no (default `{}`) | `halfLife?`, `clearance?`, `volumeOfDistribution?`, `bioavailability?`, `notes?` |
-| `notes` | string | no | |
+| `notes` | string | no | User notes only — imported source data never goes here |
+| `sourceRecords` | array | no | Imported source-data snapshots (§3.1); omitted when the record carries none |
 | `createdAt` / `updatedAt` | ISO 8601 | no | Filled by the importer when absent |
 
 ### `ReceptorTarget`
@@ -82,6 +83,86 @@ see validation.md §4); `gene?`, `action?`, `species?`, `kd?`, `ki?`,
 
 **Kd, Ki, EC50 and IC50 are separate named fields.** The format makes it
 impossible to "store a Kd" ambiguously.
+
+### 3.1 `sourceRecords[]` — imported source data (phase 36)
+
+One entry per external source record the drug was created from or linked
+to. The format carries the complete source data, so an exported library
+stays readable and attributable without the Layer A/B stores:
+
+```jsonc
+{
+  "source": "chembl",                  // adapter id
+  "sourceId": "CHEMBL25",              // that source's authoritative id
+  "name": "Preferred name",            // optional
+  "synonyms": ["…"],                   // every reported synonym
+  "identifiers": {                     // CompoundIdentifiers — all optional
+    "pubchemCid": "2244",
+    "chemblId": "CHEMBL25",
+    "inchiKey": "…",
+    "smiles": "…",
+    "molecularFormula": "…",
+    "molecularWeight": 180.16,         // g/mol
+    "casNumber": "…"
+  },
+  "provenance": {                      // SourceAttribution
+    "source": "chembl",
+    "sourceName": "ChEMBL",
+    "recordId": "CHEMBL25",
+    "url": "https://…",                // absolute HTTPS
+    "retrievedAt": "2026-01-01T00:00:00Z",
+    "sourceVersion": "…",              // optional
+    "licenseNotice": "…",              // optional
+    "licenseUrl": "https://…"          // optional, absolute HTTPS
+  },
+  "observations": [                    // reported measurements, not parameters
+    {
+      "id": "chembl:99000001",
+      "compoundId": "chembl:CHEMBL25",
+      "compoundSourceId": "CHEMBL25",
+      "compoundName": "…",             // optional
+      "target": { "name": "…", "sourceTargetId": "…", "sourceTargetUrl": "https://…", "organism": "…" },
+      "endpoint": "IC50",
+      "parameterKind": "ic50",         // only for the four canonical kinds
+      "value": 3.5,
+      "unit": "nM",                    // optional
+      "qualifier": "=",                // optional: <, >, <=, >=, =, ~
+      "rawRelation": ">>",             // optional, verbatim when unrecognized
+      "species": "…",
+      "assay": { "assayId": "…", "assayType": "…", "description": "…" },
+      "reference": { "referenceId": "…", "journal": "…", "year": 2026 },
+      "activityComment": "…",
+      "dataValidityNote": "…",
+      "provenance": { "…": "same shape as above" },
+      "createdAt": "…",
+      "updatedAt": "…"
+    }
+  ],
+  "importedAt": "2026-01-02T00:00:00Z"
+}
+```
+
+Validation invariants (enforced by `drugSourceRecordSchema` at every
+boundary — import, create/edit, hydration and this file format):
+
+- at most **one snapshot per exact `source` string**; a second entry is
+  rejected with the duplicate's path named, never merged or deduplicated;
+- `provenance.source`/`provenance.recordId` must match `source`/`sourceId`;
+- an observation's `compoundId` must equal `${source}:${sourceId}` — a
+  measurement is linked by validated source identity, never by name;
+- an observation's `id` must equal
+  `${provenance.source}:${provenance.recordId}`, and ids are unique
+  within one snapshot (repeated imports never duplicate a measurement);
+- `value` is a finite number; every URL is absolute HTTPS.
+
+Missing fields stay absent; nothing is defaulted. The field is optional and
+additive, so **no `schemaVersion` bump was needed**: files without it
+import unchanged, and this build exports it only when a record carries
+imported data (ADR-22).
+
+**CSV is not a carrier.** The CSV export is a flattened projection of drug
+*parameters*; it does not include `sourceRecords` or the imported
+observations. Use `.npsl`/`.npsb` for a lossless round trip.
 
 ---
 

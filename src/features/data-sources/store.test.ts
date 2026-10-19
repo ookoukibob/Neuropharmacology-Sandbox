@@ -1145,25 +1145,46 @@ describe('data sources — target source identity (phase 18I)', () => {
 })
 
 describe('data sources — adding a compound to the drug library', () => {
-  it('creates an identity-only drug record with full source attribution', async () => {
+  it('creates a drug record with the complete source snapshot', async () => {
     const store = makeStore()
     await seedAndHydrate(store)
-    const drug = await store.getState().addToLibrary(COMPOUND_A.id)
+    const outcome = await store.getState().addToLibrary(COMPOUND_A.id)
+    expect(outcome.status).toBe('created')
+    if (outcome.status !== 'created') throw new Error('expected a created outcome')
+    const { drug } = outcome
 
-    expect(drug?.identifiers.name).toBe('Synthetic Fixture Compound')
-    expect(drug?.identifiers.synonyms).toEqual(['SFC-1'])
-    expect(drug?.targets).toEqual([]) // identity only — no parameters invented
-    expect(drug?.notes).toContain('https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL99990001')
-    expect(drug?.notes).toContain('CC BY-SA 3.0')
-    expect(store.getState().stored.drugs.map((d) => d.id)).toContain(drug?.id)
-    expect(store.getState().actionNotice).toContain('identity only')
+    expect(drug.identifiers.name).toBe('Synthetic Fixture Compound')
+    expect(drug.identifiers.synonyms).toEqual(['SFC-1'])
+    // No model parameter is invented by an import.
+    expect(drug.targets).toEqual([])
+    // Source data is structured, not appended prose.
+    expect(drug.notes).toBeUndefined()
+    expect(drug.sourceRecords).toHaveLength(1)
+    const snapshot = drug.sourceRecords?.[0]
+    expect(snapshot?.source).toBe('chembl')
+    expect(snapshot?.sourceId).toBe('CHEMBL99990001')
+    expect(snapshot?.identifiers).toEqual({
+      chemblId: 'CHEMBL99990001',
+      inchiKey: 'FIXTUREKEYSXYZ-UHFFFAOYSA-N',
+    })
+    expect(snapshot?.provenance.url).toBe(
+      'https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL99990001',
+    )
+    expect(snapshot?.provenance.licenseNotice).toContain('CC BY-SA 3.0')
+    expect(snapshot?.observations.map((observation) => observation.id)).toEqual([
+      'chembl:99000001',
+    ])
+    expect(outcome.addedObservations).toBe(1)
+    expect(outcome.observationCount).toBe(1)
+    expect(store.getState().stored.drugs.map((d) => d.id)).toContain(drug.id)
+    expect(store.getState().actionNotice).toContain('1 stored measurement')
   })
 
   it('reports a missing compound instead of creating anything', async () => {
     const store = makeStore()
     await seedAndHydrate(store)
-    const drug = await store.getState().addToLibrary('chembl:CHEMBL00000000')
-    expect(drug).toBeNull()
+    const outcome = await store.getState().addToLibrary('chembl:CHEMBL00000000')
+    expect(outcome.status).toBe('failed')
     expect(store.getState().actionError).toContain('not in the stored records')
     expect(store.getState().stored.drugs).toEqual([])
   })

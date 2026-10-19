@@ -148,7 +148,31 @@ failure with nothing written, honest empty state, and the Layer C rules
 at the UI level — new-target promotion with an `observationId`
 provenance link, no substitution for an unmappable endpoint, the bound
 (`<`) qualifier keeping Apply disabled, the explicit overwrite gate for
-an occupied slot, and identity-only library addition with attribution).
+an occupied slot, and complete library import with the full source
+snapshot), and
+`src/features/data-sources/import-to-library.test.ts` (the complete
+Data Sources → Library import against the real repositories: a full
+PubChem import keeping every identifier and chemical property, a full
+ChEMBL import keeping attribution, license terms and the measurement
+context, missing fields staying absent, a compound with no measurements,
+identity-aware repeat imports, same-name/different-identity records,
+same-source conflicts, linking an existing manual record without
+disturbing its targets/parameters/notes, the import never setting a
+model parameter, and zero network traffic on the whole path), and
+`src/domain/drug/source-data.test.ts` (the merge policy: idempotent
+re-import, append-only new measurements, a same-source conflict reported
+and never merged, disagreeing measurements preserved), and
+`src/data/mappers/sourceRecords.test.ts` plus
+`src/data/repositories/dexieDrugRepository.sourceRecords.test.ts`
+(round-trip identity, unknown-field preservation matched by source and
+observation id, legacy records and files, `.npsl` and `.npsb` round
+trips, revision-guarded attach, and rejection of malformed snapshots
+with nothing written), and
+`src/features/drug-library/DrugSourceData.test.tsx` plus
+`src/features/drug-library/sourceData.persistence.test.tsx` (the detail
+sections and list indicator, honest "not reported" markers, disagreeing
+measurements kept separate, and an edit → reload cycle that keeps every
+imported field).
 
 ---
 

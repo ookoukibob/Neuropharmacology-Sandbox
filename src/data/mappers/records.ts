@@ -35,6 +35,14 @@ import type {
   ReceptorTarget,
   TargetSourceReference,
 } from '../../domain/drug/drug'
+import type { DrugSourceRecord, ImportedObservation } from '../../domain/drug/source-data'
+import type { CompoundIdentifiers } from '../../domain/sources/compound'
+import type { SourceAttribution } from '../../domain/sources/attribution'
+import type {
+  ObservationAssay,
+  ObservationReference,
+  ObservationTargetRef,
+} from '../../domain/sources/observation'
 import type { LibraryMetadata } from '../../domain/library/library'
 import type {
   MaybeScientificValue,
@@ -70,6 +78,12 @@ export type DrugRecord = {
   targets: readonly ReceptorTarget[]
   pharmacokinetics: Pharmacokinetics
   notes?: string
+  /**
+   * Imported source-data snapshots (phase 36) — a known field owned by the
+   * mapper, never left to unknown-field preservation. Absent when the
+   * record carries none (never written as an empty array).
+   */
+  sourceRecords?: readonly DrugSourceRecord[]
   createdAt?: string
   updatedAt?: string
   persistenceVersion: number
@@ -108,6 +122,7 @@ const ROOT_KEYS = new Set([
   'targets',
   'pharmacokinetics',
   'notes',
+  'sourceRecords',
   'createdAt',
   'updatedAt',
   'persistenceVersion',
@@ -165,6 +180,70 @@ const PK_KEYS = new Set([
   'bioavailability',
   'notes',
 ])
+/**
+ * Imported source-data snapshot (phase 36). The snapshot is a *copy* of a
+ * Layer A/B record, so its own key contract mirrors the source schemas in
+ * `data/schemas/sources.ts` — a key listed there is governed by the domain
+ * value, anything else is a future field carried forward verbatim.
+ */
+const SOURCE_RECORD_KEYS = new Set([
+  'source',
+  'sourceId',
+  'name',
+  'synonyms',
+  'identifiers',
+  'provenance',
+  'observations',
+  'importedAt',
+])
+const COMPOUND_IDENTIFIER_KEYS = new Set([
+  'pubchemCid',
+  'chemblId',
+  'inchiKey',
+  'smiles',
+  'molecularFormula',
+  'molecularWeight',
+  'casNumber',
+])
+const SOURCE_ATTRIBUTION_KEYS = new Set([
+  'source',
+  'sourceName',
+  'recordId',
+  'url',
+  'retrievedAt',
+  'sourceVersion',
+  'licenseNotice',
+  'licenseUrl',
+])
+const OBSERVATION_KEYS = new Set([
+  'id',
+  'compoundId',
+  'compoundSourceId',
+  'compoundName',
+  'target',
+  'endpoint',
+  'parameterKind',
+  'value',
+  'unit',
+  'qualifier',
+  'rawRelation',
+  'species',
+  'assay',
+  'reference',
+  'activityComment',
+  'dataValidityNote',
+  'provenance',
+  'createdAt',
+  'updatedAt',
+])
+const OBSERVATION_TARGET_KEYS = new Set([
+  'name',
+  'sourceTargetId',
+  'sourceTargetUrl',
+  'organism',
+])
+const OBSERVATION_ASSAY_KEYS = new Set(['assayId', 'assayType', 'description'])
+const OBSERVATION_REFERENCE_KEYS = new Set(['referenceId', 'journal', 'year'])
 
 type Level =
   | 'root'
@@ -174,6 +253,13 @@ type Level =
   | 'parameter'
   | 'provenance'
   | 'pharmacokinetics'
+  | 'sourceRecord'
+  | 'compoundIdentifiers'
+  | 'sourceAttribution'
+  | 'observation'
+  | 'observationTarget'
+  | 'observationAssay'
+  | 'observationReference'
 
 function keysOf(level: Level): Set<string> {
   switch (level) {
@@ -191,6 +277,20 @@ function keysOf(level: Level): Set<string> {
       return PROVENANCE_KEYS
     case 'pharmacokinetics':
       return PK_KEYS
+    case 'sourceRecord':
+      return SOURCE_RECORD_KEYS
+    case 'compoundIdentifiers':
+      return COMPOUND_IDENTIFIER_KEYS
+    case 'sourceAttribution':
+      return SOURCE_ATTRIBUTION_KEYS
+    case 'observation':
+      return OBSERVATION_KEYS
+    case 'observationTarget':
+      return OBSERVATION_TARGET_KEYS
+    case 'observationAssay':
+      return OBSERVATION_ASSAY_KEYS
+    case 'observationReference':
+      return OBSERVATION_REFERENCE_KEYS
   }
 }
 
@@ -207,6 +307,13 @@ function childLevel(level: Level, key: string): Level | null {
   }
   if (level === 'pharmacokinetics' && key !== 'notes') return 'parameter'
   if (level === 'parameter' && key === 'provenance') return 'provenance'
+  // Phase 36 — imported source-data snapshot, level by level.
+  if (level === 'sourceRecord' && key === 'identifiers') return 'compoundIdentifiers'
+  if (level === 'sourceRecord' && key === 'provenance') return 'sourceAttribution'
+  if (level === 'observation' && key === 'target') return 'observationTarget'
+  if (level === 'observation' && key === 'assay') return 'observationAssay'
+  if (level === 'observation' && key === 'reference') return 'observationReference'
+  if (level === 'observation' && key === 'provenance') return 'sourceAttribution'
   return null
 }
 
@@ -252,6 +359,45 @@ export function preserveUnknownFields(
         )
         if (isPlainObject(prevTarget)) {
           preserveUnknownFields(prevTarget, nextTarget, 'target')
+        }
+      }
+    } else if (
+      key === 'sourceRecords' &&
+      level === 'root' &&
+      Array.isArray(prevValue) &&
+      Array.isArray(nextValue)
+    ) {
+      // Snapshots are matched by their external identity — the exact source
+      // string (at most one snapshot per source) — never array position.
+      for (const nextRecord of nextValue) {
+        if (!isPlainObject(nextRecord)) continue
+        const source = nextRecord['source']
+        if (typeof source !== 'string') continue
+        const prevRecord = prevValue.find(
+          (candidate) => isPlainObject(candidate) && candidate['source'] === source,
+        )
+        if (isPlainObject(prevRecord)) {
+          preserveUnknownFields(prevRecord, nextRecord, 'sourceRecord')
+        }
+      }
+    } else if (
+      level === 'sourceRecord' &&
+      key === 'observations' &&
+      Array.isArray(prevValue) &&
+      Array.isArray(nextValue)
+    ) {
+      // Measurements are matched by their deterministic source record id —
+      // never by position, endpoint or value — so an appended or reordered
+      // list can never transplant an unknown field onto the wrong record.
+      for (const nextObservation of nextValue) {
+        if (!isPlainObject(nextObservation)) continue
+        const id = nextObservation['id']
+        if (typeof id !== 'string') continue
+        const prevObservation = prevValue.find(
+          (candidate) => isPlainObject(candidate) && candidate['id'] === id,
+        )
+        if (isPlainObject(prevObservation)) {
+          preserveUnknownFields(prevObservation, nextObservation, 'observation')
         }
       }
     } else if (
@@ -318,6 +464,117 @@ function targetToRecord(target: ReceptorTarget): ReceptorTarget {
   }
 }
 
+/** Absent optionals are omitted, never written as `undefined`. */
+function sourceAttributionToRecord(attribution: SourceAttribution): SourceAttribution {
+  return {
+    source: attribution.source,
+    sourceName: attribution.sourceName,
+    recordId: attribution.recordId,
+    url: attribution.url,
+    retrievedAt: attribution.retrievedAt,
+    ...(attribution.sourceVersion !== undefined ? { sourceVersion: attribution.sourceVersion } : {}),
+    ...(attribution.licenseNotice !== undefined ? { licenseNotice: attribution.licenseNotice } : {}),
+    ...(attribution.licenseUrl !== undefined ? { licenseUrl: attribution.licenseUrl } : {}),
+  }
+}
+
+/** Compound identifiers/properties, verbatim — no value is ever coerced. */
+function compoundIdentifiersToRecord(identifiers: CompoundIdentifiers): CompoundIdentifiers {
+  return {
+    ...(identifiers.pubchemCid !== undefined ? { pubchemCid: identifiers.pubchemCid } : {}),
+    ...(identifiers.chemblId !== undefined ? { chemblId: identifiers.chemblId } : {}),
+    ...(identifiers.inchiKey !== undefined ? { inchiKey: identifiers.inchiKey } : {}),
+    ...(identifiers.smiles !== undefined ? { smiles: identifiers.smiles } : {}),
+    ...(identifiers.molecularFormula !== undefined
+      ? { molecularFormula: identifiers.molecularFormula }
+      : {}),
+    ...(identifiers.molecularWeight !== undefined
+      ? { molecularWeight: identifiers.molecularWeight }
+      : {}),
+    ...(identifiers.casNumber !== undefined ? { casNumber: identifiers.casNumber } : {}),
+  }
+}
+
+function observationTargetToRecord(target: ObservationTargetRef): ObservationTargetRef {
+  return {
+    ...(target.name !== undefined ? { name: target.name } : {}),
+    ...(target.sourceTargetId !== undefined ? { sourceTargetId: target.sourceTargetId } : {}),
+    ...(target.sourceTargetUrl !== undefined ? { sourceTargetUrl: target.sourceTargetUrl } : {}),
+    ...(target.organism !== undefined ? { organism: target.organism } : {}),
+  }
+}
+
+function observationAssayToRecord(assay: ObservationAssay): ObservationAssay {
+  return {
+    ...(assay.assayId !== undefined ? { assayId: assay.assayId } : {}),
+    ...(assay.assayType !== undefined ? { assayType: assay.assayType } : {}),
+    ...(assay.description !== undefined ? { description: assay.description } : {}),
+  }
+}
+
+function observationReferenceToRecord(reference: ObservationReference): ObservationReference {
+  return {
+    ...(reference.referenceId !== undefined ? { referenceId: reference.referenceId } : {}),
+    ...(reference.journal !== undefined ? { journal: reference.journal } : {}),
+    ...(reference.year !== undefined ? { year: reference.year } : {}),
+  }
+}
+
+/**
+ * One stored measurement, written field by field. Every field is carried
+ * exactly as reported — endpoint spelling, value, unit, qualifier, raw
+ * relation and all context — and an absent field stays absent. Nothing is
+ * mapped onto a model parameter here: `parameterKind` is only ever the
+ * source's own canonical endpoint classification.
+ */
+function observationToRecord(observation: ImportedObservation): ImportedObservation {
+  return {
+    id: observation.id,
+    compoundId: observation.compoundId,
+    compoundSourceId: observation.compoundSourceId,
+    ...(observation.compoundName !== undefined ? { compoundName: observation.compoundName } : {}),
+    target: observationTargetToRecord(observation.target),
+    endpoint: observation.endpoint,
+    ...(observation.parameterKind !== undefined
+      ? { parameterKind: observation.parameterKind }
+      : {}),
+    value: observation.value,
+    ...(observation.unit !== undefined ? { unit: observation.unit } : {}),
+    ...(observation.qualifier !== undefined ? { qualifier: observation.qualifier } : {}),
+    ...(observation.rawRelation !== undefined ? { rawRelation: observation.rawRelation } : {}),
+    ...(observation.species !== undefined ? { species: observation.species } : {}),
+    ...(observation.assay !== undefined
+      ? { assay: observationAssayToRecord(observation.assay) }
+      : {}),
+    ...(observation.reference !== undefined
+      ? { reference: observationReferenceToRecord(observation.reference) }
+      : {}),
+    ...(observation.activityComment !== undefined
+      ? { activityComment: observation.activityComment }
+      : {}),
+    ...(observation.dataValidityNote !== undefined
+      ? { dataValidityNote: observation.dataValidityNote }
+      : {}),
+    provenance: sourceAttributionToRecord(observation.provenance),
+    createdAt: observation.createdAt,
+    updatedAt: observation.updatedAt,
+  }
+}
+
+/** One imported source record, written field by field (absent stays absent). */
+function sourceRecordToRecord(record: DrugSourceRecord): DrugSourceRecord {
+  return {
+    source: record.source,
+    sourceId: record.sourceId,
+    ...(record.name !== undefined ? { name: record.name } : {}),
+    synonyms: [...record.synonyms],
+    identifiers: compoundIdentifiersToRecord(record.identifiers),
+    provenance: sourceAttributionToRecord(record.provenance),
+    observations: record.observations.map(observationToRecord),
+    importedAt: record.importedAt,
+  }
+}
+
 /**
  * Domain -> storage. Absent optional fields are omitted (never written as
  * `undefined`), so "field cleared" is stored as "field absent" and unknown
@@ -355,6 +612,12 @@ export function toRecord(drug: Drug, persistenceVersion = PERSISTENCE_VERSION): 
         : {}),
     },
     ...(drug.notes !== undefined ? { notes: drug.notes } : {}),
+    // Phase 36: imported source data is a known field the mapper owns. An
+    // empty list stays absent (never written as `[]`), and a record that
+    // never imported anything simply omits the key.
+    ...(drug.sourceRecords !== undefined && drug.sourceRecords.length > 0
+      ? { sourceRecords: drug.sourceRecords.map(sourceRecordToRecord) }
+      : {}),
     ...(drug.createdAt !== undefined ? { createdAt: drug.createdAt } : {}),
     ...(drug.updatedAt !== undefined ? { updatedAt: drug.updatedAt } : {}),
     persistenceVersion,
