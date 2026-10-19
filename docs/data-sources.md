@@ -376,6 +376,19 @@ unaffected.
 Both stores share the single database instance with the drug library
 (one connection, one composition root in `src/app/dataSourcesStore.ts`).
 
+Deleting a stored compound identity record (phase 37) is scoped to these
+two stores: one read-write transaction removes the compound row and
+exactly the observations whose validated `compoundId` equals that
+compound's id — never a same-named record, never another compound's
+measurement, never a partial result (a storage failure rolls the
+transaction back). The row is re-validated with the same authoritative
+parser the hydration path uses: a quarantined compound, or a measurement
+it owns that fails validation, makes the deletion refuse and preserve
+everything byte-identical. The drug library is not part of the
+transaction at all — an imported `Drug.sourceRecords` snapshot is an
+independent copy, so deleting the acquisition record cannot alter,
+degrade or orphan a library record.
+
 What is deliberately **not** stored: search result lists (transient
 session state), target search rows (discovery only), and any form of
 automatic cache invalidation — records are point-in-time retrievals
