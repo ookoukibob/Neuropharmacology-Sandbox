@@ -16,6 +16,7 @@ import type {
   Pharmacokinetics,
   ReceptorTarget,
 } from '../../domain/drug/drug'
+import type { DrugSourceRecord } from '../../domain/drug/source-data'
 import type { DrugLibrary, LibraryMetadata } from '../../domain/library/library'
 import type { ImportIssue, ImportWarning } from '../import/importPipeline'
 import type { RecoveryCounts, RecoveryIssue, RecoveryWarning } from '../recovery/format'
@@ -62,6 +63,12 @@ export interface DrugInput {
   readonly pharmacokinetics?: Pharmacokinetics
   /** Explicit `undefined` means "no notes" (create) / "clear" (update). */
   readonly notes?: string | undefined
+  /**
+   * Imported source-data snapshots (phase 36). Omitted on a creation path
+   * that imports nothing; a supplied list is written as given (the
+   * repository validates it like every other field).
+   */
+  readonly sourceRecords?: readonly DrugSourceRecord[]
 }
 
 /**
@@ -76,6 +83,15 @@ export interface DrugChanges {
   readonly targets?: readonly TargetInput[]
   readonly pharmacokinetics?: Pharmacokinetics
   readonly notes?: string | undefined
+  /**
+   * Imported source-data snapshots (phase 36). Absent keeps the stored
+   * snapshots untouched — which is what an ordinary edit (the drug form)
+   * submits, so source-derived data can never be erased by editing the
+   * record. A supplied list replaces the stored list wholesale; attaching
+   * one snapshot without disturbing the others is done with
+   * `mergeSourceRecord`, which never merges or overwrites a conflict.
+   */
+  readonly sourceRecords?: readonly DrugSourceRecord[]
 }
 
 export type ImportMode =

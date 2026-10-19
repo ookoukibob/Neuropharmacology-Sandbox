@@ -165,6 +165,50 @@ TargetSourceReference
 
 ---
 
+### Imported source data (phase 36)
+
+A drug record that was created from — or explicitly linked to — a stored
+source compound keeps a typed snapshot of that record:
+
+```
+Drug
+└── sourceRecords?: DrugSourceRecord[]
+    ├── source, sourceId          external identity ('chembl' + 'CHEMBL25')
+    ├── name?, synonyms[]         preferred name and every reported synonym
+    ├── identifiers               CompoundIdentifiers (pubchemCid, chemblId,
+    │                             inchiKey, smiles, molecularFormula,
+    │                             molecularWeight, casNumber)
+    ├── provenance                SourceAttribution (source name, record id,
+    │                             record URL, retrievedAt, sourceVersion?,
+    │                             licenseNotice?, licenseUrl?)
+    ├── observations[]            ExperimentalObservation[] — every stored
+    │                             measurement of exactly this record
+    └── importedAt                when the snapshot was attached
+```
+
+Rules:
+
+- **Structured, not prose.** The snapshot is typed data; nothing is
+  duplicated into `notes`, which stays user notes.
+- **Not Layer C.** `observations` are *reported measurements*, kept with
+  their endpoint, value, unit, qualifier, target, species, assay and
+  provenance. They never fill `kd`/`ki`/`ec50`/`ic50` — that still happens
+  only through the explicit "Use as parameter…" flow and its validation.
+- **Identity is external.** A snapshot is keyed by `source` + `sourceId`,
+  never by name; at most one snapshot per exact `source` string (the same
+  rule as `TargetSourceReference`), and a same-source record with a
+  different id is reported as a conflict rather than merged. Observations
+  are linked only when `compoundId === `${source}:${sourceId}``.
+- **Missing stays missing.** Every optional field is omitted when the
+  source did not supply it; nothing is invented, defaulted or derived.
+- **Disagreement is preserved.** Contradicting measurements are separate
+  entries in their original order — never averaged, merged or dropped.
+- **Optional and additive.** Records without imported source data omit the
+  key entirely (never `[]`), so legacy rows, older `.npsl` files and
+  pre-36 `.npsb` archives load unchanged. Unknown keys inside a snapshot
+  or an observation survive the established per-level key contract,
+  matched by source and by deterministic observation id.
+
 ## 5. Library aggregate
 
 ```ts

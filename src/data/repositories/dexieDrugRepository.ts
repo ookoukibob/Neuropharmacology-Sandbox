@@ -127,6 +127,14 @@ function applyChanges(current: Drug, changes: DrugChanges, now: string): Drug {
   if (changes.tags !== undefined) draft.tags = changes.tags
   if (changes.targets !== undefined) draft.targets = assignTargetIds(changes.targets)
   if (changes.pharmacokinetics !== undefined) draft.pharmacokinetics = changes.pharmacokinetics
+  // Phase 36: imported source data is only ever replaced by a caller that
+  // explicitly supplies it (the attach flow). An ordinary edit omits the
+  // key, so source-derived identifiers, attribution and measurements are
+  // structurally unreachable from the form path and cannot be erased by it.
+  if (changes.sourceRecords !== undefined) {
+    if (changes.sourceRecords.length === 0) delete draft.sourceRecords
+    else draft.sourceRecords = changes.sourceRecords
+  }
   if ('notes' in changes) {
     // Explicit undefined clears; absent keeps (see DrugChanges contract).
     if (changes.notes === undefined) delete draft.notes
@@ -223,6 +231,11 @@ export class DexieDrugRepository implements DrugRepository {
       targets: assignTargetIds(input.targets ?? []),
       pharmacokinetics: input.pharmacokinetics ?? {},
       ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      // Phase 36: an import-created record carries its source snapshot from
+      // the first write. An empty list stays absent (never `[]`).
+      ...(input.sourceRecords !== undefined && input.sourceRecords.length > 0
+        ? { sourceRecords: input.sourceRecords }
+        : {}),
       createdAt: now,
       updatedAt: now,
     }

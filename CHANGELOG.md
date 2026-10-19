@@ -4,6 +4,57 @@ All notable changes to Neuropharmacology Sandbox are documented here.
 Versions follow Semantic Versioning; this project is a source-available,
 noncommercial static web application (see [LICENSE](LICENSE)).
 
+## [Unreleased]
+
+### Changed — complete Data Sources → Library import (phase 36)
+
+- **"Add to drug library" now imports the complete source record.** A
+  stored compound no longer reduces to a name, synonyms and an optional
+  CAS number: the drug record receives a typed snapshot
+  (`Drug.sourceRecords`) with its external identity (`source` +
+  `sourceId`), the preferred name and **all** synonyms, every identifier
+  the source supplied (PubChem CID, ChEMBL id, InChIKey, SMILES, molecular
+  formula, molecular weight in g/mol, CAS), the full source attribution
+  (record URL, retrieval timestamp, source version, license notice and
+  license URL) and **every stored experimental observation** of exactly
+  that record — endpoint, value, unit, qualifier, raw relation, target
+  (name, source id, URL, organism), species, assay, reference, activity
+  comment, data-validity note and per-measurement provenance.
+- Imported data is structured and separate from user notes; missing fields
+  stay absent, and nothing is derived, defaulted or invented.
+- Observations are linked by **validated source identity**
+  (`compoundId === ${source}:${sourceId}`), never by display name. They
+  remain measurements: an import never fills `kd`/`ki`/`ec50`/`ic50`, and
+  the existing "Use as parameter…" flow keeps all of its validation.
+- Repeat imports are identity-aware: re-importing the same record appends
+  only new measurements and reports `already-linked`; a same-source record
+  with a different id is reported as a `conflict` and never merged; a
+  same-name compound with a different source id is a separate record.
+- An existing drug record can be **explicitly linked** (a chosen id, never
+  a name match): only `sourceRecords` is submitted, so its targets, model
+  parameters, target metadata, identifiers and notes are preserved, and
+  the write is revision-guarded like every other edit.
+- The library detail page gains sections for identifiers, chemical
+  properties, source attribution/license and the imported observations
+  (honest "not reported" markers and empty states; disagreeing
+  measurements are shown side by side). The library list shows a
+  source-origin indicator.
+- The snapshot is a first-class stored field validated by the shared
+  `drugSchema`, and it survives reloads, ordinary edits, `.npsl`
+  export/import and `.npsb` recovery round trips. The field is optional and
+  additive: legacy records, old `.npsl` files and pre-36 `.npsb` archives
+  keep loading unchanged — **no schema, persistence or database version
+  bump**, and no migration (see ADR-22 in
+  [docs/decisions.md](docs/decisions.md)).
+
+### Known limitation
+
+- The CSV export is a flattened projection of drug *parameters* and does
+  **not** carry imported source data or observations; `.npsl` and `.npsb`
+  are the lossless carriers.
+
+---
+
 ## [0.1.0-alpha.1] — published 2026-10-13 (pre-release)
 
 > **Status: published preview release** (2026-10-13). `v0.1.0-alpha.1`

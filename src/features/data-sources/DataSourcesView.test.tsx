@@ -388,7 +388,7 @@ describe('DataSourcesView — applying a stored observation (Layer C)', () => {
 })
 
 describe('DataSourcesView — stored panel actions', () => {
-  it('adds a compound to the drug library as identity only, with attribution', async () => {
+  it('adds a compound to the drug library with its complete source snapshot', async () => {
     await seedStored()
     render(<DataSourcesView />)
 
@@ -396,14 +396,81 @@ describe('DataSourcesView — stored panel actions', () => {
     fireEvent.click(button)
 
     await waitFor(() => {
-      expect(screen.getByTestId('add-to-library-chembl:CHEMBL99990001')).toHaveTextContent('In library')
+      expect(
+        screen.getByTestId('linked-notice-chembl:CHEMBL99990001'),
+      ).toHaveTextContent('In library')
     })
     const drugs = (await libraryRepository.getAllDrugs()).drugs
     expect(drugs).toHaveLength(1)
     expect(drugs[0]?.identifiers.name).toBe('Synthetic Fixture Compound')
     expect(drugs[0]?.targets).toEqual([]) // no pharmacological values invented
-    expect(drugs[0]?.notes).toContain('https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL99990001')
-    expect(drugs[0]?.notes).toContain('CC BY-SA 3.0')
+    const snapshot = drugs[0]?.sourceRecords?.[0]
+    expect(snapshot?.provenance.url).toBe(
+      'https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL99990001',
+    )
+    expect(snapshot?.provenance.licenseNotice).toContain('CC BY-SA 3.0')
+    // Measurements travel with the snapshot; nothing becomes a parameter.
+    expect(snapshot?.observations).toHaveLength(1)
+    expect(drugs[0]?.notes).toBeUndefined()
+  })
+})
+
+describe('DataSourcesView — import outcome reporting (phase 36)', () => {
+  it('creates a record, then reports the compound as already linked', async () => {
+    await seedStored()
+    render(<DataSourcesView />)
+
+    fireEvent.click(await screen.findByTestId('add-to-library-chembl:CHEMBL99990001'))
+    const notice = await screen.findByTestId('apply-notice')
+    expect(notice).toHaveTextContent('complete ChEMBL source record')
+    expect(notice).toHaveTextContent('1 stored measurement')
+
+    // The row now states the link instead of offering to create a duplicate.
+    const linkedNotice = await screen.findByTestId('linked-notice-chembl:CHEMBL99990001')
+    expect(linkedNotice).toHaveTextContent('In library')
+    expect(linkedNotice).toHaveTextContent('1 stored measurement')
+    expect((await libraryRepository.getAllDrugs()).drugs).toHaveLength(1)
+  })
+
+  it('links a chosen existing record without replacing its contents', async () => {
+    await seedStored({ withLibrary: true })
+    render(<DataSourcesView />)
+
+    const select = (await screen.findByTestId(
+      'link-target-chembl:CHEMBL99990001',
+    )) as HTMLSelectElement
+    // The manual record is offered as an explicit choice — never preselected.
+    expect(select.value).toBe('')
+    const option = within(select).getByRole('option', { name: 'Fixture Compound A' })
+    expect(option).toBeInTheDocument()
+    fireEvent.change(select, { target: { value: 'fixture-drug-1' } })
+    fireEvent.click(screen.getByTestId('add-to-library-chembl:CHEMBL99990001'))
+
+    const notice = await screen.findByTestId('apply-notice')
+    expect(notice).toHaveTextContent('Linked the ChEMBL source record')
+    expect(notice).toHaveTextContent('preserved')
+
+    const drugs = (await libraryRepository.getAllDrugs()).drugs
+    expect(drugs).toHaveLength(1) // linked, not duplicated
+    const drug = drugs[0]
+    expect(drug?.identifiers.name).toBe('Fixture Compound A') // untouched
+    expect(drug?.targets).toHaveLength(2) // its parameters survive
+    expect(drug?.notes).toBeDefined()
+    expect(drug?.sourceRecords).toHaveLength(1)
+    expect(drug?.sourceRecords?.[0]?.observations).toHaveLength(1)
+  })
+
+  it('reports a failure without claiming success when the target record vanished', async () => {
+    await seedStored({ withLibrary: true })
+    render(<DataSourcesView />)
+
+    // The store is the boundary that resolves the target; a stale id must
+    // fail cleanly instead of creating or overwriting anything.
+    const outcome = await useDataSourcesStore
+      .getState()
+      .addToLibrary('chembl:CHEMBL99990001', { drugId: 'no-such-drug' })
+    expect(outcome.status).toBe('failed')
+    expect((await libraryRepository.getAllDrugs()).drugs).toHaveLength(1)
   })
 })
 

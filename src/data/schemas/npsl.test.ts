@@ -306,6 +306,211 @@ describe('npslFileSchema — target source references (phase 18I)', () => {
   })
 })
 
+describe('npslFileSchema — imported source data (phase 36)', () => {
+  const ATTRIBUTION = {
+    source: 'chembl',
+    sourceName: 'ChEMBL',
+    recordId: 'CHEMBL99990001',
+    url: 'https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL99990001',
+    retrievedAt: '2026-01-01T00:00:00.000Z',
+    licenseNotice: 'ChEMBL data is licensed under CC BY-SA 3.0.',
+    licenseUrl: 'https://creativecommons.org/licenses/by-sa/3.0/',
+  }
+
+  const OBSERVATION = {
+    id: 'chembl:99000001',
+    compoundId: 'chembl:CHEMBL99990001',
+    compoundSourceId: 'CHEMBL99990001',
+    compoundName: 'Synthetic Fixture Compound',
+    target: {
+      name: 'Synthetic Target A',
+      sourceTargetId: 'CHEMBL99991001',
+      sourceTargetUrl: 'https://www.ebi.ac.uk/chembl/explore/target/CHEMBL99991001',
+      organism: 'Homo sapiens',
+    },
+    endpoint: 'IC50',
+    parameterKind: 'ic50',
+    value: 3.5,
+    unit: 'nM',
+    qualifier: '=',
+    species: 'Homo sapiens',
+    assay: { assayId: 'CHEMBL99992001', assayType: 'B', description: 'Synthetic assay' },
+    reference: { referenceId: 'CHEMBL99993001', journal: 'Synthetic J', year: 2026 },
+    activityComment: 'Synthetic comment',
+    dataValidityNote: 'Synthetic validity note',
+    provenance: {
+      ...ATTRIBUTION,
+      recordId: '99000001',
+      url: 'https://www.ebi.ac.uk/chembl/api/data/activity.json?activity_id=99000001',
+    },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  }
+
+  const SOURCE_RECORD = {
+    source: 'chembl',
+    sourceId: 'CHEMBL99990001',
+    name: 'Synthetic Fixture Compound',
+    synonyms: ['SFC-1'],
+    identifiers: {
+      chemblId: 'CHEMBL99990001',
+      pubchemCid: '90000001',
+      inchiKey: 'FIXTUREKEYSXYZ-UHFFFAOYSA-N',
+      smiles: 'CCN(CC)C(=O)C1=CC=CC=C1NC1=CC=CC=C1',
+      molecularFormula: 'C12H14N2O',
+      molecularWeight: 202.25,
+      casNumber: 'SYNTH-CAS-0001',
+    },
+    provenance: ATTRIBUTION,
+    observations: [OBSERVATION],
+    importedAt: '2026-01-02T00:00:00.000Z',
+  }
+
+  function withSourceRecords(records: unknown): unknown {
+    const input = structuredClone(fixture) as Record<string, unknown>
+    const drug = (input['drugs'] as Record<string, unknown>[])[0]
+    if (!drug) throw new Error('fixture must contain at least one drug')
+    drug['sourceRecords'] = records
+    return input
+  }
+
+  it('accepts a complete snapshot and preserves every field verbatim', () => {
+    const parsed = parseOk(withSourceRecords([SOURCE_RECORD]))
+    expect(parsed.drugs[0]?.sourceRecords).toEqual([SOURCE_RECORD])
+  })
+
+  it('keeps records and files without the field valid and omits the key', () => {
+    const parsed = parseOk(fixture) as Record<string, unknown>
+    const drugs = parsed['drugs'] as Record<string, unknown>[]
+    expect(drugs[0] !== undefined && 'sourceRecords' in drugs[0]).toBe(false)
+  })
+
+  it('accepts a snapshot with only the required fields (missing stays missing)', () => {
+    const minimal = {
+      source: 'pubchem',
+      sourceId: '90000001',
+      synonyms: [],
+      identifiers: { pubchemCid: '90000001' },
+      provenance: {
+        source: 'pubchem',
+        sourceName: 'PubChem',
+        recordId: '90000001',
+        url: 'https://pubchem.ncbi.nlm.nih.gov/compound/90000001',
+        retrievedAt: '2026-01-01T00:00:00.000Z',
+      },
+      observations: [],
+      importedAt: '2026-01-02T00:00:00.000Z',
+    }
+    const parsed = parseOk(withSourceRecords([minimal]))
+    const written = parsed.drugs[0]?.sourceRecords?.[0]
+    expect(written?.name).toBeUndefined()
+    expect(written?.identifiers).toEqual({ pubchemCid: '90000001' })
+    expect(written?.observations).toEqual([])
+  })
+
+  it('accepts multiple source systems side by side', () => {
+    const pubchem = {
+      ...SOURCE_RECORD,
+      source: 'pubchem',
+      sourceId: '90000001',
+      provenance: { ...ATTRIBUTION, source: 'pubchem', sourceName: 'PubChem', recordId: '90000001' },
+      observations: [],
+    }
+    const parsed = parseOk(withSourceRecords([SOURCE_RECORD, pubchem]))
+    expect(parsed.drugs[0]?.sourceRecords?.map((record) => record.source)).toEqual([
+      'chembl',
+      'pubchem',
+    ])
+  })
+
+  it('rejects two snapshots from the same source, naming the duplicate entry', () => {
+    const issues = parseFails(withSourceRecords([SOURCE_RECORD, { ...SOURCE_RECORD }]))
+    const duplicate = issues.find((issue) => issue.message.includes('duplicate source record'))
+    expect(duplicate?.path.join('.')).toBe('drugs.0.sourceRecords.1.source')
+    expect(duplicate?.message).toContain('never merged or deduplicated')
+  })
+
+  it('rejects a snapshot whose provenance names another record', () => {
+    const broken = {
+      ...SOURCE_RECORD,
+      provenance: { ...ATTRIBUTION, recordId: 'CHEMBL99990002' },
+    }
+    const issues = parseFails(withSourceRecords([broken]))
+    expect(issues.some((issue) => issue.path.join('.').includes('provenance.recordId'))).toBe(true)
+  })
+
+  it('rejects a measurement linked to a different compound id', () => {
+    const broken = {
+      ...SOURCE_RECORD,
+      observations: [{ ...OBSERVATION, compoundId: 'chembl:CHEMBL99990002' }],
+    }
+    const issues = parseFails(withSourceRecords([broken]))
+    expect(issues.some((issue) => issue.path.join('.').includes('observations.0.compoundId'))).toBe(
+      true,
+    )
+  })
+
+  it('rejects a measurement whose id contradicts its provenance', () => {
+    const broken = {
+      ...SOURCE_RECORD,
+      observations: [{ ...OBSERVATION, id: 'chembl:12345678' }],
+    }
+    const issues = parseFails(withSourceRecords([broken]))
+    expect(issues.some((issue) => issue.path.join('.').includes('observations.0.id'))).toBe(true)
+  })
+
+  it('rejects duplicated measurements inside one snapshot', () => {
+    const broken = {
+      ...SOURCE_RECORD,
+      observations: [OBSERVATION, { ...OBSERVATION }],
+    }
+    const issues = parseFails(withSourceRecords([broken]))
+    expect(issues.some((issue) => issue.message.includes('duplicate observation'))).toBe(true)
+  })
+
+  it('rejects a non-finite reported value and a malformed URL', () => {
+    const badValue = {
+      ...SOURCE_RECORD,
+      observations: [{ ...OBSERVATION, value: Number.POSITIVE_INFINITY }],
+    }
+    expect(parseFails(withSourceRecords([badValue])).length).toBeGreaterThan(0)
+
+    const badUrl = {
+      ...SOURCE_RECORD,
+      provenance: { ...ATTRIBUTION, url: 'http://insecure.example/x' },
+    }
+    const issues = parseFails(withSourceRecords([badUrl]))
+    expect(issues.some((issue) => issue.path.join('.').includes('provenance.url'))).toBe(true)
+  })
+
+  it('keeps unknown keys inside a snapshot and its observation (forward compatibility)', () => {
+    const extended = {
+      ...SOURCE_RECORD,
+      futureSnapshotField: 'kept',
+      identifiers: { ...SOURCE_RECORD.identifiers, futureIdentifierField: 'kept' },
+      observations: [
+        {
+          ...OBSERVATION,
+          futureObservationField: 'kept',
+          assay: { ...OBSERVATION.assay, futureAssayField: 'kept' },
+        },
+      ],
+    }
+    const parsed = parseOk(withSourceRecords([extended])) as {
+      drugs: { sourceRecords: Record<string, unknown>[] }[]
+    }
+    const snapshot = parsed.drugs[0]?.sourceRecords[0] ?? {}
+    expect(snapshot['futureSnapshotField']).toBe('kept')
+    expect((snapshot['identifiers'] as Record<string, unknown>)['futureIdentifierField']).toBe(
+      'kept',
+    )
+    const observations = (snapshot?.['observations'] ?? []) as Record<string, unknown>[]
+    const first = observations[0] ?? {}
+    expect(first['futureObservationField']).toBe('kept')
+    expect((first['assay'] as Record<string, unknown>)['futureAssayField']).toBe('kept')
+  })
+})
+
 describe('checkNpslVersions', () => {
   const current = {
     formatVersion: NPSL_FORMAT_VERSION,

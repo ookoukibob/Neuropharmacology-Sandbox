@@ -158,9 +158,71 @@ link where a validated URL exists, and survive drug edits, IndexedDB
 round trips and `.npsl` export/import (optional key: records without
 references simply omit it — see ADR-20).
 
-"Add to drug library" on a stored compound is deliberately weaker: it
-creates an identity-only drug record (name, synonyms, CAS) whose notes
-carry the full attribution — no pharmacological value is invented.
+### "Add to drug library" — the complete import (phase 36)
+
+"Add to drug library" on a stored compound imports the **complete** source
+record, not a name-only stub. It attaches a typed snapshot
+(`Drug.sourceRecords: DrugSourceRecord[]`, see
+[domain-model.md](domain-model.md) §8) carrying:
+
+| Snapshot field | Content |
+| --- | --- |
+| `source`, `sourceId` | the external identity (`${source}:${sourceId}`) — never the name |
+| `name`, `synonyms` | preferred name and **all** synonyms the source supplied |
+| `identifiers` | `pubchemCid`, `chemblId`, `inchiKey`, `smiles`, `molecularFormula`, `molecularWeight` (g/mol), `casNumber` — the full `CompoundIdentifiers` shape, so a field a future adapter adds travels without a schema change |
+| `provenance` | source name, record id, record URL, retrieval timestamp, source version, license notice and license URL |
+| `observations` | every stored `ExperimentalObservation` whose `compoundId` equals this external record — endpoint, value, unit, qualifier, `rawRelation`, target (name, source id, URL, organism), species, assay, reference, activity comment, data-validity note and provenance |
+| `importedAt` | when the snapshot was attached |
+
+Rules enforced by the implementation (not by the UI alone):
+
+- **Identity, not names.** The snapshot is keyed on `source` + `sourceId`.
+  Observations are linked only when their `compoundId` equals
+  `${source}:${sourceId}`; a matching display name never associates a
+  measurement, and a same-name compound with a different source id is a
+  separate record.
+- **Structured, not prose.** Nothing is copied into `Drug.notes`; the drug
+  record's notes stay user notes.
+- **Never a parameter.** The import leaves `kd`/`ki`/`ec50`/`ic50` empty.
+  Measurements remain measurements; promoting one is still the explicit
+  "Use as parameter…" flow with all its validation (§2, Layer C).
+- **Missing stays missing.** A field the source did not supply is absent
+  from the snapshot — never written as `null`, `0` or an empty string, and
+  never derived.
+- **Idempotent.** Re-importing the same external record into the same drug
+  appends only measurements it does not already hold and reports
+  `already-linked`; no record and no measurement is ever duplicated.
+- **Conflicts are reported.** At most one snapshot per exact `source`
+  string (the ADR-20 rule). Linking a compound to a record that already
+  holds a *different* record from the same source is a typed `conflict`
+  outcome: nothing is merged, overwritten or relabelled.
+- **Explicit linking.** An existing drug record acquires source data only
+  when the user picks it from the "Link to an existing drug record" list
+  (or passes `drugId` to `addToLibrary`). Only `sourceRecords` is
+  submitted, so the record's targets, model parameters, target metadata,
+  identifiers and notes are preserved verbatim; the write carries the
+  record's revision token, so a stale attach is rejected instead of
+  reviving superseded data.
+
+The panel reports which of the three outcomes happened — created, linked,
+or already linked (nothing written) — and reports a conflict or failure
+instead of claiming success.
+
+**Persistence and interchange.** The snapshot is a first-class stored field
+(`sourceRecords`) written by the persistence mapper, validated by the
+shared `drugSchema` at every boundary, and it survives ordinary edits
+(the form never submits the field), page reloads, browser restarts,
+`.npsl` export/import and `.npsb` recovery round trips. It is optional and
+additive: legacy records, old `.npsl` files and pre-36 `.npsb` archives
+keep loading unchanged, and no version bump was required (ADR-22). Unknown
+keys inside a snapshot or an observation are preserved by the established
+per-level key contract, matched by source (snapshots) and by deterministic
+observation id (measurements) — never by array position.
+
+**Not portable through CSV.** The CSV export is a deliberately lossy
+flattened projection of drug *parameters* and does not carry
+`sourceRecords` or the imported observations. Use `.npsl` (or `.npsb`)
+for a lossless round trip.
 
 ---
 
@@ -298,8 +360,18 @@ Dexie v3 adds two stores to the existing database
 (`src/data/db/database.ts`): `compounds` (key `id`) and `observations`
 (key `id`, index `compoundId`). The migration is additive (no upgrade
 rewrite); existing drug rows are byte-identical through it
-(`database.test.ts`). `PERSISTENCE_VERSION` stays 2 — the drug record
-format did not change.
+(`database.test.ts`).
+
+Phase 36 keeps that schema: the imported snapshot lives **inside the drug
+row** (`sourceRecords`), so the library record retains its complete source
+data independently of the Layer A/B tables — the transient UI selection
+and even the source stores can disappear without affecting what the drug
+record shows. No new table and no migration were needed; the field is
+optional, so existing rows and databases open unchanged.
+`PERSISTENCE_VERSION` stays 2 — the drug record format gained only an
+optional field, and every existing contract (byte-identical restore,
+unknown-field preservation, `.npsb` archives, NPSL interchange) is
+unaffected.
 
 Both stores share the single database instance with the drug library
 (one connection, one composition root in `src/app/dataSourcesStore.ts`).

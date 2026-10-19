@@ -18,9 +18,20 @@
  *   stays traceable back to the source record — including after the
  *   library is exported.
  *
- * "Add to library" creates an identity-only drug record (name, synonyms,
- * CAS) whose notes carry the full source attribution — it never invents
- * pharmacological values.
+ * "Add to drug library" (phase 36) imports the COMPLETE source record: its
+ * identifiers and chemical properties, the source attribution with the
+ * license terms, and every measurement stored for exactly that external
+ * compound — attached as a typed snapshot (`Drug.sourceRecords`). It never
+ * invents a pharmacological value: the imported measurements stay
+ * measurements, and a model parameter is still filled only by the explicit
+ * promotion above.
+ *
+ * The panel states which of the three outcomes happened — created, linked
+ * to a chosen existing record, or already linked (nothing written) — and
+ * reports a same-source identity conflict instead of claiming success. A
+ * name match alone never selects a record: linking an existing record is an
+ * explicit choice from a list, and it preserves that record's targets,
+ * parameters and notes.
  */
 import { useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -48,13 +59,13 @@ function ActionMessages() {
     <>
       {error !== null && (
         <Alert variant="destructive" data-testid="apply-error">
-          <AlertTitle>Not applied</AlertTitle>
+          <AlertTitle>Not completed</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
       {notice !== null && (
         <Alert data-testid="apply-notice">
-          <AlertTitle>Applied</AlertTitle>
+          <AlertTitle>Completed</AlertTitle>
           <AlertDescription>
             {notice}
             <div className="mt-2">
@@ -75,21 +86,58 @@ function ActionMessages() {
   )
 }
 
+/**
+ * The drug record already linked to this exact external compound, if any.
+ * Identity — never the display name — decides: a record that merely shares
+ * a name is not "in library", and is offered as an explicit link target
+ * instead.
+ */
+function linkedDrug(
+  drugs: readonly Drug[],
+  compound: Compound,
+): { readonly drug: Drug; readonly observations: number } | undefined {
+  for (const drug of drugs) {
+    const record = drug.sourceRecords?.find(
+      (candidate) =>
+        candidate.source === compound.source && candidate.sourceId === compound.sourceId,
+    )
+    if (record !== undefined) return { drug, observations: record.observations.length }
+  }
+  return undefined
+}
+
 /** One stored compound with its attribution and the library bridge. */
 function StoredCompoundRow({ compound }: { readonly compound: Compound }) {
   const addToLibrary = useDataSourcesStore((s) => s.addToLibrary)
   const drugs = useDataSourcesStore((s) => s.stored.drugs)
+  const storedObservations = useDataSourcesStore((s) => s.stored.observations)
   const [busy, setBusy] = useState(false)
+  const [linkTo, setLinkTo] = useState('')
 
   const name = compound.name ?? compound.sourceId
-  const alreadyInLibrary = drugs.some((drug) => drug.identifiers.name === name)
+  const linked = linkedDrug(drugs, compound)
+  // Measurements stored for exactly this external record — the same
+  // validated identity link the store uses, never a name comparison.
+  const measurementCount = storedObservations.filter(
+    (observation) => observation.compoundId === compound.id,
+  ).length
 
   async function onAdd(): Promise<void> {
     setBusy(true)
     try {
-      const created = await addToLibrary(compound.id)
-      // Keep the shared drug-library session in sync with storage.
-      if (created !== null) void useLibraryStore.getState().hydrate()
+      // An already-linked compound is refreshed on ITS OWN record — never
+      // duplicated into a second one. Otherwise the user's explicit choice
+      // decides: a chosen record is linked, an empty choice creates one.
+      const targetId = linked !== undefined ? linked.drug.id : linkTo === '' ? undefined : linkTo
+      const outcome = await addToLibrary(
+        compound.id,
+        targetId === undefined ? undefined : { drugId: targetId },
+      )
+      // A conflict or failure wrote nothing; only a successful attach
+      // changes the library, so only then does the session refresh.
+      if (outcome.status === 'created' || outcome.status === 'linked') {
+        void useLibraryStore.getState().hydrate()
+      }
     } finally {
       setBusy(false)
     }
@@ -140,21 +188,77 @@ function StoredCompoundRow({ compound }: { readonly compound: Compound }) {
           ? ` · ${compound.provenance.licenseNotice}`
           : ''}
       </p>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        data-testid={`add-to-library-${compound.id}`}
-        disabled={busy || alreadyInLibrary}
-        title={
-          alreadyInLibrary
-            ? 'A drug record with this name already exists in the library.'
-            : 'Create an identity-only drug record (no pharmacological values).'
-        }
-        onClick={() => void onAdd()}
-      >
-        {alreadyInLibrary ? 'In library' : busy ? 'Adding…' : 'Add to drug library (identity only)'}
-      </Button>
+      {linked !== undefined ? (
+        <p className="text-xs" data-testid={`linked-notice-${compound.id}`}>
+          <Badge variant="secondary">In library</Badge>{' '}
+          Linked to “{linked.drug.identifiers.name}” with {linked.observations} stored measurement
+          {linked.observations === 1 ? '' : 's'}.
+          {measurementCount > linked.observations && (
+            <>
+              {' '}
+              {measurementCount - linked.observations} newer stored measurement
+              {measurementCount - linked.observations === 1 ? ' is' : 's are'} not linked yet —
+              add them to the same record below.
+            </>
+          )}
+        </p>
+      ) : (
+        <>
+          <div className="grid gap-2 sm:max-w-sm">
+            <Label htmlFor={`link-target-${compound.id}`}>Link to an existing drug record</Label>
+            <select
+              id={`link-target-${compound.id}`}
+              data-testid={`link-target-${compound.id}`}
+              className={SELECT_CLASS}
+              value={linkTo}
+              disabled={busy}
+              onChange={(e) => setLinkTo(e.target.value)}
+            >
+              <option value="">Create a new drug record</option>
+              {drugs.map((drugOption) => (
+                <option key={drugOption.id} value={drugOption.id}>
+                  {drugOption.identifiers.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            data-testid={`add-to-library-${compound.id}`}
+            disabled={busy}
+            title={
+              linkTo === ''
+                ? 'Create a drug record carrying this complete source record and its measurements (no model parameter is set).'
+                : 'Attach this source record and its measurements to the chosen drug record. Its targets, parameters and notes are preserved.'
+            }
+            onClick={() => void onAdd()}
+          >
+            {busy
+              ? 'Adding…'
+              : linkTo === ''
+                ? `Add to drug library (${measurementCount} measurement${measurementCount === 1 ? '' : 's'})`
+                : 'Link to the selected record'}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Imports the identifiers, chemical properties, attribution and every stored measurement.
+            No model parameter is set — use “Use as parameter…” for that.
+          </p>
+        </>
+      )}
+      {linked !== undefined && measurementCount > linked.observations && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid={`add-to-library-${compound.id}`}
+          disabled={busy}
+          onClick={() => void onAdd()}
+        >
+          {busy ? 'Adding…' : 'Add the newer measurements'}
+        </Button>
+      )}
     </li>
   )
 }

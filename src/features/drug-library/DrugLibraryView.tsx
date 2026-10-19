@@ -6,12 +6,52 @@
 import { AlertTriangle, Plus } from 'lucide-react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useLibraryStore } from '@/app/libraryStore'
+import type { Drug } from '@/domain/drug/drug'
 import { OriginBadge } from './components/OriginBadge'
+
+/**
+ * Source-origin indicator for the list (phase 36): which external source
+ * systems a record carries imported data from, plus the identifiers that
+ * make it recognizable. The detail page holds the complete view — the list
+ * deliberately stays scannable and never repeats every chemical property.
+ */
+function SourceOriginLine({ drug }: { readonly drug: Drug }) {
+  const records = drug.sourceRecords
+  if (records === undefined || records.length === 0) return null
+  return (
+    <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      {records.map((record) => {
+        const identifiers = [
+          record.identifiers.pubchemCid !== undefined ? `CID ${record.identifiers.pubchemCid}` : null,
+          record.identifiers.chemblId ?? null,
+          record.identifiers.casNumber !== undefined ? `CAS ${record.identifiers.casNumber}` : null,
+        ].filter((part): part is string => part !== null)
+        const measurementCount = record.observations.length
+        return (
+          <span
+            key={record.source}
+            className="flex flex-wrap items-center gap-2"
+            data-testid="list-source-origin"
+          >
+            <Badge variant="outline">
+              {record.provenance.sourceName} {record.sourceId}
+            </Badge>
+            {identifiers.length > 0 && <span>{identifiers.join(' · ')}</span>}
+            <span>
+              {measurementCount} measurement{measurementCount === 1 ? '' : 's'}
+            </span>
+          </span>
+        )
+      })}
+    </span>
+  )
+}
 
 export function DrugLibraryView() {
   const navigate = useNavigate()
@@ -107,6 +147,7 @@ export function DrugLibraryView() {
                         #{tag}
                       </span>
                     ))}
+                    <SourceOriginLine drug={drug} />
                   </CardContent>
                 </Card>
               </NavLink>
