@@ -246,12 +246,24 @@ pick source + scope + query        (nothing fetched yet)
 - **Paging**: measurement pages append under a snapshot of the query
   that produced them; paging continues the original query even if the
   on-screen selection changed.
-- **Endpoint scope**: ChEMBL observation requests default to the four
-  model-parameter endpoints (`Ki, Kd, IC50, EC50`), filter sent to the
-  server (`standard_type__in`), and can be switched to "all reported
-  endpoints" — the choice is sent to the source (only the chosen scope
-  is downloaded), fetched rows are cleared when it changes, and the
-  fetched list always shows the scope the data was fetched under.
+- **Target search**: uses the documented JSON endpoint
+  (`target/search.json?q=…&limit=…`). The format is pinned in the path —
+  the API's default format without a suffix is XML, so the
+  representation never depends on content negotiation (every ChEMBL
+  request carries an explicit `.json`).
+- **Endpoint selection**: ChEMBL observation requests default to the
+  four model-parameter endpoints (`Ki, Kd, IC50, EC50`), each
+  independently selectable. The checked subset is sent to the server
+  (`standard_type__in`); "All reported endpoints" is a separate,
+  mutually exclusive mode that intentionally omits the endpoint filter.
+  Only the chosen endpoints are downloaded, fetched rows and their
+  selection are cleared when the choice changes (an in-flight request is
+  invalidated), and the fetched list always shows the selection the data
+  was fetched under. The four choices are the model-parameter endpoints,
+  not a catalogue of every endpoint a source may report — only endpoints
+  the source actually reports can be returned. An empty selection is
+  never sent as "all": retrieval stays disabled with a validation
+  message until at least one endpoint (or "all") is chosen.
 
 ---
 
@@ -350,7 +362,10 @@ mirrored; only individually requested records are stored.
   transports (no live API in CI). Only the real-world behaviour of the
   external services themselves (actual throttling headers PubChem
   sends, endpoint availability) requires occasional manual live
-  checking.
+  checking. A manual, CI-independent smoke check of the exact request
+  URLs (including the documented `target/search.json` format) exists at
+  `scripts/smoke-chembl-live.mjs` (`npm run smoke:chembl`); CI never
+  runs it.
 
 ---
 
