@@ -162,7 +162,7 @@ export type AddToLibraryOutcome =
   | { readonly status: 'failed'; readonly message: string }
 
 /**
- * Outcome of deleting one stored compound identity record (phase 37).
+ * Outcome of deleting one stored compound identity record (phase 39).
  *
  * Mirrors `SourceDeleteReport` at the session boundary but adds the
  * human-readable summary the panel shows, so a success states exactly what
@@ -265,7 +265,7 @@ export interface DataSourcesState {
   ): Promise<AddToLibraryOutcome>
   /**
    * Delete ONE stored compound identity record and exactly its associated
-   * measurements (phase 37), then re-read the stored panel from IndexedDB.
+   * measurements (phase 39), then re-read the stored panel from IndexedDB.
    *
    * This removes only the local Data Sources acquisition copy. It never
    * touches the drug library: a `Drug.sourceRecords` snapshot imported

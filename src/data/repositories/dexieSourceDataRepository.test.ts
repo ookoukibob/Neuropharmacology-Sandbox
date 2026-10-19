@@ -429,7 +429,7 @@ describe('DexieSourceDataRepository', () => {
     })
   })
 
-  // --- deletion (phase 37) -------------------------------------------------
+  // --- deletion (phase 39) -------------------------------------------------
 
   /** A second compound + observation, distinct from the primary fixture. */
   const OTHER_COMPOUND: Compound = {

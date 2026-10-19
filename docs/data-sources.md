@@ -376,7 +376,7 @@ unaffected.
 Both stores share the single database instance with the drug library
 (one connection, one composition root in `src/app/dataSourcesStore.ts`).
 
-Deleting a stored compound identity record (phase 37) is scoped to these
+Deleting a stored compound identity record (phase 39) is scoped to these
 two stores: one read-write transaction removes the compound row and
 exactly the observations whose validated `compoundId` equals that
 compound's id — never a same-named record, never another compound's

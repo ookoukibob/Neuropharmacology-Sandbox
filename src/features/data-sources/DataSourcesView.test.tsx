@@ -480,7 +480,7 @@ describe('DataSourcesView — import outcome reporting (phase 36)', () => {
   })
 })
 
-describe('DataSourcesView — deleting a stored compound (phase 37)', () => {
+describe('DataSourcesView — deleting a stored compound (phase 39)', () => {
   it('requires an explicit confirmation naming the compound and its measurement count', async () => {
     await seedStored()
     render(<DataSourcesView />)

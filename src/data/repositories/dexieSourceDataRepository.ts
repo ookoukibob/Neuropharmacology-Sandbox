@@ -21,7 +21,7 @@
  * throws out of the transaction and Dexie rolls back — there is no
  * partial import in either direction.
  *
- * Deletion (phase 37) runs in ONE `rw` transaction over the same two
+ * Deletion (phase 39) runs in ONE `rw` transaction over the same two
  * tables and follows the same protection policy: the compound row is
  * resolved with the authoritative parser FIRST, and a row that fails it is
  * quarantined and preserved — deletion is refused before any `delete` call.

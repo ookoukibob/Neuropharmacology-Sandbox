@@ -23,7 +23,7 @@
  *   preserved byte-identical and nothing from the request is written;
  * - any rejection means nothing was written (all-or-nothing).
  *
- * Deletion (phase 37) follows the same "protection wins" policy as import:
+ * Deletion (phase 39) follows the same "protection wins" policy as import:
  * it removes ONE valid compound row and exactly the observations whose
  * `compoundId` equals that compound's deterministic id, in one transaction.
  * It never touches the drug library — an imported `Drug.sourceRecords`

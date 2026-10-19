@@ -1,5 +1,5 @@
 /**
- * Deleting stored compound identity records (phase 37), at the session
+ * Deleting stored compound identity records (phase 39), at the session
  * boundary against the real Dexie repositories:
  *
  * - a compound with measurements is deleted with exactly its own

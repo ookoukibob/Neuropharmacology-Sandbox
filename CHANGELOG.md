@@ -6,7 +6,7 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
-### Added — delete stored compound identity records (phase 37)
+### Added — delete stored compound identity records (phase 39)
 
 - **A stored compound identity record can now be deleted** from the
   Stored data panel, behind a two-step, keyboard-operable confirmation

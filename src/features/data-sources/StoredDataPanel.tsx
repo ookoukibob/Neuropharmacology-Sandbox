@@ -33,7 +33,7 @@
  * explicit choice from a list, and it preserves that record's targets,
  * parameters and notes.
  *
- * Deleting a stored compound identity record (phase 37) is a two-step,
+ * Deleting a stored compound identity record (phase 39) is a two-step,
  * keyboard-operable acknowledgement — never one stray click. The
  * confirmation names the compound AND states how many measurement records
  * go with it, because the deletion is irreversible. It removes only the
