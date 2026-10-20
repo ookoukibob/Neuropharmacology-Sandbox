@@ -3,9 +3,16 @@ import { cn } from "cn"
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
+    // tabIndex makes the horizontally scrollable wrapper reachable with the
+    // keyboard (axe scrollable-region-focusable); sighted keyboard users can
+    // then scroll wide tables. The focus ring is suppressed: it is a scroll
+    // container, not a control.
     <div
       data-slot="table-container"
-      className="relative w-full overflow-x-auto"
+      role="region"
+      aria-label="Table, scrollable horizontally"
+      tabIndex={0}
+      className="relative w-full overflow-x-auto focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <table
         data-slot="table"

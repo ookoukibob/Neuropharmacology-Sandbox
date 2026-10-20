@@ -511,3 +511,34 @@ reason as an error and draws nothing.
 mapping, total and pure. React/Plotly: layout and interaction only. A
 completed run is reported as *numerically complete within the configured
 tolerances*, never as scientifically validated (ADR-26).
+
+---
+
+## 10. Building a scenario from a form (phase 43)
+
+The engine contract is unchanged; what changed is how a scenario is
+produced. `src/features/simulation/draft.ts` holds a **string draft** and
+compiles it with `compileScenario()` into the exact `SimulationScenario`
+`simulate()` expects:
+
+- every numeric field is parsed once — a blank field is an error, never 0;
+- quantities keep the unit the user selected (the engine performs the
+  canonical conversion at its boundary and reports the conversion);
+- initial amounts are plain canonical mg, as `InitialState` defines;
+- `outputTimes` comes from `buildOutputGrid(start, end, interval)`, which
+  uses integer indices, includes the exact endpoints once, keeps times
+  strictly ascending, and refuses a grid above `MAX_OUTPUT_SAMPLES`;
+- each infusion row becomes an `infusion-start`/`infusion-stop` pair sharing
+  an `infusionId`, with deterministic ids derived from the row key.
+
+`simulate()` remains the sole scientific authority: positivity, units,
+event sequencing against the horizon, solver rules and invariants are its
+decisions, surfaced as typed errors with `stage`, `field` and `eventId`.
+The compiler's own errors are limited to what text parsing can decide,
+and the UI shows the two channels separately.
+
+The reports that reach the charts are unchanged, so the chart semantics of
+§9 (verbatim samples, preserved pre/post pairs, separate dimensions) hold
+for edited scenarios exactly as for the example. The infusion-rate chart
+uses `result.infusionRates` — the engine's summed pre/post snapshots — and
+is absent when the scenario never activated an infusion.

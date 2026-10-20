@@ -343,17 +343,44 @@ test('a11y: the settings page passes the axe scan in its default and confirm sta
   await scan(page, 'settings (reset confirmation)')
 })
 
-test('a11y: the simulation demonstration passes the axe scan before and after a run', async ({ page }) => {
+test('a11y: the simulation scenario editor passes the axe scans', async ({ page }) => {
   await page.goto('/simulation')
   await expect(page.getByRole('heading', { level: 1, name: 'Simulation' })).toBeVisible()
-  // Idle state: scenario parameters and the synthetic-data notice.
-  await scan(page, 'simulation (idle, synthetic scenario)')
+  // Initial editor with the synthetic example.
+  await scan(page, 'simulation editor (initial, synthetic example)')
 
-  // Result state: two charts, the event table and the diagnostics.
-  await page.getByTestId('run-demonstration').click()
+  // Validation errors: the summary and the field wiring are on screen.
+  await page.getByTestId('clearance-value').fill('')
+  await page.getByTestId('run-simulation').click()
+  await expect(page.getByTestId('form-errors')).toBeVisible()
+  await scan(page, 'simulation editor (form validation errors)')
+  await page.getByTestId('reset-demo').click()
+
+  // Event editing: an added bolus row with blank values.
+  await page.getByTestId('add-bolus').click()
+  await scan(page, 'simulation editor (added event row)')
+  await page.getByTestId('remove-event-4').click()
+
+  // Successful simulation with charts, event table and diagnostics.
+  await page.getByTestId('run-simulation').click()
   await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
     timeout: 30_000,
   })
-  await expect(page.getByTestId('event-table')).toBeVisible()
-  await scan(page, 'simulation (result: charts, events, diagnostics)')
+  await scan(page, 'simulation editor (result: charts, events, diagnostics)')
+
+  // Engine error state.
+  await page.getByTestId('central-volume-value').fill('0')
+  await page.getByTestId('run-simulation').click()
+  await expect(page.getByTestId('simulation-errors')).toBeVisible()
+  await scan(page, 'simulation editor (engine error)')
+  await page.getByTestId('reset-demo').click()
+
+  // Infusion-rate chart unavailable: remove the example infusion session.
+  await page.getByTestId('remove-event-3').click()
+  await page.getByTestId('run-simulation').click()
+  await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.getByTestId('toggle-infusionRate')).toBeDisabled()
+  await scan(page, 'simulation editor (infusion-rate chart unavailable)')
 })

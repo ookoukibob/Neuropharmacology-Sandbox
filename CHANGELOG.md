@@ -6,6 +6,39 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Added — general simulation scenario editor (phase 43)
+
+- **The simulation page is now an editable scenario editor.** Model
+  parameters (V_c, V_p, CL, Q, with catalog unit choices, and initial
+  amounts in canonical mg), the time horizon and a uniform output interval,
+  every dosing event, and — under *Advanced solver settings* — all six
+  solver options are editable. The synthetic example remains the starting
+  template and can be restored with **Reset to synthetic example**.
+- **Two kinds of validation stay visibly separate.** Unparseable or blank
+  fields are reported as form errors (a blank is never treated as zero) and
+  the engine is not called; once the draft compiles, `simulate()` remains
+  the only scientific validator, and its typed errors (code, stage, field,
+  event id) are shown and attributed to the offending control.
+- **Dosing events**: add, edit and remove IV boluses and IV infusion
+  sessions. A session compiles into the engine's `infusion-start` and
+  `infusion-stop` events with one shared `infusionId` and stable ids;
+  removing a session removes both events. New rows start blank.
+- **Output grid**: a pure generator builds `outputTimes` from start, end
+  and interval using integer indices, exact endpoints and a documented
+  20 000-sample limit; an over-large grid is rejected, never thinned.
+- **Stale results are impossible**: any edit clears the previous result, so
+  a chart is never attributed to a different draft.
+- **Charts**: concentration, amount and — when the scenario has an
+  infusion — an infusion-rate step chart drawn only from the engine’s
+  `infusionRates`. Chart visibility toggles are presentation-only and never
+  re-run the simulation; the infusion toggle is disabled with an
+  explanation when no infusion exists.
+- Widened table scroll containers are now keyboard-focusable (axe
+  `scrollable-region-focusable`), which also benefits existing tables.
+- No persistence, database schema, network or import/export change.
+
+## [Unreleased]
+
 ### Added — simulation demonstration page and charts (phase 42)
 
 - **A `/simulation` page** (navigation entry “Simulation”) that runs one explicitly

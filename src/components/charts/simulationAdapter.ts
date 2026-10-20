@@ -35,7 +35,7 @@ import type {
 // Public contract
 // ---------------------------------------------------------------------------
 
-export type SimulationChartId = 'concentration' | 'amount'
+export type SimulationChartId = 'concentration' | 'amount' | 'infusion-rate'
 
 /** One chart-ready series: parallel x/y arrays plus the full source samples. */
 export interface SimulationTrace {
@@ -294,6 +294,61 @@ export function amountChart(result: SimulationResult): SimulationChart {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Infusion-rate step chart (phase 43)
+// ---------------------------------------------------------------------------
+
+/**
+ * Total active infusion rate over time (mg/h), drawn as a step series.
+ *
+ * The ONLY source is `result.infusionRates` — the engine's own pre-event /
+ * post-event rate snapshots, which already contain the summed rate of all
+ * active infusions and their ids. The adapter never reconstructs a rate from
+ * event times, never integrates a dose, and never invents a zero-rate
+ * infusion. Repeated timestamps are kept in emission order, so a start or a
+ * stop is a vertical step at its exact time.
+ *
+ * `null` when the scenario never had an active infusion (no rate change is
+ * meaningful, and an empty "0 mg/h" line would manufacture data).
+ */
+export function infusionRateChart(result: SimulationResult): SimulationChart | null {
+  const points = result.infusionRates
+  if (!Array.isArray(points) || points.length === 0) return null
+  if (!points.some((point) => point.totalRate !== 0 || point.activeInfusionIds.length > 0)) return null
+
+  const x = points.map((point) => point.time)
+  const y = points.map((point) => point.totalRate)
+  return {
+    id: 'infusion-rate',
+    title: 'Total infusion rate over time',
+    xLabel: 'Time',
+    xUnit: TIME_UNIT,
+    yLabel: 'Total infusion rate',
+    yUnit: 'mg/h',
+    xType: 'linear',
+    yType: 'linear',
+    traces: [
+      {
+        id: 'simulation.infusion-rate.total',
+        name: 'Sum of active infusion rates',
+        x,
+        y,
+        samples: [],
+        isEventSeries: points.some((_, index) => index > 0 && points[index - 1]?.time === points[index]?.time),
+      },
+    ],
+  }
+}
+
+/** Per-point hover text for the infusion-rate series (from `infusionRates`). */
+export function infusionRateHoverTexts(result: SimulationResult): readonly string[] {
+  return result.infusionRates.map((point) => {
+    const side = point.side === 'pre-event' ? 'just before the event' : 'just after the event'
+    const active = point.activeInfusionIds.length === 0 ? 'none' : point.activeInfusionIds.join(', ')
+    return `t = ${formatNumber(point.time)} h · ${side} · total ${formatNumber(point.totalRate)} mg/h · active: ${active}`
+  })
+}
+
 /**
  * Build every chart for a successful result, or a typed failure.
  * `result` must come from `simulate()` (`report.ok === true ? report.result : null`).
@@ -434,6 +489,27 @@ export function simulationEventShapes(
     },
     name: describeSimulationEvent(event),
   }))
+}
+
+/**
+ * Plotly trace for the infusion-rate step chart. `hover` is supplied by the
+ * caller from `infusionRateHoverTexts` (the series has no `samples`, so the
+ * generic `simulationTraceToPlotly` cannot derive its text).
+ */
+export function infusionRateTraceToPlotly(
+  trace: SimulationTrace,
+  hover: readonly string[],
+): SimulationPlotlyTrace {
+  return {
+    x: trace.x.slice(),
+    y: trace.y.slice(),
+    name: trace.name,
+    type: 'scatter',
+    mode: 'lines',
+    line: { width: 2, dash: 'solid' as const },
+    hovertemplate: '%{customdata}<extra>' + trace.name + '</extra>',
+    customdata: hover,
+  }
 }
 
 /** Human-readable one-line description of an event (used by the event table). */
