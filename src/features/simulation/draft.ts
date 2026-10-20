@@ -1,0 +1,518 @@
+/**
+ * Scenario form draft and its compilation into the engine contract (phase 43).
+ *
+ * Three representations, deliberately separate:
+ *
+ *   SimulationDraft        exactly what the form holds: every numeric field is
+ *                          a STRING, a blank field stays blank (never 0), and
+ *                          dosing events are user-facing rows (a bolus, or one
+ *                          infusion session) keyed by a stable integer.
+ *   SimulationScenario     the Phase 41 engine contract built by
+ *                          `compileScenario` — or nothing, with typed draft
+ *                          errors when the text cannot be parsed.
+ *   SimulationReport       what `simulate()` returns for that scenario,
+ *                          including every scientific validation error.
+ *
+ * The draft is never mutated: `compileScenario` reads it, returns new
+ * objects, and leaves `DEMO_SCENARIO` and every previous result untouched.
+ *
+ * Draft-level errors are limited to what parsing can decide (a required field
+ * is blank, a number is unparseable, the output grid is unbuildable). Anything
+ * scientific — units, positivity, event sequencing, horizon boundaries — is
+ * left to the engine, whose typed errors are the authority.
+ */
+import type { DosingEvent, SimulationError, SimulationScenario, SolverOptions } from '@/engine/simulation/types'
+import { buildOutputGrid, parseNumericText, type OutputGridResult } from './outputGrid'
+import { DEMO_SCENARIO } from './demoScenario'
+
+// ---------------------------------------------------------------------------
+// Units offered by the editor
+// ---------------------------------------------------------------------------
+
+/**
+ * Unit choices come from the engine's catalog (the same objects its
+ * conversion functions use), filtered by physical dimension — never a
+ * hand-maintained list that could drift from what the engine accepts.
+ */
+export type EditorUnitDimension = 'volume' | 'clearance' | 'mass' | 'mass-flow-rate'
+
+// ---------------------------------------------------------------------------
+// Draft shapes
+// ---------------------------------------------------------------------------
+
+export interface QuantityDraft {
+  readonly value: string
+  readonly unit: string
+}
+
+export interface BolusRow {
+  readonly kind: 'bolus'
+  /** Stable row key; survives edits, edits other rows, and reordering. */
+  readonly key: number
+  readonly time: string
+  readonly amount: QuantityDraft
+}
+
+export interface InfusionRow {
+  readonly kind: 'infusion'
+  readonly key: number
+  readonly startTime: string
+  readonly stopTime: string
+  readonly rate: QuantityDraft
+}
+
+export type EventRow = BolusRow | InfusionRow
+
+export interface SolverDraft {
+  readonly absoluteTolerance: string
+  readonly relativeTolerance: string
+  readonly initialStep: string
+  readonly minStep: string
+  readonly maxStep: string
+  readonly maxSteps: string
+}
+
+export interface SimulationDraft {
+  readonly startTime: string
+  readonly endTime: string
+  readonly outputInterval: string
+  readonly centralVolume: QuantityDraft
+  readonly peripheralVolume: QuantityDraft
+  readonly clearance: QuantityDraft
+  readonly intercompartmentalClearance: QuantityDraft
+  /** Initial amounts are plain numbers in canonical mg (InitialState). */
+  readonly initialCentralAmount: string
+  readonly initialPeripheralAmount: string
+  readonly events: readonly EventRow[]
+  readonly solver: SolverDraft
+}
+
+// ---------------------------------------------------------------------------
+// Draft errors
+// ---------------------------------------------------------------------------
+
+export type DraftErrorField =
+  | 'startTime'
+  | 'endTime'
+  | 'outputInterval'
+  | 'centralVolume'
+  | 'peripheralVolume'
+  | 'clearance'
+  | 'intercompartmentalClearance'
+  | 'initialCentralAmount'
+  | 'initialPeripheralAmount'
+  | 'solver.absoluteTolerance'
+  | 'solver.relativeTolerance'
+  | 'solver.initialStep'
+  | 'solver.minStep'
+  | 'solver.maxStep'
+  | 'solver.maxSteps'
+
+export interface DraftError {
+  readonly code: 'REQUIRED' | 'NOT_A_NUMBER' | 'OUT_OF_RANGE'
+  /** Dotted field path, matching the control's data-field-path. */
+  readonly field: string
+  /** Human label used by the error summary. */
+  readonly label: string
+  readonly message: string
+}
+
+/** Errors for fields that could not be parsed (draft level). */
+export type DraftValidation =
+  | { readonly ok: true; readonly scenario: SimulationScenario }
+  | { readonly ok: false; readonly errors: readonly DraftError[] }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const stringify = (value: number): string => {
+  if (!Number.isFinite(value)) return ''
+  return String(value)
+}
+
+/** Deterministic id helpers built from the row key (no randomness in render). */
+export const bolusEventId = (key: number): string => `bolus-${key}`
+export const infusionIdOf = (key: number): string => `infusion-${key}`
+export const infusionStartEventId = (key: number): string => `infusion-${key}-start`
+export const infusionStopEventId = (key: number): string => `infusion-${key}-stop`
+
+/** Next free row key: pure function of the rows (StrictMode-safe). */
+export function nextRowKey(rows: readonly EventRow[]): number {
+  return rows.reduce((max, row) => Math.max(max, row.key), 0) + 1
+}
+
+/** A new bolus row with blank values: clicking "Add" never invents a dose. */
+export function newBolusRow(rows: readonly EventRow[]): BolusRow {
+  return { kind: 'bolus', key: nextRowKey(rows), time: '', amount: { value: '', unit: 'mg' } }
+}
+
+/** A new infusion row with blank times and rate. */
+export function newInfusionRow(rows: readonly EventRow[]): InfusionRow {
+  return {
+    kind: 'infusion',
+    key: nextRowKey(rows),
+    startTime: '',
+    stopTime: '',
+    rate: { value: '', unit: 'mg/h' },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Demo ↔ draft
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the editable draft from the synthetic example. Paired engine events
+ * are folded back into one infusion session row, so the round trip
+ * demo → draft → scenario preserves the demonstration exactly.
+ */
+export function draftFromScenario(scenario: SimulationScenario = DEMO_SCENARIO): SimulationDraft {
+  const rows: EventRow[] = []
+  const infusions = new Map<string, { start: number; stop?: number; rate: { value: number; unit: string } }>()
+  let key = 0
+  for (const event of scenario.events) {
+    if (event.type === 'iv-bolus') {
+      key += 1
+      rows.push({
+        kind: 'bolus',
+        key,
+        time: stringify(event.time),
+        amount: { value: stringify(event.amount.value), unit: event.amount.unit },
+      })
+    } else if (event.type === 'infusion-start') {
+      infusions.set(event.infusionId, { start: event.time, rate: { value: event.rate.value, unit: event.rate.unit } })
+    } else {
+      const session = infusions.get(event.infusionId)
+      if (session !== undefined) session.stop = event.time
+    }
+  }
+  for (const session of infusions.values()) {
+    key += 1
+    rows.push({
+      kind: 'infusion',
+      key,
+      startTime: stringify(session.start),
+      stopTime: session.stop === undefined ? '' : stringify(session.stop),
+      rate: { value: stringify(session.rate.value), unit: session.rate.unit },
+    })
+  }
+  return {
+    startTime: stringify(scenario.startTime),
+    endTime: stringify(scenario.endTime),
+    outputInterval: outputIntervalOf(scenario.outputTimes),
+    centralVolume: { value: stringify(scenario.parameters.centralVolume.value), unit: scenario.parameters.centralVolume.unit },
+    peripheralVolume: {
+      value: stringify(scenario.parameters.peripheralVolume.value),
+      unit: scenario.parameters.peripheralVolume.unit,
+    },
+    clearance: { value: stringify(scenario.parameters.clearance.value), unit: scenario.parameters.clearance.unit },
+    intercompartmentalClearance: {
+      value: stringify(scenario.parameters.intercompartmentalClearance.value),
+      unit: scenario.parameters.intercompartmentalClearance.unit,
+    },
+    initialCentralAmount: stringify(scenario.initialState.centralAmount),
+    initialPeripheralAmount: stringify(scenario.initialState.peripheralAmount),
+    events: rows,
+    solver: {
+      absoluteTolerance: stringify(scenario.solver.absoluteTolerance),
+      relativeTolerance: stringify(scenario.solver.relativeTolerance),
+      initialStep: stringify(scenario.solver.initialStep),
+      minStep: stringify(scenario.solver.minStep),
+      maxStep: stringify(scenario.solver.maxStep),
+      maxSteps: stringify(scenario.solver.maxSteps),
+    },
+  }
+}
+
+/** Uniform interval of an already-built grid; blank when it is not uniform. */
+export function outputIntervalOf(times: readonly number[]): string {
+  if (times.length < 2) return ''
+  const first = times[0] ?? 0
+  const second = times[1] ?? first
+  return stringify(second - first)
+}
+
+/** Fresh draft for the synthetic example (a new object on every call). */
+export function demoDraft(): SimulationDraft {
+  return draftFromScenario(DEMO_SCENARIO)
+}
+
+// ---------------------------------------------------------------------------
+// Compilation
+// ---------------------------------------------------------------------------
+
+interface QuantityResult {
+  readonly value?: number
+  readonly unit: string
+}
+
+function readQuantity(
+  errors: DraftError[],
+  field: string,
+  label: string,
+  draft: QuantityDraft,
+  unitFallback: string,
+): QuantityResult {
+  const unit = draft.unit.trim() === '' ? unitFallback : draft.unit
+  const text = draft.value.trim()
+  if (text === '') {
+    errors.push({ code: 'REQUIRED', field, label, message: `${label} is required.` })
+    return { unit }
+  }
+  const value = parseNumericText(text)
+  if (value === null) {
+    errors.push({
+      code: 'NOT_A_NUMBER',
+      field,
+      label,
+      message: `${label} must be a finite number (got "${draft.value}").`,
+    })
+    return { unit }
+  }
+  return { value, unit }
+}
+
+function readNumber(
+  errors: DraftError[],
+  field: string,
+  label: string,
+  text: string,
+  options: { readonly integer?: boolean } = {},
+): number | undefined {
+  if (text.trim() === '') {
+    errors.push({ code: 'REQUIRED', field, label, message: `${label} is required.` })
+    return undefined
+  }
+  const value = parseNumericText(text)
+  if (value === null) {
+    errors.push({ code: 'NOT_A_NUMBER', field, label, message: `${label} must be a finite number (got "${text}").` })
+    return undefined
+  }
+  if (options.integer === true && !Number.isInteger(value)) {
+    errors.push({ code: 'OUT_OF_RANGE', field, label, message: `${label} must be a whole number (got ${text}).` })
+    return undefined
+  }
+  return value
+}
+
+/**
+ * Stop before start is a user-facing event-session mistake the editor can
+ * state precisely; the engine would also reject it (no positive-length
+ * interval), so this check never masks a scientific rule — it only helps the
+ * user locate the row. Equal values are likewise rejected.
+ */
+function checkInfusionOrder(errors: DraftError[], row: InfusionRow, start: number, stop: number): boolean {
+  if (!(stop > start)) {
+    errors.push({
+      code: 'OUT_OF_RANGE',
+      field: `events.${row.key}.stopTime`,
+      label: `Infusion at row ${row.key}: stop time`,
+      message: `An infusion stop time must be later than its start time (start ${start} h, stop ${stop} h).`,
+    })
+    return false
+  }
+  return true
+}
+
+/** Engine events from editor rows; a row with unparseable fields yields errors. */
+function compileEvents(errors: DraftError[], rows: readonly EventRow[]): DosingEvent[] {
+  const events: DosingEvent[] = []
+  for (const row of rows) {
+    if (row.kind === 'bolus') {
+      const time = readNumber(errors, `events.${row.key}.time`, `Bolus at row ${row.key}: time`, row.time)
+      const amount = readQuantity(errors, `events.${row.key}.amount.value`, `Bolus at row ${row.key}: amount`, row.amount, 'mg')
+      if (time === undefined || amount.value === undefined) continue
+      events.push({ type: 'iv-bolus', eventId: bolusEventId(row.key), time, amount: { value: amount.value, unit: amount.unit } })
+    } else {
+      const start = readNumber(errors, `events.${row.key}.startTime`, `Infusion at row ${row.key}: start time`, row.startTime)
+      const stop = readNumber(errors, `events.${row.key}.stopTime`, `Infusion at row ${row.key}: stop time`, row.stopTime)
+      const rate = readQuantity(errors, `events.${row.key}.rate.value`, `Infusion at row ${row.key}: rate`, row.rate, 'mg/h')
+      if (start === undefined || stop === undefined || rate.value === undefined) continue
+      if (!checkInfusionOrder(errors, row, start, stop)) continue
+      const infusionId = infusionIdOf(row.key)
+      events.push(
+        { type: 'infusion-start', eventId: infusionStartEventId(row.key), infusionId, time: start, rate: { value: rate.value, unit: rate.unit } },
+        { type: 'infusion-stop', eventId: infusionStopEventId(row.key), infusionId, time: stop },
+      )
+    }
+  }
+  return events
+}
+
+/**
+ * Compile the draft into the engine's scenario.
+ *
+ * Returns `{ ok: false, errors, gridError }` when a field cannot be parsed or
+ * the output grid cannot be built; in that case `simulate()` is never called
+ * (there is no scenario to give it). Scientific validation stays with the
+ * engine.
+ */
+export type CompileResult =
+  | { readonly ok: true; readonly scenario: SimulationScenario }
+  | {
+      readonly ok: false
+      readonly errors: readonly DraftError[]
+      /** Set when the output grid itself was rejected. */
+      readonly gridError?: OutputGridResult & { readonly ok: false }
+    }
+
+export function compileScenario(draft: SimulationDraft): CompileResult {
+  const errors: DraftError[] = []
+
+  const centralVolume = readQuantity(errors, 'centralVolume', 'Central volume V_c', draft.centralVolume, 'L')
+  const peripheralVolume = readQuantity(errors, 'peripheralVolume', 'Peripheral volume V_p', draft.peripheralVolume, 'L')
+  const clearance = readQuantity(errors, 'clearance', 'Systemic clearance CL', draft.clearance, 'L/h')
+  const intercompartmentalClearance = readQuantity(
+    errors,
+    'intercompartmentalClearance',
+    'Intercompartmental clearance Q',
+    draft.intercompartmentalClearance,
+    'L/h',
+  )
+  const initialCentral = readNumber(errors, 'initialCentralAmount', 'Initial central amount A_c(0)', draft.initialCentralAmount)
+  const initialPeripheral = readNumber(errors, 'initialPeripheralAmount', 'Initial peripheral amount A_p(0)', draft.initialPeripheralAmount)
+  const startTime = readNumber(errors, 'startTime', 'Start time', draft.startTime)
+  const endTime = readNumber(errors, 'endTime', 'End time', draft.endTime)
+
+  // Output grid: only meaningful once start/end are numbers. The interval is
+  // read through the same grid error channel so its message stays specific.
+  let grid: OutputGridResult | undefined
+  if (startTime !== undefined && endTime !== undefined) {
+    if (draft.outputInterval.trim() === '') {
+      errors.push({ code: 'REQUIRED', field: 'outputInterval', label: 'Output interval', message: 'Output interval is required.' })
+    } else {
+      const parsed = parseNumericText(draft.outputInterval)
+      if (parsed === null) {
+        errors.push({
+          code: 'NOT_A_NUMBER',
+          field: 'outputInterval',
+          label: 'Output interval',
+          message: `Output interval must be a finite number (got "${draft.outputInterval}").`,
+        })
+      } else {
+        grid = buildOutputGrid(startTime, endTime, parsed)
+        if (!grid.ok) {
+          errors.push({
+            code: grid.code === 'NOT_A_NUMBER' ? 'NOT_A_NUMBER' : 'OUT_OF_RANGE',
+            field: grid.field,
+            label: grid.field === 'outputInterval' ? 'Output interval' : grid.field === 'endTime' ? 'End time' : 'Start time',
+            message: grid.message,
+          })
+        }
+      }
+    }
+  }
+
+  const maxSteps = readNumber(errors, 'solver.maxSteps', 'Maximum step attempts', draft.solver.maxSteps, { integer: true })
+  const absoluteTolerance = readNumber(errors, 'solver.absoluteTolerance', 'Absolute tolerance', draft.solver.absoluteTolerance)
+  const relativeTolerance = readNumber(errors, 'solver.relativeTolerance', 'Relative tolerance', draft.solver.relativeTolerance)
+  const initialStep = readNumber(errors, 'solver.initialStep', 'Initial step', draft.solver.initialStep)
+  const minStep = readNumber(errors, 'solver.minStep', 'Minimum step', draft.solver.minStep)
+  const maxStep = readNumber(errors, 'solver.maxStep', 'Maximum step', draft.solver.maxStep)
+
+  const events = compileEvents(errors, draft.events)
+
+  if (
+    errors.length > 0 ||
+    grid === undefined ||
+    !grid.ok ||
+    startTime === undefined ||
+    endTime === undefined ||
+    centralVolume.value === undefined ||
+    peripheralVolume.value === undefined ||
+    clearance.value === undefined ||
+    intercompartmentalClearance.value === undefined ||
+    initialCentral === undefined ||
+    initialPeripheral === undefined ||
+    absoluteTolerance === undefined ||
+    relativeTolerance === undefined ||
+    initialStep === undefined ||
+    minStep === undefined ||
+    maxStep === undefined ||
+    maxSteps === undefined
+  ) {
+    return {
+      ok: false,
+      errors,
+      ...(grid !== undefined && !grid.ok ? { gridError: grid } : {}),
+    }
+  }
+
+  const solver: SolverOptions = {
+    absoluteTolerance,
+    relativeTolerance,
+    initialStep,
+    minStep,
+    maxStep,
+    maxSteps,
+  }
+  return {
+    ok: true,
+    scenario: {
+      startTime,
+      endTime,
+      outputTimes: grid.times,
+      initialState: { centralAmount: initialCentral, peripheralAmount: initialPeripheral },
+      parameters: {
+        centralVolume: { value: centralVolume.value, unit: centralVolume.unit },
+        peripheralVolume: { value: peripheralVolume.value, unit: peripheralVolume.unit },
+        clearance: { value: clearance.value, unit: clearance.unit },
+        intercompartmentalClearance: { value: intercompartmentalClearance.value, unit: intercompartmentalClearance.unit },
+      },
+      events,
+      solver,
+    },
+  }
+}
+
+/**
+ * Attach engine errors to the field paths the editor knows about, so the form
+ * can mark the offending control. Unmapped errors stay in the summary.
+ */
+export function engineErrorFieldPath(error: SimulationError): string | null {
+  const field = error.field
+  if (field === undefined) return null
+  switch (field) {
+    case 'parameters.centralVolume':
+    case 'parameters.centralVolume.value':
+    case 'parameters.centralVolume.unit':
+      return 'centralVolume'
+    case 'parameters.peripheralVolume':
+    case 'parameters.peripheralVolume.value':
+    case 'parameters.peripheralVolume.unit':
+      return 'peripheralVolume'
+    case 'parameters.clearance':
+    case 'parameters.clearance.value':
+    case 'parameters.clearance.unit':
+      return 'clearance'
+    case 'parameters.intercompartmentalClearance':
+    case 'parameters.intercompartmentalClearance.value':
+    case 'parameters.intercompartmentalClearance.unit':
+      return 'intercompartmentalClearance'
+    case 'initialState.centralAmount':
+      return 'initialCentralAmount'
+    case 'initialState.peripheralAmount':
+      return 'initialPeripheralAmount'
+    case 'startTime':
+      return 'startTime'
+    case 'endTime':
+      return 'endTime'
+    case 'outputTimes':
+      return 'outputInterval'
+    case 'solver.absoluteTolerance':
+      return 'solver.absoluteTolerance'
+    case 'solver.relativeTolerance':
+      return 'solver.relativeTolerance'
+    case 'solver.initialStep':
+      return 'solver.initialStep'
+    case 'solver.minStep':
+      return 'solver.minStep'
+    case 'solver.maxStep':
+      return 'solver.maxStep'
+    case 'solver.maxSteps':
+      return 'solver.maxSteps'
+    default:
+      return null
+  }
+}

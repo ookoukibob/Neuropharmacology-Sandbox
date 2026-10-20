@@ -12,11 +12,13 @@
  */
 import Plot from 'react-plotly.js'
 import {
+  infusionRateTraceToPlotly,
   simulationChartLayout,
   simulationEventShapes,
   simulationTraceToPlotly,
   type SimulationChart,
   type SimulationEventMarker,
+  type SimulationPlotlyTrace,
 } from './simulationAdapter'
 
 interface SimulationChartProps {
@@ -28,11 +30,15 @@ interface SimulationChartProps {
   readonly events: readonly SimulationEventMarker[]
   /** Plotly graph div id, unique per chart on the page. */
   readonly graphId: string
+  /** Optional per-point hover text (infusion-rate chart, from `infusionRates`). */
+  readonly hoverTexts?: readonly string[]
 }
 
-export function SimulationChart({ chart, events, graphId }: SimulationChartProps) {
-  const traces = chart.traces.map((trace) =>
-    simulationTraceToPlotly(trace, chart.yLabel, chart.yUnit),
+export function SimulationChart({ chart, events, graphId, hoverTexts }: SimulationChartProps) {
+  const traces: SimulationPlotlyTrace[] = chart.traces.map((trace) =>
+    hoverTexts !== undefined && chart.id === 'infusion-rate'
+      ? infusionRateTraceToPlotly(trace, hoverTexts)
+      : simulationTraceToPlotly(trace, chart.yLabel, chart.yUnit),
   )
   const layout = {
     ...simulationChartLayout(chart),

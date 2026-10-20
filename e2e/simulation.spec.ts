@@ -22,20 +22,20 @@ test.describe('simulation demonstration', () => {
     await page.goto('/simulation')
     await expect(page.getByRole('heading', { level: 1, name: 'Simulation' })).toBeVisible()
 
-    // 2. Synthetic disclaimer and visible parameters.
+    // 2. Synthetic disclaimer and visible example values (phase 43: the
+    // example scenario is now the editable starting point).
     const notice = page.getByTestId('synthetic-scenario-notice')
-    await expect(notice).toContainText(/synthetic demonstration scenario/i)
+    await expect(notice).toContainText(/synthetic example scenario/i)
     await expect(notice).toContainText(/not real compound parameters/i)
-    const parameters = page.getByTestId('scenario-parameters')
-    await expect(parameters).toContainText('10 L')
-    await expect(parameters).toContainText('2 L/h')
-    await expect(parameters).toContainText('100 mg at t = 0 h')
-    await expect(parameters).toContainText('10 mg/h from t = 2 h to t = 6 h')
-    await expect(parameters).toContainText('30 mg at t = 8 h')
+    await expect(page.getByTestId('central-volume-value')).toHaveValue('10')
+    await expect(page.getByTestId('clearance-value')).toHaveValue('2')
+    await expect(page.getByTestId('bolus-1-amount')).toHaveValue('100')
+    await expect(page.getByTestId('infusion-3-rate')).toHaveValue('10')
+    await expect(page.getByTestId('bolus-2-amount')).toHaveValue('30')
     await expect(page.getByTestId('simulation-idle')).toBeVisible()
 
-    // 3. Run the demonstration with the keyboard (also proves keyboard reach).
-    const runButton = page.getByTestId('run-demonstration')
+    // 3. Run the demonstration with the keyboard (into the form's submit).
+    const runButton = page.getByTestId('run-simulation')
     await runButton.focus()
     await expect(runButton).toBeFocused()
     await page.keyboard.press('Enter')
@@ -48,24 +48,20 @@ test.describe('simulation demonstration', () => {
 
     // 5. The event list contains the bolus and infusion events.
     const events = page.getByTestId('event-table')
-    // Four events, each with its own row (matched by stable row id).
-    for (const id of [
-      'demo-bolus-1',
-      'demo-infusion-start-1',
-      'demo-infusion-stop-1',
-      'demo-bolus-2',
-    ]) {
+    // The example compiles to four engine events from three editor rows:
+    // bolus 1, bolus 2, infusion 3 start and infusion 3 stop.
+    for (const id of ['bolus-1', 'bolus-2', 'infusion-3-start', 'infusion-3-stop']) {
       await expect(page.getByTestId(`event-row-${id}`)).toBeVisible()
     }
     // The visible content names the doses, rates and the infusion identity.
-    await expect(page.getByTestId('event-row-demo-bolus-1')).toContainText('IV bolus 100 mg')
-    await expect(page.getByTestId('event-row-demo-infusion-start-1')).toContainText('10 mg/h')
-    await expect(page.getByTestId('event-row-demo-bolus-2')).toContainText('IV bolus 30 mg')
+    await expect(page.getByTestId('event-row-bolus-1')).toContainText('IV bolus 100 mg')
+    await expect(page.getByTestId('event-row-infusion-3-start')).toContainText('10 mg/h')
+    await expect(page.getByTestId('event-row-bolus-2')).toContainText('IV bolus 30 mg')
     // A stop is never presented as an administered amount.
-    await expect(page.getByTestId('event-row-demo-infusion-stop-1')).toContainText(
+    await expect(page.getByTestId('event-row-infusion-3-stop')).toContainText(
       /no amount administered/i,
     )
-    await expect(events).toContainText('demo-infusion-1')
+    await expect(events).toContainText('infusion-3')
 
     // 6. The underlying central-concentration trace keeps the bolus jump:
     // two consecutive points at t = 8 h whose values differ by 30 mg / 10 L.
@@ -105,9 +101,11 @@ test.describe('simulation demonstration', () => {
     // 8. No external network request was needed for the demonstration.
     expect(externalRequests).toEqual([])
 
-    // Ephemeral: a reload starts from the idle state again (nothing saved).
+    // Ephemeral: a reload returns to the editor with the example values and
+    // no result (nothing was saved).
     await page.reload()
     await expect(page.getByTestId('simulation-idle')).toBeVisible()
     await expect(page.getByTestId('simulation-chart-concentration')).toHaveCount(0)
+    await expect(page.getByTestId('central-volume-value')).toHaveValue('10')
   })
 })

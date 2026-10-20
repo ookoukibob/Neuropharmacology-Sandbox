@@ -460,6 +460,25 @@ a bolus is drawn as a vertical jump rather than smoothed into an interval
 (ADR-26). Errors replace results — a failed or unreportable run leaves no
 chart on screen.
 
+### 4.3c Editable scenario (phase 43)
+
+```
+SimulationDraft   (strings; blank stays blank; rows keyed by a stable integer)
+   ↓ compileScenario()   pure: parse + build the output grid + map rows to events
+   ├─ draft errors → form summary + field messages (engine NOT called)
+   └─ SimulationScenario snapshot
+          ↓ simulate()  (explicit Run only — never on render or typing)
+   SimulationReport  → adapters → charts / event table / diagnostics
+```
+
+One infusion row compiles to an `infusion-start` + `infusion-stop` pair that
+share an `infusionId`; the engine alone decides ordering and rate summing.
+Any draft edit clears the previous result, so a displayed chart always
+belongs to the draft that produced it. Chart visibility toggles live in
+separate presentation state and never invoke the engine. The report →
+chart mapping is unchanged from §4.3b (ADR-26); the editor adds no
+calculation (ADR-27).
+
 ### 4.4 Import (all-or-nothing)
 
 ```
