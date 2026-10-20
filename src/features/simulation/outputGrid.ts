@@ -5,20 +5,36 @@
  * (first element = startTime, last = endTime). The editor lets the user give
  * a start, an end and a uniform interval, and this pure helper expands them.
  *
- * Design rules:
- * - Times use integer multiplication (`t0 + i·Δ`), never repeated addition of
- *   a floating-point step, so rounding cannot accumulate.
- * - The start is exactly `startTime`; the end is exactly `endTime` and
- *   appears once, even when the interval does not divide the horizon.
- * - An over-large grid is REJECTED, never quietly thinned out or coarsened:
- *   silently changing the user's sampling interval would change what the
- *   report claims to show.
- * - These are observation times only. Solver step sizes and dosing-event
- *   times are independent of this grid; the engine inserts event boundaries.
+ * Numerical policy (documented, and what the tests pin):
+ *
+ * 1. **Integer indices.** A grid point is `startTime + i·Δ`, never a repeated
+ *    addition of Δ, so representation error cannot accumulate along the grid.
+ * 2. **Alignment is decided on the quotient.** `n = (endTime − startTime)/Δ`
+ *    "lands on" the endpoint when `n` is within a few ULPs of an integer
+ *    (`BOUNDARY_ULPS`, scaled by the magnitude of `n`). This is
+ *    representational slack only. Deciding it on the quotient (rather than on
+ *    times near the endpoint) keeps long horizons exact: at endTime = 20 000 h
+ *    one ULP of the time value alone already exceeds a 1 h interval's slack.
+ *    The slack is small enough that a genuine interior point (23.75 h on a
+ *    0…24 h grid at 0.25 h) is never swallowed.
+ * 3. **Aligned → the last index IS `endTime`.** The computed value is
+ *    replaced by the exact endpoint, so the pair "computed end" and "exact
+ *    end" can never appear together.
+ * 4. **Not aligned → every index point strictly below `endTime`, then the
+ *    exact `endTime` appended once.**
+ * 5. **The count is decided before allocating.** `planGrid` fixes the length
+ *    first; a grid above `maxSamples` is REJECTED. The grid is never thinned,
+ *    coarsened or truncated to fit.
+ *
+ * These are observation times only. Solver step sizes and dosing-event times
+ * are independent of this grid; the engine inserts event boundaries.
  */
 
 /** Documented maximum number of requested output times. */
 export const MAX_OUTPUT_SAMPLES = 20000
+
+/** Alignment slack in ULPs of the interval count (representation slack only). */
+export const BOUNDARY_ULPS = 8
 
 export type OutputGridErrorCode =
   /** A field is not a finite number (blank, "abc", NaN, Infinity). */
@@ -51,17 +67,37 @@ export function parseNumericText(text: string): number | null {
   return Number.isFinite(value) ? value : null
 }
 
+export interface GridShape {
+  /** Exact number of output times: decided before any allocation. */
+  readonly count: number
+  /** Index points (1 … interior) emitted strictly below the endpoint. */
+  readonly interior: number
+  /** Whether index `interior + 1` is the endpoint itself. */
+  readonly aligned: boolean
+}
+
 /**
- * Number of index steps before the end. Uses a relative slack so an interval
- * that divides the horizon mathematically (24 / 0.25) is not split by binary
- * representation error (0.25 is exact, but 0.1 is not).
+ * Decide the grid's shape before allocating it.
+ *
+ * - `whole = floor(span/Δ)` is the last index that could lie below the end.
+ * - `nearEnd` is the distance (in interval units) from that quotient to the
+ *   nearest whole number; when it is within the ULP slack, the grid lands on
+ *   the endpoint.
+ * - Aligned: indices 1…nearest−1 are interior, index `nearest` is the end.
+ *   Not aligned: indices 1…whole are interior and the end is appended.
  */
-function indexCount(startTime: number, endTime: number, interval: number): number {
+export function planGrid(startTime: number, endTime: number, interval: number): GridShape {
   const ratio = (endTime - startTime) / interval
   const nearest = Math.round(ratio)
-  const tolerance = 1e-9 * Math.max(1, Math.abs(ratio))
-  const steps = Math.abs(ratio - nearest) <= tolerance ? nearest : Math.floor(ratio)
-  return Math.max(0, steps)
+  const slack = BOUNDARY_ULPS * Number.EPSILON * Math.max(Math.abs(ratio), 1)
+  const aligned = Math.abs(ratio - nearest) <= slack
+
+  if (aligned) {
+    const interior = Math.max(0, nearest - 1)
+    return { count: 1 + interior + 1, interior, aligned: true }
+  }
+  const interior = Math.max(0, Math.floor(ratio))
+  return { count: 1 + interior + 1, interior, aligned: false }
 }
 
 /**
@@ -70,6 +106,7 @@ function indexCount(startTime: number, endTime: number, interval: number): numbe
  * @param startTime  first output time (h)
  * @param endTime    last output time (h); must be > startTime
  * @param interval   spacing (h); must be > 0
+ * @param maxSamples inclusive maximum number of output times
  */
 export function buildOutputGrid(
   startTime: number,
@@ -112,28 +149,24 @@ export function buildOutputGrid(
     }
   }
 
-  const steps = indexCount(startTime, endTime, interval)
-  const count = steps + 1
-  if (count > maxSamples) {
+  const plan = planGrid(startTime, endTime, interval)
+  // The length is decided BEFORE allocating, and the endpoint counts: a grid
+  // above the maximum is rejected, never thinned.
+  if (plan.count > maxSamples) {
     return {
       ok: false,
       code: 'GRID_TOO_LARGE',
       field: 'outputInterval',
-      message: `The requested grid would contain ${count} output times, more than the supported maximum of ${maxSamples}. Increase the output interval.`,
+      message: `The requested grid would contain ${plan.count} output times, more than the supported maximum of ${maxSamples}. Increase the output interval.`,
     }
   }
 
-  const times: number[] = []
-  for (let i = 0; i < count; i += 1) {
-    const t = startTime + i * interval
-    // Strictly ascending and inside the horizon; the exact end is appended
-    // below when the interval does not land on it.
-    if (t >= endTime) break
-    if (times.length === 0 || t > (times[times.length - 1] ?? Number.NEGATIVE_INFINITY)) times.push(t)
+  // Fill exactly `plan.count` slots: start, interior points, endpoint.
+  const times: number[] = new Array<number>(plan.count)
+  times[0] = startTime
+  for (let i = 1; i <= plan.interior; i += 1) {
+    times[i] = startTime + i * interval
   }
-  // The start is always present, even when the first index rounds above it.
-  if (times[0] !== startTime) times.unshift(startTime)
-  // The end appears exactly once, as the exact requested value.
-  times.push(endTime)
+  times[plan.count - 1] = endTime
   return { ok: true, times }
 }
