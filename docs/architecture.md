@@ -131,7 +131,8 @@ src/
 │   └── pages/               # route-level views (thin; delegate to features)
 ├── components/
 │   ├── ui/                  # shadcn/ui primitives (generated, treat as vendor code)
-│   └── charts/              # CurveData -> Plotly adapter + lazy chart component (phase 4)
+│   ├── charts/              # CurveData -> Plotly adapter + lazy chart component (phase 4);
+│   │                        # simulationAdapter + SimulationChart (phase 42)
 ├── features/                # one folder per feature
 │   ├── drug-library/        #   list/detail/form views (phase 3)
 │   ├── calculator/          #   model adapter registry, input drafts, session store,
@@ -140,6 +141,8 @@ src/
 │   │   ├── store.ts         #   drafts, report, stale flags, curve settings
 │   │   └── components/      #   ParameterField, ResultPanel, CalculationTrace,
 │   │                        #   VisualizationPanel, ErrorPanel, ProvenanceBadge
+│   ├── simulation/          #   demo scenario, session runner, SimulationView (phase 42)
+│   │                        #   ephemeral: component state only, nothing persisted
 │   ├── import-export/       #   import/export UI (phase 5)
 │   │   ├── csv/             #   RFC 4180 reader/writer, stable CSV schema,
 │   │   │                    #   explicit mapping -> versioned NPSL document
@@ -435,6 +438,27 @@ Dependency direction is unchanged: the simulation imports `src/domain`
 UI, store, database or chart module is involved in this phase; a chart
 adapter can later consume `samples` directly (ADR-24 fixes the pre/post
 semantics it must honour).
+
+### 4.3b Simulation visualisation (phase 42)
+
+```
+DEMO_SCENARIO (explicit synthetic parameters, visible on the page)
+   ↓  user presses "Run demonstration" (explicit; never automatic)
+simulate()  ← the Phase 41 engine: the ONLY source of every displayed number
+   ↓ SimulationReport (ok / structured errors; failures carry no samples)
+simulationAdapter (pure: sampled values copied in emission order,
+                   concentrations and amounts to SEPARATE charts)
+   ↓ SimulationChart descriptors (chart + event markers)
+SimulationChart (Plotly, lazy)   +   event table   +   diagnostics
+```
+
+The simulation feature follows the same dependency rules as the calculator:
+the page owns an ephemeral session (component state, no Zustand store, no
+IndexedDB, no network) and the chart layer performs no calculation. A
+dosing event keeps its two same-time samples (`pre-event`, `post-event`), so
+a bolus is drawn as a vertical jump rather than smoothed into an interval
+(ADR-26). Errors replace results — a failed or unreportable run leaves no
+chart on screen.
 
 ### 4.4 Import (all-or-nothing)
 

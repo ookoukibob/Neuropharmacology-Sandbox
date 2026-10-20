@@ -467,3 +467,47 @@ bolus and `A_c(t) = (100·e^(−0.4) + 50)·e^(−0.2(t−2))` after it;
 `A_e(t) = 100·(1 − e^(−0.2t)) + 50·(1 − e^(−0.2(t−2)))`. The pre/post pair at
 t = 2 reads 67.03 / 117.03 mg central with 0 / 50 mg cumulative input, and
 `A_c + A_p + A_e − 100 − A_in ≈ 0` within ~1e-13 mg.
+
+---
+
+## 9. From `SimulationReport` to charts (phase 42)
+
+The chart layer never calculates. `src/components/charts/simulationAdapter.ts`
+is a pure function of the engine's `SimulationResult`: it copies
+`SimulationSample` fields into traces and adds labels, units and hover
+text. It imports no solver, calls no `simulate()`, and never derives a
+concentration from an amount, an integral from samples, or a missing value
+from a neighbour.
+
+**Two charts, one dimension each.** Concentration (`mg/L`) and amount
+(`mg`) are different physical dimensions and are never plotted on one
+y-axis. `concentrationChart()` yields the central and peripheral
+concentrations; `amountChart()` yields the compartment amounts plus the
+cumulative-input and cumulative-eliminated accounting states (named as
+accounting, because they carry the initial condition's history).
+
+**Equal-time samples are preserved.** At a dosing event the engine emits a
+`pre-event` and a `post-event` sample with the same time. The adapter keeps
+both, in emission order, so the line trace contains a vertical segment at
+the event time: after a bolus of D the central amount rises by exactly D
+and the central concentration by D/V_c. No sorting, grouping, `Set`,
+deduplication, resampling or interpolation is applied anywhere on this path.
+Per-point hover text carries the sample side and the event group, so both
+sides of the jump remain distinguishable, and `discontinuityIndices()`
+exposes the pre→post positions for tests and annotations.
+
+**Events and diagnostics come from the report.** Event rows are built from
+`eventTrace` (never inferred from curve shape), and the diagnostics panel
+shows the solver method, tolerances, accepted/rejected steps, derivative
+evaluations, the mass-balance residual against its derived tolerance, the
+canonical parameters, warnings, equations and assumptions.
+
+**No plausible-looking failure.** A failed report, an empty sample set, a
+non-finite value or a failed mass-balance check returns
+`{ ok: false, reason }` from `buildSimulationCharts()`; the page shows that
+reason as an error and draws nothing.
+
+**Boundary summary.** Engine: physics and numerics. Adapter: presentation
+mapping, total and pure. React/Plotly: layout and interaction only. A
+completed run is reported as *numerically complete within the configured
+tolerances*, never as scientifically validated (ADR-26).

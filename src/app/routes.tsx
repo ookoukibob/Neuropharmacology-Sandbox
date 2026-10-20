@@ -8,6 +8,7 @@ import { DrugNewPage } from './pages/DrugNewPage'
 import { ImportExportPage } from './pages/ImportExportPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { SimulationPage } from './pages/SimulationPage'
 
 /**
  * Central route table. Views live under src/app/pages; feature-specific UI
@@ -24,6 +25,7 @@ export const routes: RouteObject[] = [
       { path: 'library/new', element: <DrugNewPage /> },
       { path: 'library/:drugId', element: <DrugDetailPage /> },
       { path: 'calculator', element: <CalculatorPage /> },
+      { path: 'simulation', element: <SimulationPage /> },
       { path: 'data-sources', element: <DataSourcesPage /> },
       { path: 'import-export', element: <ImportExportPage /> },
       { path: 'settings', element: <SettingsPage /> },

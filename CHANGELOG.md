@@ -6,6 +6,38 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Added — simulation demonstration page and charts (phase 42)
+
+- **A `/simulation` page** (navigation entry “Simulation”) that runs one explicitly
+  labelled **synthetic** two-compartment IV scenario through the Phase 41
+  `simulate()` engine: V_c 10 L, V_p 20 L, CL 2 L/h, Q 3 L/h, 0 mg initial
+  amounts, a 100 mg bolus at t = 0, a 10 mg/h infusion from t = 2 to 6 h and a
+  30 mg bolus at t = 8 h over a 24 h horizon, with explicit solver settings.
+  Every number is a demonstration parameter, not a compound, clinical or
+  published value.
+- **A pure chart adapter** (`simulationAdapter`) turns the engine's samples
+  into two charts with separate dimensions: concentration (mg/L) and amount
+  (mg, plus the cumulative input/eliminated accounting states). Values are
+  copied in emission order; nothing is computed, smoothed or reordered.
+- **Instantaneous events stay instantaneous**: the pre-event and post-event
+  samples at one time are both plotted, so an IV bolus draws as a vertical
+  jump at its exact time, and hover text names the side and the event group.
+- **Dosing-event table** listing every applied event in engine order
+  (several events at one time are kept), with a stop explicitly labelled as
+  administering no amount.
+- **Diagnostics**: solver method, tolerances, accepted/rejected steps,
+  derivative evaluations, mass-balance residual against its derived
+  tolerance, canonical parameters, warnings, model equations, structural
+  assumptions, and an explicit note that a completed run is not an
+  external qualification.
+- **Structured errors**: a failed run clears any previous result and shows
+  the engine's typed errors; no chart is drawn for an invalid or
+  incomplete result.
+- No persistence, store, schema migration, network access or scenario
+  editing in this phase.
+
+## [Unreleased]
+
 ### Added — dynamic pharmacokinetic simulation engine (phase 41)
 
 - **A reusable adaptive ODE solver** (`src/engine/simulation/solver.ts`):

@@ -79,6 +79,15 @@ no infrastructure defect had to be assumed.
 
 ---
 
+### 1b. Simulation visualisation matrix (phase 42)
+
+| Layer | File | Covers |
+| --- | --- | --- |
+| Adapter (pure) | `src/components/charts/simulationAdapter.test.ts` (21) | concentration/amount values copied verbatim in emission order; mg/L vs mg units and linear axes; a 60 mg bolus at t = 4 renders as two points at one time whose y differs by exactly 60 (mg chart) and 6 mg/L (concentration); the jump is at the event time and not spread into a neighbouring interval; hover text carries side, group and value; several events at one timestamp all survive; a stop carries no administered amount and a distinct shape; an all-zero curve still yields real zero series (never a substitute value); failure for a missing result, empty samples, a non-finite value and a failed mass balance; no Plotly trace key is `undefined` |
+| Component | `src/features/simulation/SimulationView.test.tsx` (11) | synthetic-demo labelling and disclaimers; every documented scenario parameter and unit visible; idle state before a run; the run action calls the real `simulate()` with the documented scenario; both charts and the summary after success; every dosing event listed (stop labelled as not administering); solver, mass-balance, equation and assumption diagnostics plus the qualification note; deterministic rerun with a new run label; a failed run shows structured errors and removes every trace of the earlier success; the run action is reachable and activatable from the keyboard |
+| E2E (Playwright) | `e2e/simulation.spec.ts` | navigate `/simulation` → disclaimer and parameters → run with the keyboard → both Plotly charts visible → event rows for both boluses, the infusion start and the stop (stop says "no amount administered") → the central-concentration `gd.data` trace holds two points at t = 8 h whose difference is 3 mg/L (30 mg / 10 L) and starts at 0 → mass-balance diagnostics within tolerance → zero external requests → a reload returns to the idle state (nothing persisted) |
+| Accessibility | `e2e/a11y.spec.ts` | axe WCAG A/AA scan of `/simulation` in the idle state and in the result state (charts, event table, diagnostics); nothing disabled or excluded |
+
 ## 2. Schema tests (phase 1 — implemented)
 
 `src/data/schemas/npsl.test.ts` covers:
