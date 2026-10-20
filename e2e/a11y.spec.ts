@@ -342,3 +342,18 @@ test('a11y: the settings page passes the axe scan in its default and confirm sta
   await expect(page.getByTestId('settings-reset-confirm')).toBeVisible()
   await scan(page, 'settings (reset confirmation)')
 })
+
+test('a11y: the simulation demonstration passes the axe scan before and after a run', async ({ page }) => {
+  await page.goto('/simulation')
+  await expect(page.getByRole('heading', { level: 1, name: 'Simulation' })).toBeVisible()
+  // Idle state: scenario parameters and the synthetic-data notice.
+  await scan(page, 'simulation (idle, synthetic scenario)')
+
+  // Result state: two charts, the event table and the diagnostics.
+  await page.getByTestId('run-demonstration').click()
+  await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.getByTestId('event-table')).toBeVisible()
+  await scan(page, 'simulation (result: charts, events, diagnostics)')
+})

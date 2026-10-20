@@ -724,6 +724,68 @@ degenerate into a first-event special case.
 
 ---
 
+## ADR-26 · Simulation charts consume the engine's samples verbatim; concentrations and amounts never share an axis
+
+**Context.** Phase 42 makes the Phase 41 simulation visible. The report is not
+a `CurveData`: it carries two samples per dosing event (a `pre-event` and a
+`post-event` row at the same time) that together encode an instantaneous
+jump, plus accounting states, an event trace and numerical diagnostics. The
+existing scalar curve adapter treats a series as a monotone sampling of x;
+feeding the simulation through it would invite sorting, deduplication or
+"one value per x" assumptions, and would silently erase the dose from the
+picture.
+
+**Decision.**
+
+- **A separate pure adapter** (`src/components/charts/simulationAdapter.ts`)
+  maps `SimulationResult` to chart descriptions. It copies every reported
+  value in emission order, never computes concentration, derivative or
+  integral, never resamples, smooths, deduplicates or sorts, and never calls
+  `simulate()`.
+- **Equal-time pre/post samples are a discontinuity, not a duplicate.** Both
+  points are kept, in order, in the line trace; Plotly therefore draws the
+  vertical segment at the exact event time. The per-point hover text names the
+  side ("just before / just after the event") and the event group, so two
+  points at one timestamp stay distinguishable. Tests assert the trace
+  coordinates directly (same x, Δy equal to the dose or D/V_c), not merely
+  that traces exist.
+- **Concentrations and amounts are separate charts**: mg/L and mg are
+  different physical dimensions, so they never share a y-axis. The amount
+  chart also shows the cumulative-input and cumulative-eliminated accounting
+  states, labelled as accounting.
+- **Events come from `eventTrace`, never from the curve.** The page renders an
+  event table with one row per applied event (including several at one time),
+  and a stop is explicitly labelled as administering no amount.
+- **An incomplete or invalid result is never charted.** A failed report, an
+  empty sample set, a non-finite value or a failed mass-balance check becomes
+  a typed reason shown as an error, not a plausible curve.
+- **The chart layer stays dumb.** `SimulationChart` passes adapted traces to
+  Plotly; no formula, unit conversion or default lives in JSX. Plotly is
+  lazily imported, as for the scalar chart.
+
+**Rejected alternatives.** *Projecting the report into `CurveData`* — the
+scalar contract has no place for sample side, event group or accounting
+semantics, and its consumers assume per-x uniqueness. *Drawing event markers
+as extra scatter traces* — a marker trace would add points that are not
+engine samples and would compete with the data; event times are communicated
+by the table and the hover text, and by the discontinuity itself.
+*Interpolating the bolus over the surrounding interval* — that is precisely
+the misrepresentation this ADR forbids.
+
+**Known limitation.** Plotly's canvas/SVG output is not fully accessible to
+screen readers: the adapter exposes per-point text and the page repeats every
+value in the event table and diagnostics, but a screen-reader user should
+rely on those tables rather than the chart. The axes are linear only in this
+phase; no log-axis configuration is offered, so no value is ever adjusted to
+make a log axis usable.
+
+**Consequences.** The demonstration page (§4.3b) is a thin renderer over the
+engine, the chart contract is unit-testable without a browser, and adding the
+Phase 43 scenario editor changes only how a scenario is built — never how
+samples become charts.
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with
