@@ -291,6 +291,39 @@ describe('saved scenarios — rename, duplicate, delete, save over', () => {
     expect(control.calls).toBe(0)
   })
 
+  it('save as with a duplicate name adopts the newly created record, not a same-name one', async () => {
+    const user = userEvent.setup()
+
+    // Two same-name records already exist and are pushed to a LATER
+    // timestamp than the record Save As creates, so a newest-first name
+    // lookup would resolve to one of them instead of the created record.
+    repository.seed('Twin', draftWith({ clearance: { value: '1', unit: 'L/h' } }))
+    repository.seed('Twin', draftWith({ clearance: { value: '2', unit: 'L/h' } }))
+    repository.touch('saved-1', new Date(Date.UTC(2030, 0, 1)).toISOString())
+
+    renderView()
+    await screen.findByTestId('scenario-row-saved-1')
+    await user.clear(screen.getByTestId('clearance-value'))
+    await user.type(screen.getByTestId('clearance-value'), '7')
+    await user.type(nameInput(), 'Twin')
+    await user.click(screen.getByTestId('scenario-save'))
+    await waitFor(() => expect(repository.size).toBe(3))
+    expect(repository.getRecord('saved-3')?.draft.clearance.value).toBe('7')
+
+    // Save over must target the record Save As created (saved-3).
+    await waitFor(() => expect(screen.getByTestId('scenario-save-over')).toBeEnabled())
+
+    // Edit and save over: ONLY the record Save As created (saved-3) changes;
+    // both same-name twins keep their own drafts.
+    await user.clear(screen.getByTestId('clearance-value'))
+    await user.type(screen.getByTestId('clearance-value'), '8')
+    await user.click(screen.getByTestId('scenario-save-over'))
+    await waitFor(() => expect(repository.getRecord('saved-3')?.draft.clearance.value).toBe('8'))
+    expect(repository.getRecord('saved-1')?.draft.clearance.value).toBe('1')
+    expect(repository.getRecord('saved-2')?.draft.clearance.value).toBe('2')
+    expect(repository.size).toBe(3)
+    expect(control.calls).toBe(0)
+  })
   it('saves over the loaded record by id without creating a new record', async () => {
     const user = userEvent.setup()
     repository.seed('Over me', baseDraft())
@@ -324,6 +357,29 @@ describe('saved scenarios — results and failures', () => {
     await waitFor(() => expect(screen.queryByTestId('stub-chart-concentration')).not.toBeInTheDocument())
     expect(screen.getByTestId('simulation-idle')).toBeInTheDocument()
     expect(control.calls).toBe(1)
+  })
+
+  it('shows the loading state, never an empty library, before the first read resolves', async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const list = repository.list.bind(repository)
+    repository.list = async () => {
+      await gate
+      return list()
+    }
+    renderView()
+    // While the initial read is pending the library is unknown: the panel
+    // must not claim there are no saved scenarios.
+    expect(screen.getByTestId('scenarios-loading')).toBeInTheDocument()
+    expect(screen.queryByTestId('scenarios-empty')).not.toBeInTheDocument()
+
+    release()
+    await gate
+    // A real, successfully read empty library then gets its empty message.
+    expect(await screen.findByTestId('scenarios-empty')).toBeInTheDocument()
+    expect(screen.queryByTestId('scenarios-loading')).not.toBeInTheDocument()
   })
 
   it('reports a list failure instead of an empty library', async () => {

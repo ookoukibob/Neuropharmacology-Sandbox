@@ -36,6 +36,20 @@ export class FakeScenarioRepository implements ScenarioRepository {
     return scenario
   }
 
+  /** Seed a record with an explicit timestamp (for tie-ordering tests). */
+  seedAt(name: string, draft: SimulationDraft, stamp: string): SavedScenario {
+    this.counter += 1
+    const scenario: SavedScenario = { id: `saved-${this.counter}`, name, createdAt: stamp, updatedAt: stamp, draft }
+    this.rows.set(scenario.id, scenario)
+    return scenario
+  }
+
+  /** Rewrite a record's timestamps (to control list ordering in tests). */
+  touch(id: string, stamp: string): void {
+    const row = this.rows.get(id)
+    if (row !== undefined) this.rows.set(id, { ...row, updatedAt: stamp })
+  }
+
   get size(): number {
     return this.rows.size
   }

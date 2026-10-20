@@ -79,7 +79,10 @@ function messageOf(error: unknown): string {
 }
 
 export function useScenarioLibrary(repository: ScenarioRepository): ScenarioLibraryApi {
-  const [status, setStatus] = useState<ScenarioListStatus>('idle')
+  // The list starts in 'loading': the mount effect performs the first read,
+  // and until it resolves the library is unknown — never a confirmed empty
+  // library (the panel would otherwise flash "no saved scenarios yet").
+  const [status, setStatus] = useState<ScenarioListStatus>('loading')
   const [summaries, setSummaries] = useState<readonly SavedScenarioSummary[]>([])
   const [corrupt, setCorrupt] = useState<readonly { id: string; message: string }[]>([])
   const [loadedId, setLoadedId] = useState<string | null>(null)
@@ -157,24 +160,34 @@ export function useScenarioLibrary(repository: ScenarioRepository): ScenarioLibr
     setDirty(baseline.current !== snapshot)
   }, [])
 
+  /**
+   * Run one repository operation with busy state, feedback and a list refresh.
+   *
+   * Generic over the successful value: an operation that creates a record can
+   * hand its exact identity back to the caller instead of forcing the caller
+   * to rediscover it (e.g. by display name) from the refreshed list.
+   */
   const runOperation = useCallback(
-    async (
+    async <T>(
       success: string,
-      operation: () => Promise<{ readonly ok: boolean; readonly message?: string }>,
-    ): Promise<boolean> => {
+      operation: () => Promise<
+        | { readonly ok: true; readonly value: T }
+        | { readonly ok: false; readonly message?: string }
+      >,
+    ): Promise<{ readonly ok: true; readonly value: T } | { readonly ok: false }> => {
       setBusy(true)
       try {
         const outcome = await operation()
         if (!outcome.ok) {
           setFeedback({ kind: 'error', message: outcome.message ?? 'The operation failed.' })
-          return false
+          return { ok: false }
         }
         setFeedback({ kind: 'success', message: success })
         await refresh()
-        return true
+        return outcome
       } catch (error) {
         setFeedback({ kind: 'error', message: `The operation failed: ${messageOf(error)}` })
-        return false
+        return { ok: false }
       } finally {
         setBusy(false)
       }
@@ -187,23 +200,19 @@ export function useScenarioLibrary(repository: ScenarioRepository): ScenarioLibr
       const displayed = name.trim()
       const saved = await runOperation(`Saved as “${displayed}”.`, async () => {
         const outcome = await repository.create(name, draft)
-        return outcome.ok ? { ok: true } : { ok: false, message: outcome.message }
+        // The created record carries its own id: that identity is the result
+        // of the operation, never something to rediscover by display name
+        // (duplicate names are allowed, so a name lookup would be ambiguous).
+        return outcome.ok
+          ? { ok: true as const, value: { id: outcome.scenario.id, name: outcome.scenario.name } }
+          : { ok: false as const, message: outcome.message }
       })
-      if (!saved) return false
-      // Re-read the list to learn the new id, then treat this draft as clean.
-      try {
-        const list = await repository.list()
-        setSummaries(list.scenarios)
-        setCorrupt(list.corrupt)
-        const created = list.scenarios.find((row) => row.name === displayed)
-        if (created !== undefined) {
-          setLoadedId(created.id)
-          setLoadedName(created.name)
-          markBaseline(draft)
-        }
-      } catch {
-        // The write already committed; a stale list is refreshed on demand.
-      }
+      if (!saved.ok) return false
+      // Adopt the EXACT record this create produced; the list refresh inside
+      // runOperation already updated the displayed summaries.
+      setLoadedId(saved.value.id)
+      setLoadedName(saved.value.name)
+      markBaseline(draft)
       return true
     },
     [repository, runOperation, markBaseline],
@@ -217,10 +226,10 @@ export function useScenarioLibrary(repository: ScenarioRepository): ScenarioLibr
       }
       const saved = await runOperation('Saved changes to the saved scenario.', async () => {
         const outcome = await repository.saveOver(loadedId, draft)
-        return outcome.ok ? { ok: true } : { ok: false, message: outcome.message }
+        return outcome.ok ? { ok: true as const, value: null } : { ok: false as const, message: outcome.message }
       })
-      if (saved) markBaseline(draft)
-      return saved
+      if (saved.ok) markBaseline(draft)
+      return saved.ok
     },
     [repository, runOperation, markBaseline, loadedId],
   )
@@ -280,10 +289,12 @@ export function useScenarioLibrary(repository: ScenarioRepository): ScenarioLibr
       const displayed = name.trim()
       const renamed = await runOperation(`Renamed to “${displayed}”.`, async () => {
         const outcome = await repository.rename(id, name)
-        return outcome.ok ? { ok: true } : { ok: false, message: outcome.message }
+        return outcome.ok
+          ? { ok: true as const, value: { id: outcome.scenario.id } }
+          : { ok: false as const, message: outcome.message }
       })
-      if (renamed && loadedId === id) setLoadedName(displayed)
-      return renamed
+      if (renamed.ok && loadedId === id) setLoadedName(displayed)
+      return renamed.ok
     },
     [repository, runOperation, loadedId],
   )
@@ -292,8 +303,8 @@ export function useScenarioLibrary(repository: ScenarioRepository): ScenarioLibr
     (id: string): Promise<boolean> =>
       runOperation('Duplicated the saved scenario.', async () => {
         const outcome = await repository.duplicate(id)
-        return outcome.ok ? { ok: true } : { ok: false, message: outcome.message }
-      }),
+        return outcome.ok ? { ok: true as const, value: null } : { ok: false as const, message: outcome.message }
+      }).then((result) => result.ok),
     [repository, runOperation],
   )
 
@@ -301,13 +312,13 @@ export function useScenarioLibrary(repository: ScenarioRepository): ScenarioLibr
     async (id: string): Promise<boolean> => {
       const removed = await runOperation('Deleted the saved scenario.', async () => {
         const outcome = await repository.delete(id)
-        return outcome.ok ? { ok: true } : { ok: false, message: outcome.message }
+        return outcome.ok ? { ok: true as const, value: null } : { ok: false as const, message: outcome.message }
       })
-      if (removed && loadedId === id) {
+      if (removed.ok && loadedId === id) {
         setLoadedId(null)
         setLoadedName(null)
       }
-      return removed
+      return removed.ok
     },
     [repository, runOperation, loadedId],
   )
