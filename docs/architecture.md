@@ -170,7 +170,9 @@ src/
 │   ├── curve/               #   chart-agnostic range validation + x-sampling
 │   ├── pk/                  #   first-order one-compartment model + curve generator
 │   ├── occupancy/           #   single-site binding model + curve generator
-│   └── dose-response/       #   Hill equation + curve generator
+│   ├── dose-response/       #   Hill equation + curve generator
+│   └── simulation/          #   dynamic simulation (phase 41): ODE solver, events,
+│                            #   two-compartment IV model, orchestrator, SimulationReport
 ├── data/
 │   ├── schemas/             # Zod schemas (NPSL file format; CSV builds an NPSL document first)
 │   │                        # sources.ts: loose record schemas for imported source data (phase 18)
@@ -403,6 +405,36 @@ Plotly chart (lazy-loaded)
 No layer between the draft and the engine applies a scientific rule, and
 no layer after the engine alters curve data — axis fallbacks change the
 display only (see ADR-16).
+
+### 4.3a Dynamic simulation (phase 41)
+
+The simulation core is a second, independent boundary of `src/engine`; it
+shares the purity rules and reporting helpers, not the scalar report shape.
+
+```
+SimulationScenario (start/end, output grid, initial amounts, parameters
+                  with units, dosing events, explicit solver settings)
+   ↓  validate scenario + solver settings        → typed SimulationError[]
+   ↓  convert every quantity to canonical units  (declared + canonical kept)
+   ↓  validate/order/group dosing events         (stops → boluses → starts)
+   ↓  initialise physical + accounting states    (A_e = A_in = 0, ADR-25)
+   ↓  boundary list = output times ∪ event times ∪ end time
+   ↓  adaptive Dormand–Prince 5(4) to each boundary, clipped exactly
+   ↓  emit pre-event / interval / post-event samples
+   ↓  apply the event group, invalidate the FSAL cache, continue
+   ↓  invariants: finiteness, non-negativity, mass balance
+   ↓
+SimulationReport
+     ok: true  → samples, event trace, infusion steps, solver diagnostics,
+                 normalized parameters, mass-balance summary, warnings
+     ok: false → SimulationError[] (stage, field, event id); no samples
+```
+
+Dependency direction is unchanged: the simulation imports `src/domain`
+(units/catalog) and its own `src/engine` helpers, and nothing above it. No
+UI, store, database or chart module is involved in this phase; a chart
+adapter can later consume `samples` directly (ADR-24 fixes the pre/post
+semantics it must honour).
 
 ### 4.4 Import (all-or-nothing)
 

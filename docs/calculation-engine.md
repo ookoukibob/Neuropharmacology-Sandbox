@@ -309,3 +309,161 @@ Parameter-kind discipline is structural, not cosmetic:
 Adding a future model means: new model function + `ModelDescriptor`,
 input schema, assumptions list, warnings, and the full test matrix — not a
 UI change.
+
+---
+
+## 8. Dynamic simulation (phase 41) — a separate boundary
+
+A scalar calculation answers "what is this one number". A simulation answers
+"how does this system evolve in time". The two share the purity rules, the
+error taxonomy style and the reporting helpers, and nothing else — a sequence
+of states is not squeezed into `CalculationReport`.
+
+**Boundary and files**
+
+| Module | Responsibility |
+| --- | --- |
+| `src/engine/simulation/types.ts` | Contracts only: ODE system, solver settings, scenario, events, samples, result, errors |
+| `src/engine/simulation/solver.ts` | Adaptive Dormand–Prince 5(4); knows no pharmacology |
+| `src/engine/simulation/events.ts` | Event validation, total ordering, infusion sessions, state jumps |
+| `src/engine/simulation/units.ts` | Canonical units, conversion factors, shared helpers |
+| `src/engine/simulation/models/two-compartment-pk.ts` | States, equations, observables, assumptions |
+| `src/engine/simulation/simulate.ts` | Orchestration, sampling, diagnostics, invariants, report |
+
+`src/engine/index.ts` re-exports the public surface; simulation model ids use
+the same dotted convention as `ModelId` (`pnk.two-compartment-iv`).
+
+**Why floating point here but Decimal there.** See ADR-23: the adaptive
+solver's error estimator is defined for finite precision, so integration runs
+in IEEE-754 doubles with finiteness checks at every boundary, while displayed
+values still pass through `roundForReport` (12 significant digits). Scalar
+models keep Decimal.js unchanged.
+
+### 8.1 Model equations
+
+Canonical units for the whole simulation: time **h**, amount **mg**, volume
+**L**, clearance **L/h**, concentration **mg/L**, infusion rate **mg/h**.
+
+States in fixed order: `A_c` (central), `A_p` (peripheral), `A_e`
+(cumulative eliminated), `A_in` (cumulative input).
+
+```
+C_c = A_c / V_c                           C_p = A_p / V_p
+dA_c/dt  = R_in(t) − CL·C_c − Q·(C_c − C_p)
+dA_p/dt  = Q·(C_c − C_p)
+dA_e/dt  = CL·C_c
+dA_in/dt = R_in(t)
+```
+
+A bolus of D raises `A_c` and `A_in` by D; an infusion contributes its rate
+to `R_in` between start and stop; `R_in` is the sum of the active rates.
+`Q = 0` decouples the compartments (used as an analytical oracle), `CL = 0`
+disables elimination. Elimination is central-only; distribution is linear;
+no absorption, metabolism, binding, tissue distribution, brain compartment or
+effect site is modelled. The central concentration is a compartment
+concentration — not a free (unbound) and not a CNS concentration.
+
+**Initial conditions and the mass-balance reference (ADR-25).** The scenario's
+`initialState` is the state at `startTime` **before any event**;
+`A_e` and `A_in` start at exactly 0. Every dose — including one at
+`startTime` — is applied once by the scheduler, to both the physical amount
+and `A_in`. The invariant checked for every reported sample is
+
+```
+A_c + A_p + A_e − (A_c(0) + A_p(0)) − A_in(t) ≈ 0
+```
+
+with tolerance `50 · (attempts + 1) · (atol + rtol · scale)`, `scale` being
+the largest mass the run can hold (`A_ref + max |A_in|`). `A_e` is integrated
+as a state, never reconstructed from the output grid, so the residual
+measures integration error only.
+
+### 8.2 Solver
+
+Adaptive **Dormand–Prince 5(4)** (DOPRI5) with FSAL. The tableau lives in one
+place (`solver.ts`). Per component:
+
+```
+s_i = atol + rtol · max(|y_i|, |y_i^(5)|)
+E   = sqrt( (1/n) · Σ (e_i / s_i)² )      e = h · Σ (b5_j − b4_j) · k_j
+```
+
+A step is accepted when `E ≤ 1`. The next step uses
+`h·min(5, max(0.2, 0.9·E^(−1/5)))` (5 for `E = 0`), never growing inside a
+rejection. Settings are explicit — `absoluteTolerance`, `relativeTolerance`,
+`initialStep`, `minStep`, `maxStep`, `maxSteps`; no defaults are applied to
+a scenario. Every target time is reached exactly (the step is clipped), and
+the solver never steps across an event boundary.
+
+**Failure modes** (all structured, never a partial curve): invalid settings,
+non-increasing targets, a derivative of the wrong length
+(`INCONSISTENT_DERIVATIVE_DIMENSION`, a programmer error surfaced as data),
+non-finite derivative or state (`NUMERICAL_FAILURE`), a step below `minStep`
+or time that cannot advance in double precision (`FAILED_TO_ADVANCE`), and an
+exhausted budget (`MAX_STEPS_EXCEEDED`).
+
+**Limitations.** This is an explicit non-stiff method: a stiff system makes
+the controller shrink the step until it fails, which is reported rather than
+hidden. Very long horizons at a coarse tolerance spend steps on accuracy they
+do not need. Mass-balance accuracy is bounded by the tolerance derivation
+above; the residual is reported with every result so the run can be audited.
+
+### 8.3 Events
+
+Input events are `iv-bolus` (instantaneous amount jump), `infusion-start`
+(rate + infusion id) and `infusion-stop` (infusion id). Ordering is total and
+documented (ADR-24): at one time, stops → boluses → starts, and within a
+phase by `eventId` code point. An infusion id may open a new session after a
+stop; a stop must close a strictly earlier start; zero-length intervals,
+missing starts, unstopped sessions and duplicate ids are
+`INVALID_EVENT_SEQUENCE`.
+
+**Output semantics.** Each event time yields a `pre-event` sample and a
+`post-event` sample at the same `time`, each tagged with its `eventGroup`.
+`eventTrace` keeps one entry per event with `before`/`after` at full
+precision. A chart adapter must draw the jump between the two sides and must
+not reorder or merge them. Output times only request observations: they never
+create, move or suppress an event, and changing the grid does not change the
+event trace.
+
+### 8.4 Units at the boundary
+
+`V_c`, `V_p` accept mass-free volume units (L, mL); `CL`, `Q` accept
+clearance units (L/h, mL/h, mL/min); bolus amounts accept mass (mg, g, µg);
+infusion rates accept mass-flow units (mg/h, µg/h, µg/min, g/h). Conversion
+happens exactly once, at the boundary, and the report keeps both the declared
+value/unit and the canonical value, plus a `UNITS_CONVERTED` warning when
+they differ. Clearance (L/h), mass-flow (mg/h), mass and volume are distinct
+dimensions; molar concentration is never derived from a mass concentration
+without a molecular weight.
+
+### 8.5 The report
+
+`SimulationReport` is `{ ok: true, result } | { ok: false, model, errors }`.
+A success carries the model id/version, equations and assumptions, the
+scenario as supplied, the reference initial state, normalized parameters,
+every sample (amounts, concentrations, cumulative input/elimination,
+full-precision residual, side and event group), infusion-rate steps, the
+event trace, solver diagnostics (method, settings, controller, accepted and
+rejected steps, evaluations, step extremes, max error norm), the mass-balance
+summary, and warnings. Failures carry typed errors with a stage
+(`scenario`, `units`, `events`, `solver`, `model`, `invariants`), field and
+event id when applicable.
+
+### 8.6 Worked example (synthetic test parameters)
+
+All numbers below are **synthetic test parameters**, not a real compound, not
+a validated clinical estimate:
+
+```
+V_c = 10 L, V_p = 20 L, CL = 2 L/h, Q = 0 L/h
+initial: A_c(0) = 100 mg, A_p(0) = 0 mg     horizon 0–24 h, output every hour
+events: IV bolus 50 mg (mg) at t = 2 h
+solver: atol = rtol = 1e-10, h0 = 0.01 h, h_min = 1e-12 h, h_max = 0.25 h
+```
+
+Closed form for Q = 0, CL/V_c = 0.2 h⁻¹: `A_c(t) = 100·e^(−0.2t)` before the
+bolus and `A_c(t) = (100·e^(−0.4) + 50)·e^(−0.2(t−2))` after it;
+`A_e(t) = 100·(1 − e^(−0.2t)) + 50·(1 − e^(−0.2(t−2)))`. The pre/post pair at
+t = 2 reads 67.03 / 117.03 mg central with 0 / 50 mg cumulative input, and
+`A_c + A_p + A_e − 100 − A_in ≈ 0` within ~1e-13 mg.

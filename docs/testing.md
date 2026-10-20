@@ -51,6 +51,32 @@ Curve generation additionally tests: point counts, axis scale declarations
 (`xScale`/`yScale`), monotonicity of decay, endpoint behaviour, and that
 `seriesType` is set.
 
+### 1a. Dynamic simulation matrix (phase 41)
+
+Run with `npx vitest run src/engine/simulation`. Every numerical expectation
+is an independent closed form (or hand arithmetic), never a value copied from
+the implementation.
+
+| File | Covers |
+| --- | --- |
+| `solver.test.ts` (22) | tableau consistency (row sums = c, weights sum to 1, error weights sum to 0); constant derivative `y = y₀ + a·t`; exponential decay; the coupled linear system `y₂' = k₁y₁ − k₂y₂` against its closed form; the `(cos t, sin t)` circle at π; error falls as tolerances tighten (1e-8 → 1e-10 → 1e-12); steps adapt instead of following the output grid; steps clip at targets; invalid tolerances/steps/budgets; unordered or non-increasing targets; wrong derivative length; non-finite derivatives; `MAX_STEPS_EXCEEDED`; `FAILED_TO_ADVANCE` at the double time resolution (1e17 spacing); deterministic repeated runs; input immutability; the exact evaluations-per-attempt table (6·A + 8·R) including FSAL reuse; no success after a failure |
+| `models/two-compartment-pk.test.ts` (15) | derivative written out by hand for both compartments; `C = A/V`; **Q = 0 analytical oracle** (`A_c = D·e^(−kt)`, `C_c = (D/V_c)e^(−kt)`, `A_e = D(1−e^(−kt))`); mass balance along the run; peripheral transfer with Q > 0 (rise, peak, return); the no-elimination exchange closed form for both compartments; zero input/state; steady input; determinism |
+| `events.test.ts` (24) | empty schedule; identifiers (missing/duplicate); non-finite, out-of-horizon and negative quantities; session rules (stop without start, unstopped session, second start, repeated stop, zero-duration pair, same-instant start+stop); total ordering (time → stop/bolus/start → code-point id) independent of input order; bolus jump writes both `A_c` and `A_in`; overlapping rates summed; per-event trace with before/after and the post-event rate; no double application; caller state untouched; pre/post rate snapshots |
+| `simulate.test.ts` (34) | closed-form Q = 0 trajectory; report completeness (model id/version, initial state, parameters, solver settings, warnings); unit-equivalent scenarios give identical trajectories; pre/post-event samples; no stepping across events; **output-grid independence** (same event trace, same science); each event applied once; same-time order in the trace; simultaneous infusions with CL = 0 (area under the rate = accumulated amount); start-time event semantics; repeated boluses and sessions; mass balance across boluses, infusions, overlaps, repeated events, non-zero initial amounts and distribution; tolerance derived from settings and mass scale; elimination integrated as a state (coarse vs dense grid); **ADR-25 reference-point tests with hand-computed expected residuals** (start-time bolus, mid-run bolus control, two-compartment initial amounts, zero residual at the initial sample); validation errors (`MISSING_PARAMETER`, `NOT_A_NUMBER`, `NEGATIVE_VALUE`, `ZERO_NOT_ALLOWED`, `OUT_OF_RANGE`, `UNKNOWN_UNIT`, `INCOMPATIBLE_UNITS`, `INVALID_EVENT_SEQUENCE`); a solver failure surfaces as a structured failure without samples; byte-identical repeat runs; scenario immutability |
+| `domain/pharmacology/unit-catalog.test.ts`, `engine/units/units.test.ts` | new dimensions: mass (base g), volume (base L), clearance (base L/h), mass-flow rate (base mg/h); exact factors (1 mL = 1e-3 L, 1 mL/min = 0.06 L/h, 1 µg/min = 0.06 mg/h); rejection of every cross-dimension conversion (mg↔L, L/h↔mg/h, L/h↔h, mg↔mg/L); `dimensionLabel` covers every catalog dimension |
+
+**Tolerances.** Solver cases assert against the closed form with explicit
+bounds (e.g. `1e-9·max(1, exact)` at atol/rtol 1e-10–1e-11). Mass-balance
+assertions use the run's own derived tolerance — never a fixed percentage —
+and the invariant regression tests recompute the expected residual by hand
+rather than calling the production helper.
+
+**Runtime verification note.** While the phase-41 accounting was being
+fixed, the failing assertion was reproduced twice in a fresh Vitest process,
+the resolved source file was confirmed by a direct filesystem read, and the
+failure disappeared once the double counting described in ADR-25 was removed;
+no infrastructure defect had to be assumed.
+
 ---
 
 ## 2. Schema tests (phase 1 — implemented)
