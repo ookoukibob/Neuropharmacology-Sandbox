@@ -307,6 +307,22 @@ describe('SimulationView — chart views', () => {
     expect(control.calls).toHaveLength(1)
   })
 
+  it('the deferred post-run focus never steals focus from a control the user moved to', async () => {
+    renderView()
+    const user = await runOnce()
+    await screen.findByTestId('stub-chart-concentration')
+    // The run's focus move is deferred to an animation frame. Moving focus
+    // to a tab before that frame must not be undone, or the next keystroke
+    // lands on the results container and is lost.
+    const tab = screen.getByTestId('view-tab-concentration')
+    tab.focus()
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    expect(tab).toHaveFocus()
+    await user.keyboard('{ArrowRight}')
+    expect(screen.getByTestId('view-tab-amount')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByTestId('view-tab-amount')).toHaveFocus()
+  })
+
   it('exposes the view switcher as a radio group with an accessible name', async () => {
     renderView()
     await runOnce()

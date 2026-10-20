@@ -92,11 +92,21 @@ export function SimulationView({ scenarioRepository }: { readonly scenarioReposi
       // No scenario to give the engine: keep the typed draft errors visible
       // and move focus to the summary so the problem is announced.
       clear()
-      requestAnimationFrame(() => document.getElementById('scenario-error-summary')?.focus())
+      const submitter = document.activeElement
+      requestAnimationFrame(() => {
+        if (document.activeElement === submitter) document.getElementById('scenario-error-summary')?.focus()
+      })
       return
     }
     run(compilation.scenario)
-    requestAnimationFrame(() => resultsRef.current?.focus())
+    // Announce the result to keyboard users by moving focus to the results
+    // region — but only when the user is still on the Run button. A deferred
+    // focus must never steal focus from a control the user has moved to in
+    // the meantime (it silently swallowed the next keystroke).
+    const submitter = document.activeElement
+    requestAnimationFrame(() => {
+      if (document.activeElement === submitter) resultsRef.current?.focus()
+    })
   }
 
   function resetToExample(): void {
