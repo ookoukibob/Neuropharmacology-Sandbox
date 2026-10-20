@@ -1,12 +1,18 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useCallback, useState } from 'react'
 import {
   describeSimulationEvent,
   formatNumber,
   infusionRateHoverTexts,
-  type SimulationChart,
+  type SimulationChart as SimulationChartData,
   type SimulationEventMarker,
 } from '@/components/charts/simulationAdapter'
-import type { ChartVisibility, ResultCharts } from './resultCharts'
+import {
+  CHART_VIEWS,
+  chartForView,
+  firstAvailableView,
+  type ChartViewId,
+  type ResultCharts,
+} from './resultCharts'
 import {
   Table,
   TableBody,
@@ -22,99 +28,156 @@ const LazySimulationChart = lazy(() =>
   import('@/components/charts/SimulationChart').then((mod) => ({ default: mod.SimulationChart })),
 )
 
-export function ChartToggles({
-  charts,
-  visibility,
-  onChange,
-}: {
-  readonly charts: ResultCharts
-  readonly visibility: ChartVisibility
-  readonly onChange: (patch: Partial<ChartVisibility>) => void
-}) {
-  const rows = [
-    { key: 'concentration' as const, label: 'Concentration chart', available: charts.concentration !== null },
-    { key: 'amount' as const, label: 'Amount chart', available: charts.amount !== null },
-    { key: 'infusionRate' as const, label: 'Infusion-rate chart', available: charts.infusionRate !== null },
-  ]
-  return (
-    <fieldset className="flex flex-wrap items-center gap-x-6 gap-y-2" data-testid="chart-toggles">
-      <legend className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        Show charts
-      </legend>
-      {rows.map((row) => (
-        <label key={row.key} className="inline-flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="size-4"
-            checked={row.available && visibility[row.key]}
-            disabled={!row.available}
-            onChange={(event) => onChange({ [row.key]: event.target.checked } as Partial<ChartVisibility>)}
-            data-testid={`toggle-${row.key}`}
-          />
-          {row.label}
-          {row.available ? null : (
-            <span className="text-xs text-muted-foreground">(not applicable: no infusion in this run)</span>
-          )}
-        </label>
-      ))}
-    </fieldset>
-  )
-}
-
+/**
+ * Results area (phase 44): one large analysis chart with a view switcher,
+ * followed by the event table and diagnostics.
+ *
+ * Switching views is presentation only: the adapter output for every view is
+ * already computed, the engine is never called, and the scenario is untouched.
+ */
 export function ResultsPanel({
   result,
   events,
   charts,
-  visibility,
 }: {
   readonly result: SimulationResult
   readonly events: readonly SimulationEventMarker[]
   readonly charts: ResultCharts
-  readonly visibility: ChartVisibility
 }) {
-  const shown = [
-    visibility.concentration ? charts.concentration : null,
-    visibility.amount ? charts.amount : null,
-    visibility.infusionRate ? charts.infusionRate : null,
-  ].filter((chart): chart is SimulationChart => chart !== null)
-  const rateHover = charts.infusionRate === null ? undefined : infusionRateHoverTexts(result)
+  const [view, setView] = useState<ChartViewId>(() => firstAvailableView(charts))
+  const [resetKey, setResetKey] = useState(0)
+  const active = chartForView(charts, view)
+  const rateHover = active?.id === 'infusion-rate' ? infusionRateHoverTexts(result) : undefined
+
+  const selectView = useCallback((next: ChartViewId) => {
+    setView(next)
+    setResetKey((key) => key + 1)
+  }, [])
 
   return (
-    <section aria-labelledby="results-heading" className="flex flex-col gap-4">
+    <section aria-labelledby="results-heading" className="flex min-w-0 flex-col gap-4">
       <h2 id="results-heading" className="text-base font-medium">
         Results
       </h2>
-      {shown.length === 0 ? (
-        <p className="text-sm text-muted-foreground" data-testid="no-charts-shown">
-          All charts are hidden. The result and its diagnostics remain available below.
+
+      <ChartViewTabs charts={charts} active={view} onSelect={selectView} />
+
+      {active === null ? (
+        <p className="text-sm text-muted-foreground" data-testid="chart-view-unavailable">
+          This view is not available for the current result.
         </p>
-      ) : null}
-      {shown.map((chart) => (
-        <figure key={chart.id} className="flex flex-col gap-2">
-          <figcaption className="text-sm">
-            <span className="font-medium">{chart.title}</span>
-            <span className="ml-2 text-muted-foreground">
-              {chart.yLabel} in {chart.yUnit} against {chart.xLabel.toLowerCase()} in {chart.xUnit}.
-            </span>
-          </figcaption>
-          <Suspense fallback={<p className="text-sm text-muted-foreground">Loading chart…</p>}>
-            <LazySimulationChart
-              chart={chart}
-              events={events}
-              graphId={`simulation-chart-${chart.id}`}
-              {...(rateHover === undefined ? {} : { hoverTexts: rateHover })}
-            />
-          </Suspense>
-          <p className="text-xs text-muted-foreground">
-            {chart.id === 'infusion-rate'
-              ? 'The engine reports the total rate just before and just after every event, so a start or a stop is a vertical step. Values come from the simulation result; nothing is reconstructed here.'
-              : 'Each curve is the engine’s reported samples in order. At a dosing event two samples share one timestamp (“just before” and “just after”), so the jump is drawn vertically at the event time.'}
-          </p>
-        </figure>
-      ))}
+      ) : (
+        <ChartFigure
+          key={`${active.id}-${resetKey}`}
+          chart={active}
+          events={events}
+          hoverTexts={rateHover}
+        />
+      )}
+
       <EventTable events={events} />
       <Diagnostics result={result} />
     </section>
+  )
+}
+
+/**
+ * Accessible view switcher: a radio group (arrow keys move between views,
+ * unavailable views are skipped), styled as compact tabs.
+ */
+function ChartViewTabs({
+  charts,
+  active,
+  onSelect,
+}: {
+  readonly charts: ResultCharts
+  readonly active: ChartViewId
+  readonly onSelect: (view: ChartViewId) => void
+}) {
+  const enabled = CHART_VIEWS.filter((item) => chartForView(charts, item.id) !== null)
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Chart view"
+      className="flex flex-wrap items-center gap-1 border-b border-border pb-1"
+      data-testid="chart-view-tabs"
+    >
+      {CHART_VIEWS.map((item) => {
+        const available = chartForView(charts, item.id) !== null
+        const checked = active === item.id
+        return (
+          <button
+            key={item.id}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            disabled={!available}
+            tabIndex={checked || (!available && enabled[0]?.id === item.id) ? 0 : available ? -1 : -1}
+            onClick={() => onSelect(item.id)}
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+              event.preventDefault()
+              const index = enabled.findIndex((entry) => entry.id === (checked ? item.id : active))
+              const step = event.key === 'ArrowRight' ? 1 : -1
+              const next = enabled[(index + step + enabled.length) % enabled.length]
+              if (next !== undefined) onSelect(next.id)
+            }}
+            className={`rounded-t-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+              checked
+                ? 'border-b-2 border-foreground font-medium text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            } ${available ? '' : 'cursor-not-allowed opacity-40'}`}
+            data-testid={`view-tab-${item.id}`}
+            title={available ? item.label : `${item.shortLabel} — not applicable: this run has no infusion`}
+          >
+            {item.shortLabel}
+            {available ? null : <span className="sr-only"> (not available)</span>}
+          </button>
+        )
+      })}
+      {enabled.length < CHART_VIEWS.length ? (
+        <span className="ml-2 text-xs text-muted-foreground" data-testid="view-availability-note">
+          Infusion rate unavailable: this run has no infusion.
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+function ChartFigure({
+  chart,
+  events,
+  hoverTexts,
+}: {
+  readonly chart: SimulationChartData
+  readonly events: readonly SimulationEventMarker[]
+  readonly hoverTexts: readonly string[] | undefined
+}) {
+  const captionId = `chart-caption-${chart.id}`
+  return (
+    <figure className="m-0 flex min-w-0 flex-col gap-2" data-testid="chart-figure">
+      <figcaption id={captionId} className="text-sm">
+        <span className="font-medium">{chart.title}</span>
+        <span className="ml-2 text-muted-foreground">
+          {chart.yLabel} ({chart.yUnit}) against {chart.xLabel.toLowerCase()} ({chart.xUnit}). Drag to
+          zoom, double-click or press reset to return to the full range.
+        </span>
+      </figcaption>
+      <Suspense fallback={<p className="text-sm text-muted-foreground">Loading chart…</p>}>
+        <LazySimulationChart
+          chart={chart}
+          events={events}
+          graphId={`simulation-chart-${chart.id}`}
+          ariaLabel={`${chart.title}: ${chart.yLabel} in ${chart.yUnit} against ${chart.xLabel} in ${chart.xUnit}`}
+          {...(hoverTexts === undefined ? {} : { hoverTexts })}
+        />
+      </Suspense>
+      <p className="text-xs text-muted-foreground">
+        {chart.id === 'infusion-rate'
+          ? 'The engine reports the total rate just before and just after every event, so a start or a stop is a vertical step. Values come from the simulation result; nothing is reconstructed here.'
+          : 'Each curve is the engine’s reported samples in order. At a dosing event two samples share one timestamp (“just before” and “just after”), so the jump is drawn vertically at the event time. Dotted lines mark dosing events.'}
+      </p>
+    </figure>
   )
 }
 
@@ -170,7 +233,7 @@ function labelOf(type: SimulationEventMarker['type']): string {
 function Diagnostics({ result }: { readonly result: SimulationResult }) {
   const { solver, massBalance, warnings } = result
   return (
-    <section aria-labelledby="diagnostics-heading" className="flex flex-col gap-4">
+    <section aria-labelledby="diagnostics-heading" className="flex min-w-0 flex-col gap-4">
       <h3 id="diagnostics-heading" className="text-base font-medium">
         Diagnostics
       </h3>
@@ -210,7 +273,7 @@ function Diagnostics({ result }: { readonly result: SimulationResult }) {
         </dl>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="text-sm">
+        <div className="min-w-0 text-sm">
           <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Parameters as the engine received them (canonical units)
           </h4>
@@ -230,7 +293,7 @@ function Diagnostics({ result }: { readonly result: SimulationResult }) {
             ))}
           </dl>
         </div>
-        <div className="text-sm">
+        <div className="min-w-0 text-sm">
           <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Warnings</h4>
           {warnings.length === 0 ? (
             <p className="text-muted-foreground">None reported.</p>
@@ -247,7 +310,7 @@ function Diagnostics({ result }: { readonly result: SimulationResult }) {
         </div>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="text-sm">
+        <div className="min-w-0 text-sm">
           <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Model equations</h4>
           <ul className="space-y-1 font-mono text-xs" data-testid="model-equations">
             {result.model.equations.map((equation) => (
@@ -255,7 +318,7 @@ function Diagnostics({ result }: { readonly result: SimulationResult }) {
             ))}
           </ul>
         </div>
-        <div className="text-sm">
+        <div className="min-w-0 text-sm">
           <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Structural assumptions
           </h4>

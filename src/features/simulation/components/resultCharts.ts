@@ -37,3 +37,29 @@ export function chartsForResult(result: SimulationResult): ResultCharts {
     infusionRate: infusionRateChart(result),
   }
 }
+/** Views offered by the results panel, in display order. */
+export type ChartViewId = 'concentration' | 'amount' | 'infusion-rate'
+
+export const CHART_VIEWS: readonly { readonly id: ChartViewId; readonly label: string; readonly shortLabel: string }[] = [
+  { id: 'concentration', label: 'Concentration (mg/L)', shortLabel: 'Concentration' },
+  { id: 'amount', label: 'Amount (mg)', shortLabel: 'Amount' },
+  { id: 'infusion-rate', label: 'Infusion rate (mg/h)', shortLabel: 'Infusion rate' },
+]
+
+/** The chart for one view, or null when that view is unavailable. */
+export function chartForView(charts: ResultCharts, view: ChartViewId): SimulationChart | null {
+  switch (view) {
+    case 'concentration':
+      return charts.concentration
+    case 'amount':
+      return charts.amount
+    case 'infusion-rate':
+      return charts.infusionRate
+  }
+}
+
+/** First view that has a chart; concentration is always present on success. */
+export function firstAvailableView(charts: ResultCharts): ChartViewId {
+  for (const view of CHART_VIEWS) if (chartForView(charts, view.id) !== null) return view.id
+  return 'concentration'
+}

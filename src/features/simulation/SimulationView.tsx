@@ -35,12 +35,8 @@ import {
   ScenarioErrorSummary,
   SolverSection,
 } from './components/ScenarioSections'
-import { ChartToggles, ResultsPanel } from './components/ResultsPanel'
-import {
-  DEFAULT_CHART_VISIBILITY,
-  chartsForResult,
-  type ChartVisibility,
-} from './components/resultCharts'
+import { ResultsPanel } from './components/ResultsPanel'
+import { chartsForResult } from './components/resultCharts'
 import { useSimulationRunner } from './useSimulationRunner'
 
 const SYNTHETIC_DISCLAIMER =
@@ -48,7 +44,6 @@ const SYNTHETIC_DISCLAIMER =
 
 export function SimulationView() {
   const [draft, setDraft] = useState<SimulationDraft>(() => demoDraft())
-  const [visibility, setVisibility] = useState<ChartVisibility>(DEFAULT_CHART_VISIBILITY)
   const { state, run, clear } = useSimulationRunner()
   const resultsRef = useRef<HTMLDivElement>(null)
 
@@ -87,7 +82,6 @@ export function SimulationView() {
 
   function resetToExample(): void {
     setDraft(demoDraft())
-    setVisibility(DEFAULT_CHART_VISIBILITY)
     clear()
   }
 
@@ -227,16 +221,10 @@ export function SimulationView() {
                 <AlertDescription>{chartResult.reason}</AlertDescription>
               </Alert>
             ) : null}
-            <ChartToggles
-              charts={charts}
-              visibility={visibility}
-              onChange={(patch) => setVisibility((current) => ({ ...current, ...patch }))}
-            />
             <ResultsPanel
               result={state.result}
               events={chartResult !== null && chartResult.ok ? chartResult.events : []}
               charts={charts}
-              visibility={visibility}
             />
           </>
         )}

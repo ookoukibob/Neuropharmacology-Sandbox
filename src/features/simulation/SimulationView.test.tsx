@@ -152,12 +152,10 @@ describe('SimulationView — running', () => {
     expect(control.calls).toHaveLength(0)
   })
 
-  it('renders charts, events and diagnostics from the actual report', async () => {
+  it('renders the concentration view, events and diagnostics from the actual report', async () => {
     renderView()
     await runOnce()
     expect(await screen.findByTestId('stub-chart-concentration')).toBeInTheDocument()
-    expect(await screen.findByTestId('stub-chart-amount')).toBeInTheDocument()
-    expect(await screen.findByTestId('stub-chart-infusion-rate')).toBeInTheDocument()
     expect(screen.getByTestId('simulation-summary')).toHaveTextContent('Run 1')
     expect(within(screen.getByTestId('event-table')).getByText('Infusion start')).toBeInTheDocument()
     expect(screen.getByTestId('mass-balance-diagnostics')).toHaveTextContent(/within tolerance/i)
@@ -284,41 +282,72 @@ describe('SimulationView — reset', () => {
   })
 })
 
-describe('SimulationView — chart toggles', () => {
-  it('hides and shows charts without running the engine again', async () => {
+describe('SimulationView — chart views', () => {
+  it('shows one analysis view at a time and switches without re-running the engine', async () => {
     renderView()
     const user = await runOnce()
-    await screen.findByTestId('stub-chart-concentration')
-    expect(control.calls).toHaveLength(1)
-    await user.click(screen.getByTestId('toggle-concentration'))
-    expect(screen.queryByTestId('stub-chart-concentration')).not.toBeInTheDocument()
-    expect(screen.getByTestId('stub-chart-amount')).toBeInTheDocument()
-    await user.click(screen.getByTestId('toggle-concentration'))
     expect(await screen.findByTestId('stub-chart-concentration')).toBeInTheDocument()
+    expect(screen.queryByTestId('stub-chart-amount')).not.toBeInTheDocument()
+    expect(control.calls).toHaveLength(1)
+
+    await user.click(screen.getByTestId('view-tab-amount'))
+    expect(await screen.findByTestId('stub-chart-amount')).toBeInTheDocument()
+    expect(screen.queryByTestId('stub-chart-concentration')).not.toBeInTheDocument()
+
+    await user.click(screen.getByTestId('view-tab-infusion-rate'))
+    expect(await screen.findByTestId('stub-chart-infusion-rate')).toBeInTheDocument()
+
+    await user.click(screen.getByTestId('view-tab-concentration'))
+    expect(await screen.findByTestId('stub-chart-concentration')).toBeInTheDocument()
+    // Selecting a view never runs the simulation again.
     expect(control.calls).toHaveLength(1)
   })
 
-  it('reports when every chart is hidden but keeps the diagnostics', async () => {
+  it('exposes the view switcher as a radio group with an accessible name', async () => {
+    renderView()
+    await runOnce()
+    const group = await screen.findByRole('radiogroup', { name: 'Chart view' })
+    const radios = within(group).getAllByRole('radio')
+    expect(radios).toHaveLength(3)
+    expect(within(group).getByRole('radio', { name: /concentration/i })).toHaveAttribute('aria-checked', 'true')
+    expect(within(group).getByRole('radio', { name: /amount/i })).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('moves between views with the arrow keys', async () => {
     renderView()
     const user = await runOnce()
     await screen.findByTestId('stub-chart-concentration')
-    for (const id of ['toggle-concentration', 'toggle-amount', 'toggle-infusionRate']) {
-      await user.click(screen.getByTestId(id))
-    }
-    expect(screen.getByTestId('no-charts-shown')).toBeInTheDocument()
-    expect(screen.queryByTestId('stub-chart-concentration')).not.toBeInTheDocument()
-    expect(screen.getByTestId('solver-diagnostics')).toBeInTheDocument()
+    screen.getByTestId('view-tab-concentration').focus()
+    await user.keyboard('{ArrowRight}')
+    expect(await screen.findByTestId('stub-chart-amount')).toBeInTheDocument()
+    await user.keyboard('{ArrowRight}')
+    expect(await screen.findByTestId('stub-chart-infusion-rate')).toBeInTheDocument()
+    await user.keyboard('{ArrowRight}')
+    expect(await screen.findByTestId('stub-chart-concentration')).toBeInTheDocument()
   })
 
-  it('disables the infusion-rate toggle when the scenario has no infusion', async () => {
+  it('disables and explains the infusion view when the scenario has no infusion', async () => {
     renderView()
     const user = userEvent.setup()
-    await user.click(screen.getByTestId('remove-event-3')) // remove the example infusion (row 3)
+    await user.click(screen.getByTestId('remove-event-3')) // remove the example infusion
     await user.click(runButton())
     await screen.findByTestId('stub-chart-concentration')
-    const toggle = screen.getByTestId('toggle-infusionRate')
-    expect(toggle).toBeDisabled()
-    expect(toggle).not.toBeChecked()
+    const tab = screen.getByTestId('view-tab-infusion-rate')
+    expect(tab).toBeDisabled()
+    expect(tab).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByTestId('view-availability-note')).toHaveTextContent(/no infusion/i)
     expect(screen.queryByTestId('stub-chart-infusion-rate')).not.toBeInTheDocument()
+  })
+
+  it('keeps the event table and diagnostics visible regardless of the active view', async () => {
+    renderView()
+    const user = await runOnce()
+    await screen.findByTestId('stub-chart-concentration')
+    for (const view of ['amount', 'infusion-rate', 'concentration']) {
+      await user.click(screen.getByTestId(`view-tab-${view}`))
+      expect(screen.getByTestId('event-table')).toBeInTheDocument()
+      expect(screen.getByTestId('solver-diagnostics')).toBeInTheDocument()
+      expect(screen.getByTestId('mass-balance-diagnostics')).toBeInTheDocument()
+    }
   })
 })

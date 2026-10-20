@@ -40,11 +40,15 @@ test.describe('simulation demonstration', () => {
     await expect(runButton).toBeFocused()
     await page.keyboard.press('Enter')
 
-    // 4. Both plots appear (Plotly renders an SVG per chart).
+    // 4. The concentration view appears; the amount view renders the same
+    // data in its own units (one analysis view at a time since phase 44).
     const concentrationChart = page.getByTestId('simulation-chart-concentration')
-    const amountChart = page.getByTestId('simulation-chart-amount')
     await expect(concentrationChart.locator('.js-plotly-plot')).toBeVisible({ timeout: 30_000 })
+    await page.getByTestId('view-tab-amount').click()
+    const amountChart = page.getByTestId('simulation-chart-amount')
     await expect(amountChart.locator('.js-plotly-plot')).toBeVisible({ timeout: 30_000 })
+    await page.getByTestId('view-tab-concentration').click()
+    await expect(concentrationChart.locator('.js-plotly-plot')).toBeVisible({ timeout: 30_000 })
 
     // 5. The event list contains the bolus and infusion events.
     const events = page.getByTestId('event-table')

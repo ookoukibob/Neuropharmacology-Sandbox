@@ -252,7 +252,7 @@ describe('events', () => {
     expect(describeSimulationEvent(stop)).toContain('no amount administered')
   })
 
-  it('renders one shape per event, with stops visually distinct', () => {
+  it('renders one shape per event, each labelled with its own description', () => {
     const result = run({
       outputTimes: [0, 2, 6, 12],
       events: [
@@ -263,7 +263,14 @@ describe('events', () => {
     const shapes = simulationEventShapes(simulationEventMarkers(result))
     expect(shapes).toHaveLength(2)
     expect(shapes[0]).toMatchObject({ type: 'line', x0: 2, x1: 2 })
-    expect((shapes[0]!.line as { dash: string }).dash).not.toBe((shapes[1]!.line as { dash: string }).dash)
+    expect(shapes[1]).toMatchObject({ type: 'line', x0: 6, x1: 6 })
+    // Kinds are distinguished by their accessible name, not by colour: the
+    // stop says it administers no amount.
+    const names = shapes.map((shape) => String((shape as { name?: string }).name ?? ''))
+    expect(names[0]).toContain('starts at 10 mg/h')
+    expect(names[1]).toContain('no amount administered')
+    // All event lines share one restrained style so the data stays dominant.
+    expect((shapes[0]!.line as { dash: string }).dash).toBe((shapes[1]!.line as { dash: string }).dash)
     for (const shape of shapes) expect(Object.values(shape)).not.toContain(undefined)
   })
 })

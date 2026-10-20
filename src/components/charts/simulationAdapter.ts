@@ -482,10 +482,11 @@ export function simulationEventShapes(
     y1: 1,
     line: {
       width: 1,
-      dash: event.type === 'infusion-stop' ? 'dot' : 'longdash',
-      // Muted grey so the coloured series stay dominant; the event table and
-      // hover text carry the meaning, not the colour.
-      color: '#8a8a8a',
+      // Dotted for every event kind; starts and stops differ by the event
+      // table and hover text, never by colour alone.
+      dash: 'dot',
+      // Neutral grey at a readable opacity so the data stays dominant.
+      color: 'rgba(90, 90, 90, 0.55)',
     },
     name: describeSimulationEvent(event),
   }))
