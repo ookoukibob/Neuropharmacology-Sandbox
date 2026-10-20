@@ -33,6 +33,10 @@ function key(symbol: string): string {
  *   relative error ~1e-17 is far below the engine's 12-digit report
  *   precision).
  * - Dimensionless — base 1; "%" converts to the fraction (0.01).
+ * - Mass — base g; Volume — base L; Clearance — base L/h; Mass-flow rate —
+ *   base mg/h (phase 41, the two-compartment IV PK model). These are four
+ *   distinct dimensions: a clearance is never a rate, an infusion rate is
+ *   never a clearance, and none of them converts to time or mass alone.
  *
  * Rate units ("1/h") are not catalog entries: they are parsed by the engine
  * (`src/engine/units`) because they only ever appear as k's unit.
@@ -53,6 +57,31 @@ const UNITS: readonly UnitDef[] = [
   { symbol: 'min', dimension: 'time', toBase: 1 / 60, aliases: ['minute', 'minutes'] },
   { symbol: 'h', dimension: 'time', toBase: 1, aliases: ['hr', 'hour', 'hours'] },
   { symbol: 'd', dimension: 'time', toBase: 24, aliases: ['day', 'days'] },
+
+  // Mass — base g. Phase 41 (two-compartment IV PK model).
+  // SI-prefixed masses are expressed in grammes ("mg", "µg"), matching the
+  // rest of the catalog where the symbol *is* the SI-prefixed unit name.
+  // "ug" (ASCII) is the only lower-cased form that cannot collide with the
+  // gramme-based symbols, so it is accepted as an alias.
+  { symbol: 'g', dimension: 'mass', toBase: 1, aliases: ['gram', 'grams'] },
+  { symbol: 'mg', dimension: 'mass', toBase: 1e-3, aliases: ['milligram', 'milligrams'] },
+  { symbol: 'µg', dimension: 'mass', toBase: 1e-6, aliases: ['ug'] },
+
+  // Volume — base L (SI-canonical volume unit). Phase 41.
+  { symbol: 'L', dimension: 'volume', toBase: 1, aliases: ['l', 'liter', 'litre'] },
+  { symbol: 'mL', dimension: 'volume', toBase: 1e-3, aliases: ['ml'] },
+
+  // Clearance — volume per time, base L/h. Phase 41. 1 mL/min = 0.06 L/h.
+  { symbol: 'L/h', dimension: 'clearance', toBase: 1, aliases: ['L/hr'] },
+  { symbol: 'mL/h', dimension: 'clearance', toBase: 1e-3, aliases: ['mL/hr'] },
+  { symbol: 'mL/min', dimension: 'clearance', toBase: 0.06 },
+
+  // Mass-flow rate — mass per time, base mg/h. Phase 41.
+  // 1 µg/min = 0.06 mg/h. `toBase` values are exact decimal literals.
+  { symbol: 'mg/h', dimension: 'mass-flow-rate', toBase: 1, aliases: ['mg/hr'] },
+  { symbol: 'µg/h', dimension: 'mass-flow-rate', toBase: 1e-3, aliases: ['ug/h'] },
+  { symbol: 'µg/min', dimension: 'mass-flow-rate', toBase: 0.06, aliases: ['ug/min'] },
+  { symbol: 'g/h', dimension: 'mass-flow-rate', toBase: 1000 },
 
   { symbol: '1', dimension: 'dimensionless', toBase: 1 },
   { symbol: '%', dimension: 'dimensionless', toBase: 0.01, aliases: ['percent'] },

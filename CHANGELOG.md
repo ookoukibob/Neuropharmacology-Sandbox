@@ -6,6 +6,52 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Added — dynamic pharmacokinetic simulation engine (phase 41)
+
+- **A reusable adaptive ODE solver** (`src/engine/simulation/solver.ts`):
+  Dormand–Prince 5(4) with the embedded error estimate
+  `E = sqrt(mean((e_i / (atol + rtol·max(|y_i|, |y_i^(5)|)))²))`, FSAL reuse,
+  step clipping to every target time, and conservative step-size control
+  (safety 0.9, bounds 0.2–5). Invalid settings, wrong derivative length,
+  non-finite derivatives or states, an exhausted step budget and time that
+  cannot advance in double precision all return typed errors — never a partial
+  result. Analytical tests: constant derivative, exponential decay, a coupled
+  linear system, the circle at π, and tolerance-convergence.
+- **An open two-compartment IV PK model**
+  (`src/engine/simulation/models/two-compartment-pk.ts`):
+  `dA_c/dt = R_in − CL·C_c − Q(C_c − C_p)`, `dA_p/dt = Q(C_c − C_p)`,
+  with integrated elimination (`A_e`) and cumulative-input (`A_in`)
+  accounting states, `C_c = A_c/V_c`. `Q = 0` and `CL = 0` are valid
+  limits and are tested against closed forms.
+- **A deterministic dosing scheduler** (`src/engine/simulation/events.ts`):
+  IV bolus (instantaneous jump), constant-rate infusions with per-infusion
+  session identity and summed overlapping rates. Same-time ordering is
+  specified as stops → boluses → starts, then by event id code point; a total
+  order independent of array position. Missing starts, unstopped sessions,
+  repeated stops, zero-duration intervals and duplicate ids are rejected.
+- **An orchestrator and report** (`src/engine/simulation/simulate.ts`):
+  validates and converts the scenario once, integrates boundary by boundary
+  (output ∪ event ∪ end), emits `pre-event`/`interval`/`post-event` samples
+  with their event group, applies each event exactly once, invalidates the
+  solver cache at every event, and returns either a complete
+  `SimulationReport` (samples, event trace, infusion steps, solver
+  diagnostics, normalized parameters, mass balance, warnings) or typed
+  failures with no samples at all.
+- **Unit system extension**: new physical dimensions `mass` (g, mg, µg),
+  `volume` (L, mL), `clearance` (L/h, mL/h, mL/min) and
+  `mass-flow-rate` (mg/h, µg/h, µg/min, g/h). These are distinct from the
+  existing inverse-time `rate` dimension; every cross-dimension conversion is
+  refused.
+- **Mass-balance accounting**: `A_c + A_p + A_e ≈ A_c(0) + A_p(0) + A_in(t)`
+  with a single reference point (ADR-25). A bolus at the start time is part
+  of the input, not of the reference amount, so it is counted exactly once —
+  the pre-event sample reads 100 mg / 0 mg and the post-event sample
+  130 mg / 30 mg for a 100 mg start state and a 30 mg bolus. The tolerance is
+  derived from the solver settings and the mass scale.
+- No UI, no persistence format and no schema migration: existing calculators,
+  drug library records, import/export and backup formats are unchanged.
+
+
 ### Fixed — ChEMBL target search requests the documented JSON format (phase 40)
 
 - **Target search now uses `target/search.json?q=…&limit=…`.** The

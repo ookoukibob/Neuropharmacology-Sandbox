@@ -25,6 +25,16 @@ export const CONCENTRATION_DIMENSIONS: readonly DimensionId[] = [
 export const TIME_DIMENSIONS: readonly DimensionId[] = ['time']
 export const DIMENSIONLESS_DIMENSIONS: readonly DimensionId[] = ['dimensionless']
 
+/**
+ * Phase 41 — dimensions used by the dynamic PK simulation model. Each is a
+ * physical dimension of its own: a mass is not a volume, a clearance (L/h) is
+ * not a rate (1/h), and an infusion rate (mg/h) is neither.
+ */
+export const MASS_DIMENSIONS: readonly DimensionId[] = ['mass']
+export const VOLUME_DIMENSIONS: readonly DimensionId[] = ['volume']
+export const CLEARANCE_DIMENSIONS: readonly DimensionId[] = ['clearance']
+export const MASS_FLOW_RATE_DIMENSIONS: readonly DimensionId[] = ['mass-flow-rate']
+
 export type UnitCheck =
   | { readonly reason: 'ok'; readonly def: UnitDef }
   /** No unit supplied (undefined or blank). */
@@ -67,6 +77,10 @@ export function dimensionLabel(dimension: DimensionId): string {
       return 'dimensionless'
     case 'rate':
       return 'rate'
+    case 'clearance':
+      return 'clearance'
+    case 'mass-flow-rate':
+      return 'mass-flow rate'
   }
 }
 

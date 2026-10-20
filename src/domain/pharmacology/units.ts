@@ -36,6 +36,18 @@ export type DimensionId =
   /** Per-time rate denominators such as 1/h are expressed via unit strings
    *  produced by the engine (e.g. "1/h"); they are not catalog-converted. */
   | 'rate'
+  /**
+   * Clearance — volume per time, base L/h (phase 41). A *different*
+   * physical dimension from `rate` (1/time): "L/h" and "1/h" are never
+   * interchangeable, and changing one to the other needs a volume.
+   */
+  | 'clearance'
+  /**
+   * Mass-flow rate — mass per time, base mg/h (phase 41). A *different*
+   * dimension from both `rate` and `clearance`: an infusion rate is mg per
+   * hour, not milligrammes and not litres per hour.
+   */
+  | 'mass-flow-rate'
 
 export interface UnitDef {
   /** Canonical display symbol, e.g. "nM". */

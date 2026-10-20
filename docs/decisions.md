@@ -595,6 +595,135 @@ without losing anything it already held.
 
 ---
 
+## ADR-23 · Adaptive ODE integration in IEEE-754 doubles, separate from the Decimal scalar path
+
+**Context.** Every scalar model computes in Decimal.js and reports through
+`roundForReport` (ADR-6). Phase 41 adds a dynamic simulation: a two-compartment
+IV PK model integrated by an adaptive Dormand–Prince 5(4) pair. The solver
+must take thousands of intermediate steps, each with a local error estimate,
+and its step-size controller is mathematically defined for finite-precision
+arithmetic.
+
+**Decision.** The simulation core integrates in IEEE-754 doubles, with the
+following rules:
+
+- **No display rounding inside integration.** `solver.ts` never rounds an
+  intermediate state; every stage value keeps full double precision.
+- **Reporting still uses the existing helpers.** Samples leave the engine
+  through `roundForReport` (12 significant digits) for the displayed
+  quantities; the mass-balance residual is computed and reported at full
+  internal precision precisely because it is a numerical diagnostic.
+- **Finiteness is checked at every boundary.** Derivative vectors, candidate
+  states, stage times and error norms are validated with `Number.isFinite`;
+  a non-finite value is a structured `NUMERICAL_FAILURE`, never a plotted
+  value.
+- **The scalar path is unchanged.** `CalculationReport` and its models keep
+  the Decimal arithmetic and the one-loss-policy warnings.
+
+**Why not Decimal.** The embedded error estimate is a finite-precision
+construction; carrying every Runge–Kutta stage through arbitrary precision
+would multiply cost by orders of magnitude without making the estimate more
+meaningful, and would make a "converged" solution indistinguishable from a
+numerically meaningless one. Decimal protects *arithmetic that a person
+reads*; adaptive integration is *numerical analysis* whose own error
+estimator is the quality criterion.
+
+**Consequences.** The solver is fast enough for interactive use, deterministic
+on a given platform, and its accuracy is governed by explicit tolerances
+rather than by rounding conventions. The boundary between the two policies is
+documented in `calculation-engine.md` §8.
+
+---
+
+## ADR-24 · Dosing events: total ordering, per-session infusion identity, pre/post samples
+
+**Context.** A simulation must apply IV bolus and constant-rate infusion events
+deterministically, including several events at the same instant, and must
+represent the discontinuity honestly. Array position and JavaScript's sort
+stability are not scientific specifications.
+
+**Decision.**
+
+- **Same-time ordering is specified, not incidental.** Within one event time
+  the phases are fixed: `infusion-stop` → `iv-bolus` → `infusion-start`.
+  Inside a phase, events are ordered by `eventId` compared by Unicode code
+  point (a locale-independent comparator implemented in the engine). The
+  order is total, so any input permutation yields the same schedule, and a
+  test asserts exactly that.
+- **Bolus is an instantaneous jump** of `A_c` (and of the accounting state
+  `A_in`), never a short infusion.
+- **Infusions are sessions.** An `infusionId` may be started again after a
+  stop; a stop must close the most recent start strictly later in time. A
+  start and a stop at the same instant cannot form a positive-length interval
+  (inside a group the stop is evaluated first and finds no open session), so
+  zero-length intervals are rejected instead of reinterpreted. Missing
+  starts, unstopped sessions and duplicate identifiers are typed
+  `INVALID_EVENT_SEQUENCE` errors. A zero rate is valid (it contributes
+  nothing); a negative rate is not.
+- **Pre/post-event samples.** An event time produces a `pre-event` sample and
+  a `post-event` sample with the same `time`, in that order, each tagged with
+  its `eventGroup`. Individual transitions are kept in `eventTrace`
+  (`before`/`after` at full precision, one entry per event), so a shared
+  timestamp never loses an event. A chart adapter draws a vertical jump
+  between the two sides and must not sort or deduplicate them.
+- **The solver never steps across an event.** The orchestrator builds the
+  boundary list from output times ∪ event times ∪ end time, and integration is
+  clipped to each boundary. An output grid therefore cannot move, duplicate
+  or suppress a dose.
+- **The FSAL cache is invalidated by every event.** The integrator exposes
+  `integrate(targets, hasCachedDerivative)`; the orchestrator passes `false`
+  after any event, because a derivative computed for the pre-event rate
+  belongs to a different right-hand side.
+
+**Consequences.** Event application is reproducible, independently testable
+(`events.test.ts` needs no PK model), and the same scheduler is reusable for
+future oral or effect-site events without changing the solver.
+
+---
+
+## ADR-25 · One mass-balance reference point at startTime; doses counted once
+
+**Context.** The simulation reports a mass-balance residual
+`A_c + A_p + A_e − A_ref − A_in`. During phase 41 the initializer briefly used a
+"carry-in" convention in which a bolus at `startTime` was prefilled into both
+the central state and `A_in`, and the reference amount included that dose.
+The result violated the invariant by exactly the dose once a second
+convention (zero `A_in`, no carry-in) applied the same bolus again.
+
+**Decision.** A single convention governs initialization, event handling,
+samples, accounting and documentation:
+
+- **The scenario's initial state is the pre-event state at `startTime`.**
+  `A_c(0)`, `A_p(0)` are taken verbatim from `initialState`; `A_ref = A_c(0) + A_p(0)`.
+- **Accounting states start at zero:** `A_e(0) = 0`, `A_in(0) = 0`.
+- **Every dose is applied exactly once, by the event scheduler**, including a
+  bolus or an infusion start at `startTime`: `A_c += D` and `A_in += D`.
+- **The checked invariant is**
+  `A_c + A_p + A_e − (A_c(0) + A_p(0)) − A_in ≈ 0`
+  — evaluated at full precision for every reported sample. The pre-event
+  sample at `startTime` reads 0 on both sides; the post-event sample reads
+  `A_c(0) + D` against `A_ref + D`.
+- **Tolerance.** `tol = 50 · (attempts + 1) · (atol + rtol · scale)` where
+  `scale` is the largest mass the run can hold (`A_ref + max |A_in|`). It is
+  derived from the solver settings and the mass scale, never a fixed
+  percentage, and the derivation is recorded with every result.
+
+**Rejected alternative.** Prefilling `A_in` with the start-time bolus and
+letting the scheduler add it to `A_c` only: it is internally consistent but
+splits bolus handling into two code paths keyed on the event clock, and it
+makes `A_in(0) ≠ 0`, i.e. "cumulative input since the reference point" becomes
+false on the first sample. A single rule for all times is simpler to test and
+to explain.
+
+**Consequences.** Hand-computable assertions: 100 mg initial + 30 mg bolus at
+t0 yields 100 / 0 before the event and 130 / 30 after it, with residual 0 in
+both rows. Regression tests in `simulate.test.ts` recompute these values from
+the closed form rather than calling the production helper, and a bolus
+strictly after `startTime` is covered by the same assertions so the rule cannot
+degenerate into a first-event special case.
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

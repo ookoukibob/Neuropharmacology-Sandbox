@@ -1,8 +1,13 @@
 import Decimal from 'decimal.js'
 import { describe, expect, it } from 'vitest'
 import { unitCatalog } from '../../domain/pharmacology/unit-catalog'
+import type { DimensionId } from '../../domain/pharmacology/units'
 import {
+  CLEARANCE_DIMENSIONS,
   CONCENTRATION_DIMENSIONS,
+  MASS_DIMENSIONS,
+  MASS_FLOW_RATE_DIMENSIONS,
+  VOLUME_DIMENSIONS,
   checkUnitFor,
   convertDecimal,
   dimensionLabel,
@@ -92,5 +97,58 @@ describe('dimensionLabel', () => {
     expect(dimensionLabel('time')).toBe('time')
     expect(dimensionLabel('dimensionless')).toBe('dimensionless')
     expect(dimensionLabel('rate')).toBe('rate')
+    // Phase 41 dimensions.
+    expect(dimensionLabel('mass')).toBe('mass')
+    expect(dimensionLabel('volume')).toBe('volume')
+    expect(dimensionLabel('clearance')).toBe('clearance')
+    expect(dimensionLabel('mass-flow-rate')).toBe('mass-flow rate')
+  })
+
+  it('covers every dimension id the catalog actually uses (no silent gap)', () => {
+    const used = new Set<DimensionId>()
+    for (const dimension of [
+      'molar-concentration',
+      'mass-concentration',
+      'amount',
+      'mass',
+      'time',
+      'volume',
+      'dimensionless',
+      'clearance',
+      'mass-flow-rate',
+    ] as const) {
+      const units = unitCatalog.unitsOfDimension(dimension)
+      if (units.length > 0) used.add(dimension)
+    }
+    // Eight catalog dimensions; 'rate' and 'amount' are not catalog entries
+    // (per-time units are parsed, amounts are not a modeled quantity yet).
+    expect(used.size).toBe(8)
+    for (const dimension of used) expect(dimensionLabel(dimension).length).toBeGreaterThan(0)
+  })
+})
+
+describe('phase 41 dimension constants', () => {
+  it('accept only their own dimension', () => {
+    expect(checkUnitFor('mg', MASS_DIMENSIONS).reason).toBe('ok')
+    expect(checkUnitFor('L', MASS_DIMENSIONS).reason).toBe('wrong-dimension')
+    expect(checkUnitFor('mL', VOLUME_DIMENSIONS).reason).toBe('ok')
+    expect(checkUnitFor('L/h', VOLUME_DIMENSIONS).reason).toBe('wrong-dimension')
+    expect(checkUnitFor('mL/min', CLEARANCE_DIMENSIONS).reason).toBe('ok')
+    expect(checkUnitFor('1/h', CLEARANCE_DIMENSIONS).reason).toBe('unknown')
+    expect(checkUnitFor('mg/h', MASS_FLOW_RATE_DIMENSIONS).reason).toBe('ok')
+    expect(checkUnitFor('mg', MASS_FLOW_RATE_DIMENSIONS).reason).toBe('wrong-dimension')
+    expect(checkUnitFor('min', MASS_FLOW_RATE_DIMENSIONS).reason).toBe('wrong-dimension')
+  })
+
+  it('convert exactly through convertDecimal', () => {
+    const expectConversion = (value: number, from: string, to: string, expected: number): void => {
+      const converted = convertDecimal(new Decimal(value), unitCatalog.get(from)!, unitCatalog.get(to)!)
+      expect(converted.toNumber()).toBeCloseTo(expected, 15)
+    }
+    expectConversion(250, 'mL', 'L', 0.25)
+    expectConversion(1, 'mL/min', 'L/h', 0.06)
+    expectConversion(1, 'µg/min', 'mg/h', 0.06)
+    expectConversion(120, 'µg/h', 'mg/h', 0.12)
+    expectConversion(2, 'g/h', 'mg/h', 2000)
   })
 })
