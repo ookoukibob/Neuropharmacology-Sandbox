@@ -2,6 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SimulationView } from './SimulationView'
+import { FakeScenarioRepository } from './tests/fakeScenarioRepository'
 import { DEMO_SCENARIO } from './demoScenario'
 
 /**
@@ -44,14 +45,17 @@ vi.mock('@/engine/simulation/simulate', async (importOriginal) => {
 })
 
 const runButton = () => screen.getByTestId('run-simulation')
-const renderView = () => render(<SimulationView />)
+const renderView = () => render(<SimulationView scenarioRepository={repository} />)
 const runOnce = async () => {
   const user = userEvent.setup()
   await user.click(runButton())
   return user
 }
 
+let repository: FakeScenarioRepository
+
 beforeEach(() => {
+  repository = new FakeScenarioRepository()
   control.calls.length = 0
   control.failureFor = null
 })

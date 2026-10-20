@@ -34,6 +34,7 @@
 import Dexie, { type EntityTable } from 'dexie'
 import type { LibraryMetadata } from '../../domain/library/library'
 import type { Compound } from '../../domain/sources/compound'
+import type { SavedScenario } from '../../domain/simulation/saved-scenario'
 import type { ExperimentalObservation } from '../../domain/sources/observation'
 import { PERSISTENCE_VERSION, type DrugRecord, type DrugRevision } from '../mappers/records'
 
@@ -53,6 +54,13 @@ export class SandboxDatabase extends Dexie {
    * `persistenceVersion`, but stored beside the row instead of inside it.
    */
   revisions!: EntityTable<DrugRevision, 'id'>
+  /**
+   * Saved simulation scenarios (phase 45): named copies of the editor draft,
+   * keyed by a generated id. Additive table — no existing row, index or
+   * bookkeeping field is touched, and the `.npsb` archive carries it as an
+   * optional array so pre-v5 archives stay restorable.
+   */
+  scenarios!: EntityTable<SavedScenario, 'id'>
 
   constructor(name: string = DATABASE_NAME) {
     super(name)
@@ -111,6 +119,17 @@ export class SandboxDatabase extends Dexie {
       compounds: 'id',
       observations: 'id, compoundId',
       revisions: 'id',
+    })
+
+    // Additive v5 (phase 45): the saved-scenario table, no upgrade hook — an
+    // existing database opens with an empty scenarios store.
+    this.version(5).stores({
+      drugs: 'id, origin, updatedAt',
+      meta: 'id',
+      compounds: 'id',
+      observations: 'id, compoundId',
+      revisions: 'id',
+      scenarios: 'id, updatedAt',
     })
   }
 }

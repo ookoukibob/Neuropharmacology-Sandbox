@@ -32,6 +32,7 @@
  *   old token.
  */
 import type { Drug, DrugId, ReceptorTarget } from '../../domain/drug/drug'
+import type { SavedScenario } from '../../domain/simulation/saved-scenario'
 import {
   DEFAULT_LIBRARY_ID,
   type DrugLibrary,
@@ -507,7 +508,7 @@ export class DexieDrugRepository implements DrugRepository {
   }
 
   async exportRecoveryArchive(): Promise<RecoveryExportOutcome> {
-    let snapshot: { drugs: RawSnapshotRow[]; meta: RawSnapshotRow[] }
+    let snapshot: { drugs: RawSnapshotRow[]; meta: RawSnapshotRow[]; scenarios: RawSnapshotRow[] }
     try {
       // One read-only transaction over BOTH stores (docs/recovery-backup.md
       // §7): cursor callbacks capture the real IndexedDB primary key next
@@ -516,7 +517,7 @@ export class DexieDrugRepository implements DrugRepository {
       // serialization) runs on the copies — so counts and entries can
       // never mix the pre- and post-write sides of a concurrent change.
       // No fallback path: a read failure is fail-closed BACKUP_READ_FAILED.
-      snapshot = await this.db.transaction('r', this.db.drugs, this.db.meta, async () => {
+      snapshot = await this.db.transaction('r', this.db.drugs, this.db.meta, this.db.scenarios, async () => {
         const drugs: RawSnapshotRow[] = []
         await this.db.drugs.each((value, cursor) => {
           drugs.push({ key: cursor.primaryKey, value })
@@ -525,7 +526,11 @@ export class DexieDrugRepository implements DrugRepository {
         await this.db.meta.each((value, cursor) => {
           meta.push({ key: cursor.primaryKey, value })
         })
-        return { drugs, meta }
+        const scenarios: RawSnapshotRow[] = []
+        await this.db.scenarios.each((value, cursor) => {
+          scenarios.push({ key: cursor.primaryKey, value })
+        })
+        return { drugs, meta, scenarios }
       })
     } catch (error) {
       return {
@@ -541,6 +546,7 @@ export class DexieDrugRepository implements DrugRepository {
     return buildRecoveryArchive({
       drugs: snapshot.drugs,
       meta: snapshot.meta,
+      scenarios: snapshot.scenarios,
       storage: {
         databaseVersion: this.db.verno,
         persistenceVersion: PERSISTENCE_VERSION,
@@ -579,9 +585,15 @@ export class DexieDrugRepository implements DrugRepository {
       this.db.drugs,
       this.db.meta,
       this.db.revisions,
+      // Phase 45: saved scenarios are replaced in the SAME transaction, so a
+      // failure rolls back drugs, metadata and scenarios together.
+      this.db.scenarios,
       async () => {
         await this.db.drugs.clear()
         await this.db.meta.clear()
+        // An archive written before phase 45 has no scenarios: the store is
+        // then emptied, consistently with the rest of the snapshot.
+        await this.db.scenarios.clear()
         for (const row of parsed.archive.drugs) {
           await this.db.drugs.put(row.value as unknown as DrugRecord)
           // The id the write above used: the in-line `id` of the row
@@ -591,6 +603,9 @@ export class DexieDrugRepository implements DrugRepository {
         }
         for (const row of parsed.archive.meta) {
           await this.db.meta.put(row.value as unknown as LibraryMetadata)
+        }
+        for (const row of parsed.archive.scenarios) {
+          await this.db.scenarios.put(row.value as unknown as SavedScenario)
         }
       },
     )

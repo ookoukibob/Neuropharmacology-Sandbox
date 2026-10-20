@@ -14,7 +14,7 @@
  * after an explicit run, and it is cleared as soon as the draft changes.
  */
 import { AlertCircle, Info, Play, RotateCcw } from 'lucide-react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -38,14 +38,33 @@ import {
 import { ResultsPanel } from './components/ResultsPanel'
 import { chartsForResult } from './components/resultCharts'
 import { useSimulationRunner } from './useSimulationRunner'
+import { useScenarioLibrary } from './useScenarioLibrary'
+import { SavedScenariosPanel } from './components/SavedScenariosPanel'
+import type { ScenarioRepository } from '@/data/repositories/scenarioRepository'
 
 const SYNTHETIC_DISCLAIMER =
   'The example is a synthetic demonstration: V_c 10 L, V_p 20 L, CL 2 L/h, Q 3 L/h, a 100 mg bolus at 0 h, a 10 mg/h infusion from 2 h to 6 h and a 30 mg bolus at 8 h. These values are invented for testing the simulation engine — they are not real compound parameters, not clinical estimates and not evidence of clinical validity. Values you edit are your own inputs; the application does not verify their provenance.'
 
-export function SimulationView() {
+export function SimulationView({ scenarioRepository }: { readonly scenarioRepository: ScenarioRepository }) {
   const [draft, setDraft] = useState<SimulationDraft>(() => demoDraft())
   const { state, run, clear } = useSimulationRunner()
+  const library = useScenarioLibrary(scenarioRepository)
   const resultsRef = useRef<HTMLDivElement>(null)
+
+  // Dirty tracking compares the live draft with the loaded/saved snapshot.
+  // A read-only comparison: it never simulates and never writes.
+  useEffect(() => {
+    library.syncDirty(draft)
+  }, [draft, library])
+
+  /** A loaded saved draft replaces the editor draft and invalidates results. */
+  const replaceDraft = useCallback(
+    (next: SimulationDraft) => {
+      setDraft(next)
+      clear()
+    },
+    [clear],
+  )
 
   // Compile for error display only. This is a pure function of the draft; it
   // never calls the engine and never runs during typing into the simulation.
@@ -160,6 +179,8 @@ export function SimulationView() {
             edit((current) => ({ ...current, solver: { ...current.solver, [field]: value } }))
           }
         />
+
+        <SavedScenariosPanel library={library} draft={draft} onDraftReplaced={replaceDraft} />
 
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" data-testid="run-simulation">
