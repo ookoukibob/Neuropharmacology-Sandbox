@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useState } from 'react'
+import { lazy, Suspense, useCallback, useRef, useState } from 'react'
 import {
   describeSimulationEvent,
   formatNumber,
@@ -82,8 +82,13 @@ export function ResultsPanel({
 }
 
 /**
- * Accessible view switcher: a radio group (arrow keys move between views,
- * unavailable views are skipped), styled as compact tabs.
+ * Accessible view switcher: a radio group with a roving tabindex.
+ *
+ * - ArrowLeft / ArrowRight (and Up / Down) move the selection, wrap around and
+ *   skip unavailable views, and move DOM focus to the newly selected option;
+ * - Tab enters the group at the selected option (the only tabbable one);
+ * - unavailable options are disabled, skipped by the arrow keys and never
+ *   receive focus.
  */
 function ChartViewTabs({
   charts,
@@ -94,9 +99,32 @@ function ChartViewTabs({
   readonly active: ChartViewId
   readonly onSelect: (view: ChartViewId) => void
 }) {
-  const enabled = CHART_VIEWS.filter((item) => chartForView(charts, item.id) !== null)
+  const groupRef = useRef<HTMLDivElement>(null)
+  // Fallback tab stop when the selected view is unavailable: the first
+  // enabled option, so Tab always enters the group.
+  const fallbackTabStop = CHART_VIEWS.find((item) => chartForView(charts, item.id) !== null)?.id
+  const selectedUnavailable = chartForView(charts, active) === null
+
+  const selectAndFocus = (view: ChartViewId) => {
+    // Focus synchronously: the button already exists, so it can take focus
+    // before React re-renders (which only changes aria-checked/tabIndex).
+    groupRef.current
+      ?.querySelector<HTMLButtonElement>(`[data-testid="view-tab-${view}"]`)
+      ?.focus()
+    onSelect(view)
+  }
+
+  const move = (direction: 1 | -1) => {
+    const enabled = CHART_VIEWS.filter((item) => chartForView(charts, item.id) !== null).map((item) => item.id)
+    if (enabled.length === 0) return
+    const index = enabled.indexOf(active)
+    const next = enabled[(index + direction + enabled.length) % enabled.length]
+    if (next !== undefined) selectAndFocus(next)
+  }
+
   return (
     <div
+      ref={groupRef}
       role="radiogroup"
       aria-label="Chart view"
       className="flex flex-wrap items-center gap-1 border-b border-border pb-1"
@@ -105,6 +133,9 @@ function ChartViewTabs({
       {CHART_VIEWS.map((item) => {
         const available = chartForView(charts, item.id) !== null
         const checked = active === item.id
+        // Exactly one tabbable option: the selected view when it is
+        // available, otherwise the first available view.
+        const tabStop = available && (checked || (selectedUnavailable && item.id === fallbackTabStop))
         return (
           <button
             key={item.id}
@@ -112,15 +143,23 @@ function ChartViewTabs({
             role="radio"
             aria-checked={checked}
             disabled={!available}
-            tabIndex={checked || (!available && enabled[0]?.id === item.id) ? 0 : available ? -1 : -1}
-            onClick={() => onSelect(item.id)}
+            tabIndex={tabStop ? 0 : -1}
+            onClick={() => {
+              if (available) onSelect(item.id)
+            }}
             onKeyDown={(event) => {
-              if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-              event.preventDefault()
-              const index = enabled.findIndex((entry) => entry.id === (checked ? item.id : active))
-              const step = event.key === 'ArrowRight' ? 1 : -1
-              const next = enabled[(index + step + enabled.length) % enabled.length]
-              if (next !== undefined) onSelect(next.id)
+              if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+                event.preventDefault()
+                move(-1)
+              } else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+                event.preventDefault()
+                move(1)
+              } else if (event.key === 'Home' || event.key === 'End') {
+                event.preventDefault()
+                const enabled = CHART_VIEWS.filter((entry) => chartForView(charts, entry.id) !== null)
+                const target = event.key === 'Home' ? enabled[0] : enabled[enabled.length - 1]
+                if (target !== undefined) selectAndFocus(target.id)
+              }
             }}
             className={`rounded-t-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
               checked
@@ -135,7 +174,7 @@ function ChartViewTabs({
           </button>
         )
       })}
-      {enabled.length < CHART_VIEWS.length ? (
+      {CHART_VIEWS.some((item) => chartForView(charts, item.id) === null) ? (
         <span className="ml-2 text-xs text-muted-foreground" data-testid="view-availability-note">
           Infusion rate unavailable: this run has no infusion.
         </span>

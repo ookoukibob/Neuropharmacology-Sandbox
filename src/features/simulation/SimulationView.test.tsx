@@ -313,17 +313,64 @@ describe('SimulationView — chart views', () => {
     expect(within(group).getByRole('radio', { name: /amount/i })).toHaveAttribute('aria-checked', 'false')
   })
 
-  it('moves between views with the arrow keys', async () => {
+  it('moves selection and focus with the arrow keys, wrapping around', async () => {
     renderView()
     const user = await runOnce()
     await screen.findByTestId('stub-chart-concentration')
-    screen.getByTestId('view-tab-concentration').focus()
+    const tab = (view: string) => screen.getByTestId(`view-tab-${view}`)
+
+    tab('concentration').focus()
+    expect(tab('concentration')).toHaveFocus()
+
+    // Forward: focus AND checked state follow the selection.
     await user.keyboard('{ArrowRight}')
+    expect(tab('amount')).toHaveAttribute('aria-checked', 'true')
+    expect(tab('amount')).toHaveFocus()
     expect(await screen.findByTestId('stub-chart-amount')).toBeInTheDocument()
+
     await user.keyboard('{ArrowRight}')
-    expect(await screen.findByTestId('stub-chart-infusion-rate')).toBeInTheDocument()
+    expect(tab('infusion-rate')).toHaveAttribute('aria-checked', 'true')
+    expect(tab('infusion-rate')).toHaveFocus()
+
+    // Wrap-around from the last view back to the first.
     await user.keyboard('{ArrowRight}')
-    expect(await screen.findByTestId('stub-chart-concentration')).toBeInTheDocument()
+    expect(tab('concentration')).toHaveAttribute('aria-checked', 'true')
+    expect(tab('concentration')).toHaveFocus()
+
+    // Reverse navigation, including wrap-around backwards.
+    await user.keyboard('{ArrowLeft}')
+    expect(tab('infusion-rate')).toHaveAttribute('aria-checked', 'true')
+    expect(tab('infusion-rate')).toHaveFocus()
+    await user.keyboard('{ArrowLeft}')
+    expect(tab('amount')).toHaveAttribute('aria-checked', 'true')
+    expect(tab('amount')).toHaveFocus()
+    expect(control.calls).toHaveLength(1)
+  })
+
+  it('keeps Tab entering the group at the selected option', async () => {
+    renderView()
+    const user = await runOnce()
+    await screen.findByTestId('stub-chart-concentration')
+    const tab = (view: string) => screen.getByTestId(`view-tab-${view}`)
+    // Exactly one tab stop, and it is the selected view.
+    expect(tab('concentration')).toHaveAttribute('tabindex', '0')
+    expect(tab('amount')).toHaveAttribute('tabindex', '-1')
+    await user.click(tab('amount'))
+    expect(tab('amount')).toHaveAttribute('tabindex', '0')
+    expect(tab('concentration')).toHaveAttribute('tabindex', '-1')
+  })
+
+  it('Home and End jump to the first and last available views', async () => {
+    renderView()
+    const user = await runOnce()
+    await screen.findByTestId('stub-chart-concentration')
+    screen.getByTestId('view-tab-amount').focus()
+    await user.keyboard('{End}')
+    expect(screen.getByTestId('view-tab-infusion-rate')).toHaveFocus()
+    expect(screen.getByTestId('view-tab-infusion-rate')).toHaveAttribute('aria-checked', 'true')
+    await user.keyboard('{Home}')
+    expect(screen.getByTestId('view-tab-concentration')).toHaveFocus()
+    expect(screen.getByTestId('view-tab-concentration')).toHaveAttribute('aria-checked', 'true')
   })
 
   it('disables and explains the infusion view when the scenario has no infusion', async () => {
@@ -337,6 +384,17 @@ describe('SimulationView — chart views', () => {
     expect(tab).toHaveAttribute('aria-checked', 'false')
     expect(screen.getByTestId('view-availability-note')).toHaveTextContent(/no infusion/i)
     expect(screen.queryByTestId('stub-chart-infusion-rate')).not.toBeInTheDocument()
+
+    // Arrow keys skip the unavailable view and never focus it.
+    screen.getByTestId('view-tab-concentration').focus()
+    await user.keyboard('{ArrowRight}') // concentration -> amount
+    expect(screen.getByTestId('view-tab-amount')).toHaveFocus()
+    await user.keyboard('{ArrowRight}') // wraps past the disabled infusion view
+    expect(screen.getByTestId('view-tab-concentration')).toHaveFocus()
+    expect(screen.getByTestId('view-tab-infusion-rate')).not.toHaveFocus()
+    await user.keyboard('{ArrowLeft}') // backwards: wraps to amount, skipping infusion
+    expect(screen.getByTestId('view-tab-amount')).toHaveFocus()
+    expect(screen.getByTestId('view-tab-infusion-rate')).toHaveAttribute('tabindex', '-1')
   })
 
   it('keeps the event table and diagnostics visible regardless of the active view', async () => {
