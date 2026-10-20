@@ -406,3 +406,33 @@ test('a11y: each simulation chart view passes the axe scan', async ({ page }) =>
   })
   await scan(page, 'simulation result (infusion-rate view)')
 })
+
+test('a11y: the saved-scenario library passes the axe scans', async ({ page }) => {
+  await page.goto('/simulation')
+  await expect(page.getByTestId('scenarios-empty')).toBeVisible()
+  await scan(page, 'saved scenarios (empty)')
+
+  // Named validation error on the save field.
+  await page.getByTestId('scenario-name-input').fill('   ')
+  await page.getByTestId('scenario-save').click()
+  await expect(page.getByTestId('scenario-name-input')).toHaveAttribute('aria-invalid', 'true')
+  await scan(page, 'saved scenarios (name validation error)')
+
+  // A populated list with rename and delete controls.
+  await page.getByTestId('scenario-name-input').fill('Synthetic example copy')
+  await page.getByTestId('scenario-save').click()
+  await expect(page.getByTestId('scenario-list')).toContainText('Synthetic example copy')
+  await scan(page, 'saved scenarios (populated list)')
+
+  // Destructive confirmation.
+  await page.getByTestId('scenario-list').getByRole('button', { name: /^Delete “Synthetic example copy”$/ }).click()
+  await expect(page.locator('[data-testid^="delete-confirm-panel-"]')).toBeVisible()
+  await scan(page, 'saved scenarios (delete confirmation)')
+  await page.locator('[data-testid^="delete-cancel-"]').click()
+
+  // Unsaved-changes guard.
+  await page.getByTestId('clearance-value').fill('6')
+  await page.getByTestId('scenario-list').getByRole('button', { name: /^Load “Synthetic example copy”$/ }).click()
+  await expect(page.getByTestId('scenario-load-confirm')).toBeVisible()
+  await scan(page, 'saved scenarios (unsaved-changes guard)')
+})

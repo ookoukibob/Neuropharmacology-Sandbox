@@ -6,6 +6,29 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Added — saved simulation scenarios (phase 45)
+
+- **A Saved scenarios area on the simulation page.** The current draft can be
+  saved under a name (trimmed; empty rejected; duplicate names allowed),
+  re-saved over the loaded scenario, loaded back into the editor, renamed,
+  duplicated into an independent record, and deleted after an explicit
+  confirmation that names the scenario and states the editor draft is
+  unaffected. The list shows names and modification times, newest first.
+- **Drafts are stored faithfully**, not compiled: every editable field,
+  event row, unit and solver setting is kept as the editor holds it,
+  including blank or currently unparseable values. No simulation output is
+  ever saved.
+- **Unsaved-changes guard**: loading another scenario with edits asks first;
+  cancelling (or Escape) keeps the draft. Loading clears any previous
+  result, and no data-management action runs the simulation.
+- **Storage**: an additive schema v5 `scenarios` table in the existing
+  IndexedDB database; `.npsb` backups now carry saved scenarios as an
+  optional array, so archives written before this phase still restore (as an
+  empty scenario library) and libraries without scenarios produce the
+  unchanged seven-key archive.
+
+## [Unreleased]
+
 ### Fixed — simulation charts no longer overlap the surrounding text (phase 44)
 
 - **Root cause:** the chart wrapper was a fixed 360 px box with

@@ -489,6 +489,40 @@ separate presentation state and never invoke the engine. The report →
 chart mapping is unchanged from §4.3b (ADR-26); the editor adds no
 calculation (ADR-27).
 
+### 4.3d Saved scenarios (phase 45)
+
+```
+SimulationView (draft state)  ──passed as a prop──▶  SavedScenariosPanel
+        │                                                    │
+        │                        useScenarioLibrary (workflow: list, loaded id,
+        │                        dirty guard, busy, feedback)
+        │                                                    │
+        ▼                                                    ▼
+  draft state                             ScenarioRepository (Dexie)
+  result cleared on load                   v5 `scenarios` table, same
+                                           database and `.npsb` snapshot
+```
+
+- **Layering.** The panel renders state and collects intent; the
+  `useScenarioLibrary` hook orchestrates the workflow; `DexieScenarioRepository`
+  owns persistence. The page injects the repository from the app composition
+  root (`src/app/scenarioRepository.ts`), so components never import the
+  database module and tests inject an in-memory double.
+- **Saved scenarios are named copies of the draft**, not results: the whole
+  `SimulationDraft` (string fields, row keys, units, solver settings) is
+  stored verbatim, including blank or unparseable values. No samples, charts
+  or diagnostics are persisted.
+- **Data management never simulates.** Saving, loading, renaming,
+  duplicating, deleting and refreshing call only the repository; `simulate()`
+  runs solely from the explicit Run action. Loading replaces the draft and
+  clears any previous result through the existing invalidation path.
+- **Guards.** Loading over a draft with unsaved edits parks the request and
+  asks for confirmation; cancelling (or Escape) keeps the draft. Dirty state
+  is a deterministic JSON snapshot comparison against the loaded/saved
+  baseline (never object identity); a draft that was never loaded or saved
+  counts as unsaved once edited.
+- **Deletion** is an inline confirmation naming the scenario and stating
+  that the editor draft is not affected; Escape cancels and focus returns.
 ### 4.4 Import (all-or-nothing)
 
 ```

@@ -2,6 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SimulationView } from './SimulationView'
+import { FakeScenarioRepository } from './tests/fakeScenarioRepository'
 import { DEMO_SCENARIO } from './demoScenario'
 
 /**
@@ -44,14 +45,17 @@ vi.mock('@/engine/simulation/simulate', async (importOriginal) => {
 })
 
 const runButton = () => screen.getByTestId('run-simulation')
-const renderView = () => render(<SimulationView />)
+const renderView = () => render(<SimulationView scenarioRepository={repository} />)
 const runOnce = async () => {
   const user = userEvent.setup()
   await user.click(runButton())
   return user
 }
 
+let repository: FakeScenarioRepository
+
 beforeEach(() => {
+  repository = new FakeScenarioRepository()
   control.calls.length = 0
   control.failureFor = null
 })
@@ -301,6 +305,22 @@ describe('SimulationView — chart views', () => {
     expect(await screen.findByTestId('stub-chart-concentration')).toBeInTheDocument()
     // Selecting a view never runs the simulation again.
     expect(control.calls).toHaveLength(1)
+  })
+
+  it('the deferred post-run focus never steals focus from a control the user moved to', async () => {
+    renderView()
+    const user = await runOnce()
+    await screen.findByTestId('stub-chart-concentration')
+    // The run's focus move is deferred to an animation frame. Moving focus
+    // to a tab before that frame must not be undone, or the next keystroke
+    // lands on the results container and is lost.
+    const tab = screen.getByTestId('view-tab-concentration')
+    tab.focus()
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    expect(tab).toHaveFocus()
+    await user.keyboard('{ArrowRight}')
+    expect(screen.getByTestId('view-tab-amount')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByTestId('view-tab-amount')).toHaveFocus()
   })
 
   it('exposes the view switcher as a radio group with an accessible name', async () => {

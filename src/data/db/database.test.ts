@@ -77,7 +77,7 @@ describe('SandboxDatabase — fresh database', () => {
   it('opens empty at the current schema version, with empty source tables', async () => {
     const db = new SandboxDatabase(freshName())
     try {
-      expect(db.verno).toBe(4)
+      expect(db.verno).toBe(5)
       expect(await db.drugs.count()).toBe(0)
       expect(await db.meta.count()).toBe(0)
       // The on-demand source tables exist but are never seeded at startup.
@@ -86,6 +86,8 @@ describe('SandboxDatabase — fresh database', () => {
       // Phase 20: the revisions table is equally empty on a fresh run —
       // tokens only ever come from writes through the repository.
       expect(await db.revisions.count()).toBe(0)
+    // Phase 45: the saved-scenario table is additive and opens empty too.
+    expect(await db.scenarios.count()).toBe(0)
     } finally {
       await db.delete()
     }
@@ -126,7 +128,7 @@ describe('SandboxDatabase — v1 → v2 → v3 → v4 migration', () => {
     //    version(3) and version(4) upgrades.
     const db = new SandboxDatabase(name)
     try {
-      expect(db.verno).toBe(4)
+      expect(db.verno).toBe(5)
 
       // Bookkeeping was backfilled…
       const plain = await db.drugs.get('fixture-drug-1')
@@ -206,7 +208,7 @@ describe('SandboxDatabase — v2 → v3 → v4 migration', () => {
 
     const db = new SandboxDatabase(name)
     try {
-      expect(db.verno).toBe(4)
+      expect(db.verno).toBe(5)
 
       // Existing data is untouched — record shape, bookkeeping and the
       // unknown future field all survive byte-for-byte.
@@ -225,6 +227,8 @@ describe('SandboxDatabase — v2 → v3 → v4 migration', () => {
       // invents no tokens, so every pre-existing record reads as the
       // documented "never revised" revision 0 until its first edit.
       expect(await db.revisions.count()).toBe(0)
+    // Phase 45: the saved-scenario table is additive and opens empty too.
+    expect(await db.scenarios.count()).toBe(0)
 
       // …and they are immediately usable (id + compoundId indexes live).
       const compound = {
@@ -288,7 +292,7 @@ describe('SandboxDatabase — v3 → v4 migration (phase 20)', () => {
 
     const db = new SandboxDatabase(name)
     try {
-      expect(db.verno).toBe(4)
+      expect(db.verno).toBe(5)
 
       // Drug rows and metadata survive byte-for-byte — the v4 upgrade is
       // purely additive and rewrites nothing.
@@ -299,6 +303,8 @@ describe('SandboxDatabase — v3 → v4 migration (phase 20)', () => {
       // upgrade, so existing records simply read as revision 0 until the
       // repository writes them.
       expect(await db.revisions.count()).toBe(0)
+    // Phase 45: the saved-scenario table is additive and opens empty too.
+    expect(await db.scenarios.count()).toBe(0)
 
       // …and the table is immediately usable with its `id` key.
       await db.revisions.put({ id: 'fixture-drug-1', revision: 1 })

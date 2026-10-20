@@ -20,10 +20,17 @@ export const BACKUP_MIME_TYPE = 'application/json;charset=utf-8'
 export const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 export const MAX_DRUG_ROWS = 100_000
 export const MAX_META_ROWS = 1_000
+export const MAX_SCENARIO_ROWS = 10_000
 export const MAX_SPECIAL_NUMBER_ANNOTATIONS = 1_000_000
 export const MAX_DEPTH = 100
 
-export type RecoveryStoreName = 'drugs' | 'meta'
+/**
+ * Stores an archive entry can belong to. `scenarios` (saved simulation
+ * scenarios) is carried by the OPTIONAL `scenarios` envelope array, so
+ * archives written before phase 45 — which have no such key — remain
+ * restorable and are read as "no saved scenarios".
+ */
+export type RecoveryStoreName = 'drugs' | 'meta' | 'scenarios'
 
 /** The four JSON-unrepresentable numeric shapes carried by the sidecar. */
 export type SpecialNumberKind = '-0' | 'NaN' | 'Infinity' | '-Infinity'
@@ -51,6 +58,8 @@ export interface RecoveryCounts {
   readonly readableAtExport: number
   readonly quarantinedAtExport: number
   readonly metaRows: number
+  /** Saved-scenario rows (phase 45). Absent in archives written before it. */
+  readonly scenarioRows?: number
 }
 
 /** Informational diagnostics recorded by the exporting build (§4.1). */
@@ -74,6 +83,12 @@ export interface RecoveryArchive {
   readonly counts: RecoveryCounts
   readonly drugs: readonly RecoveryEntry[]
   readonly meta: readonly RecoveryEntry[]
+  /**
+   * Saved simulation scenarios (phase 45). OPTIONAL and additive: archives
+   * without the key restore with an empty scenario store, so the version
+   * space need not change for a purely additive store.
+   */
+  readonly scenarios?: readonly RecoveryEntry[]
 }
 
 export type RecoveryErrorCode =

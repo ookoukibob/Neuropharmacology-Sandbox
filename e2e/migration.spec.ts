@@ -73,8 +73,12 @@ test.setTimeout(90_000)
 const NATIVE_V1 = 10
 const NATIVE_V2 = 20
 const NATIVE_V3 = 30
-/** Native encoding of the current application schema (declared v4). */
-const NATIVE_V4 = 40
+/**
+ * The application's current schema: declared v5 (phase 45 adds the additive
+ * `scenarios` store) → native 50. The historical seeded versions (10/20/30)
+ * are unchanged; only the version the app must now reach has moved.
+ */
+const NATIVE_V5 = 50
 
 interface SeedIndexSpec {
   name: string
@@ -122,13 +126,15 @@ const STORES_V3: SeedStoreSpec[] = [
   },
 ]
 
-/** The current v4 schema the app must reach (de95c95). */
+/** The current schema the app must reach: v4 (de95c95) plus additive v5. */
 const EXPECTED_V4_STORES = {
   drugs: ['origin', 'updatedAt'],
   meta: [],
   compounds: [],
   observations: ['compoundId'],
   revisions: [],
+  // Added by phase 45 (schema v5): saved simulation scenarios.
+  scenarios: ['updatedAt'],
 }
 
 /* ------------------------------------------------------------------ */
@@ -529,7 +535,7 @@ test('v1 database upgrades to v4 in real Chromium: bookkeeping backfill only; sc
   // ⇔ native 40 (Dexie ×10 — see header). Any other declared version
   // would yield a different native number; the store set asserted next is
   // the semantic content of schema version 4.
-  expect(migrated.version).toBe(NATIVE_V4)
+  expect(migrated.version).toBe(NATIVE_V5)
   expect(migrated.stores).toEqual(EXPECTED_V4_STORES)
 
   // Row A: only the documented keys are added; everything else stays
@@ -560,6 +566,8 @@ test('v1 database upgrades to v4 in real Chromium: bookkeeping backfill only; sc
   expect(migrated.rows['compounds']).toEqual([])
   expect(migrated.rows['observations']).toEqual([])
   expect(migrated.rows['revisions']).toEqual([])
+  // Phase 45: the additive scenarios store is equally empty after migration.
+  expect(migrated.rows['scenarios']).toEqual([])
 
   // (4) Reopen: a fresh page load + a fresh raw connection cause no further
   // mutation (the upgrade is idempotent at v4).
@@ -596,7 +604,7 @@ test('v2 database upgrades to v4 in real Chromium: stored rows unchanged under d
   // ⇔ native 40 (Dexie ×10 — see header). Any other declared version
   // would yield a different native number; the store set asserted next is
   // the semantic content of schema version 4.
-  expect(migrated.version).toBe(NATIVE_V4)
+  expect(migrated.version).toBe(NATIVE_V5)
   expect(migrated.stores).toEqual(EXPECTED_V4_STORES)
 
   // The v1→v2 backfill must NOT run on an already-v2 database: every row
@@ -608,6 +616,8 @@ test('v2 database upgrades to v4 in real Chromium: stored rows unchanged under d
   expect(migrated.rows['compounds']).toEqual([])
   expect(migrated.rows['observations']).toEqual([])
   expect(migrated.rows['revisions']).toEqual([])
+  // Phase 45: the additive scenarios store is equally empty after migration.
+  expect(migrated.rows['scenarios']).toEqual([])
 
   await page.goto('/library')
   await expectHydrated(page, ['NV23 Synthetic V2 Delta', 'NV23 Synthetic V2 Epsilon'])
@@ -648,7 +658,7 @@ test('v3 database upgrades to v4 in real Chromium: source-data rows preserved, r
   // ⇔ native 40 (Dexie ×10 — see header). Any other declared version
   // would yield a different native number; the store set asserted next is
   // the semantic content of schema version 4.
-  expect(migrated.version).toBe(NATIVE_V4)
+  expect(migrated.version).toBe(NATIVE_V5)
   expect(migrated.stores).toEqual(EXPECTED_V4_STORES)
 
   // Every pre-existing store's raw snapshot remains deeply equal — no
@@ -660,6 +670,8 @@ test('v3 database upgrades to v4 in real Chromium: source-data rows preserved, r
   // The only change is the new, empty revisions store (existing records
   // read as revision 0 until their first write — no rows invented).
   expect(migrated.rows['revisions']).toEqual([])
+  // Phase 45: the additive scenarios store is equally empty after migration.
+  expect(migrated.rows['scenarios']).toEqual([])
 
   await page.goto('/library')
   await expectHydrated(page, ['NV23 Synthetic V3 Zeta'])

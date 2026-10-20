@@ -95,6 +95,9 @@ describe('buildRecoveryArchive (export)', () => {
       ],
     })
     if (!result.ok) throw new Error('unreachable')
+    // Phase 45: an input without scenarios archives the exact pre-phase-45
+    // counts — neither the `scenarios` array nor `scenarioRows` is invented,
+    // so an unchanged library still produces the v1 seven-key envelope.
     expect(result.counts).toEqual({
       drugRows: 2,
       readableAtExport: 1,
@@ -307,7 +310,7 @@ describe('parseRecoveryArchive (restore validation battery)', () => {
     expect(rejection(parseRecoveryArchive('not json'), 'ARCHIVE_PARSE')).toBeDefined()
   })
 
-  it('requires the exact seven-key envelope (ARCHIVE_ENVELOPE_SHAPE)', () => {
+  it('requires the seven v1 keys, allowing only the additive scenarios key', () => {
     expect(rejection(parseRecoveryArchive('[]'), 'ARCHIVE_ENVELOPE_SHAPE').message).toContain(
       'root must be a JSON object',
     )
