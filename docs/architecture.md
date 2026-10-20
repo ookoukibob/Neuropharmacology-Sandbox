@@ -460,6 +460,16 @@ a bolus is drawn as a vertical jump rather than smoothed into an interval
 (ADR-26). Errors replace results — a failed or unreportable run leaves no
 chart on screen.
 
+**Chart sizing (phase 44).** `SimulationChart` owns its Plotly size: the
+container is a `min-width: 0` grid cell with a deliberate height (320 px,
+260 px below 640 px width), the layout declares `autosize: false` with the
+measured width and height, and a `ResizeObserver` relays out on container
+changes. Before this, Plotly fell back to its 450 px default inside a
+360 px fixed-height box and spilled over the note, event table and
+diagnostics below it. Results show one analysis view at a time
+(concentration, amount, infusion rate) selected through a radio-group
+switcher; switching is presentation only and never calls the engine.
+
 ### 4.3c Editable scenario (phase 43)
 
 ```

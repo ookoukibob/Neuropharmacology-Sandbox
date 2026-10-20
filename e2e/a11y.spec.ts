@@ -381,6 +381,28 @@ test('a11y: the simulation scenario editor passes the axe scans', async ({ page 
   await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
     timeout: 30_000,
   })
-  await expect(page.getByTestId('toggle-infusionRate')).toBeDisabled()
-  await scan(page, 'simulation editor (infusion-rate chart unavailable)')
+  await expect(page.getByTestId('view-tab-infusion-rate')).toBeDisabled()
+  await expect(page.getByTestId('view-availability-note')).toBeVisible()
+  await scan(page, 'simulation editor (infusion-rate view unavailable)')
+})
+
+test('a11y: each simulation chart view passes the axe scan', async ({ page }) => {
+  await page.goto('/simulation')
+  await page.getByTestId('run-simulation').click()
+  await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+  await scan(page, 'simulation result (concentration view)')
+
+  await page.getByTestId('view-tab-amount').click()
+  await expect(page.getByTestId('simulation-chart-amount').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+  await scan(page, 'simulation result (amount view)')
+
+  await page.getByTestId('view-tab-infusion-rate').click()
+  await expect(page.getByTestId('simulation-chart-infusion-rate').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+  await scan(page, 'simulation result (infusion-rate view)')
 })

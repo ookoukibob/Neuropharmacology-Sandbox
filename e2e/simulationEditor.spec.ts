@@ -84,8 +84,9 @@ test.describe('simulation scenario editor', () => {
     const [pre, post] = jump.ys as [number, number]
     expect(post - pre).toBeCloseTo(2, 6)
 
-    // 9. The infusion-rate chart shows the simulated schedule: 10 mg/h from
+    // 9. The infusion-rate view shows the simulated schedule: 10 mg/h from
     // the example session and 8 mg/h from the added one.
+    await page.getByTestId('view-tab-infusion-rate').click()
     const rateChart = page.getByTestId('simulation-chart-infusion-rate')
     await expect(rateChart.locator('.js-plotly-plot')).toBeVisible({ timeout: 30_000 })
     const rates = await page.evaluate(() => {
@@ -103,15 +104,17 @@ test.describe('simulation scenario editor', () => {
     const at12Post = (rates.y as number[])[(rates.x as number[]).flatMap((x, i) => (x === 12 ? [i] : []))[1] ?? -1]
     expect(at12Post).toBeCloseTo(8, 9)
 
-    // 10. Hide and restore the amount chart through its toggle.
-    await expect(page.getByTestId('simulation-chart-amount')).toBeVisible()
-    await page.getByTestId('toggle-amount').uncheck()
-    await expect(page.getByTestId('simulation-chart-amount')).toHaveCount(0)
-    await page.getByTestId('toggle-amount').check()
+    // 10. Switching views shows the amount chart and never re-runs the
+    // simulation: the run label is unchanged.
+    await page.getByTestId('view-tab-amount').click()
     await expect(page.getByTestId('simulation-chart-amount').locator('.js-plotly-plot')).toBeVisible({
       timeout: 30_000,
     })
-    // Toggling never re-runs the simulation: the run label is unchanged.
+    await expect(page.getByTestId('simulation-chart-concentration')).toHaveCount(0)
+    await page.getByTestId('view-tab-concentration').click()
+    await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
+      timeout: 30_000,
+    })
     await expect(page.getByTestId('simulation-summary')).toContainText('Run 1')
 
     // 11. Reset restores the declared example values.

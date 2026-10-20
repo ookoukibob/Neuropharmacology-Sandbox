@@ -6,6 +6,32 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Fixed — simulation charts no longer overlap the surrounding text (phase 44)
+
+- **Root cause:** the chart wrapper was a fixed 360 px box with
+  `responsive: true` and no explicit Plotly height, so Plotly applied its
+  450 px default. The 90 px overflow covered the caption note, event table
+  and diagnostics, and the graph kept its initial width after a resize.
+- `SimulationChart` now owns its size: `autosize: false` with the measured
+  width and height, a deliberate 320 px plotting area (260 px on narrow
+  viewports), `min-width: 0` on the container and a `ResizeObserver` for
+  relayout. Verified by geometry assertions at 1280 px and 420 px.
+
+### Changed — simulation results are an interactive analysis workspace (phase 44)
+
+- One large chart with a keyboard-operable view switcher (concentration,
+  amount, infusion rate) instead of several stacked charts; switching is
+  presentation only and never re-runs the simulation.
+- Drag to zoom, double-click or the modebar to reset, scroll to zoom, and
+  a compact single-row toolbar that cannot wrap over the legend.
+- Hover text carries time, value, unit and the pre/post-event side; dosing
+  events remain dotted vertical reference lines and the event table and
+  diagnostics stay available beside every view.
+- The infusion-rate view stays unavailable (and explains why) when the run
+  has no infusion; no zero-rate line is invented.
+
+## [Unreleased]
+
 ### Added — general simulation scenario editor (phase 43)
 
 - **The simulation page is now an editable scenario editor.** Model

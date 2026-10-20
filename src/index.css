@@ -1,4 +1,4 @@
-﻿@import "tailwindcss";
+@import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
@@ -128,3 +128,25 @@
   }
 }
 
+/*
+ * Simulation charts (phase 44). The modebar is a single row of small icons;
+ * it must never wrap into a second row that would overlap the legend or the
+ * plot area on narrow viewports, and it must not steal scroll gestures from
+ * the page.
+ */
+.simulation-chart .modebar {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 2px;
+  padding: 0;
+}
+
+.simulation-chart .modebar-group {
+  display: flex;
+  gap: 0;
+}
+
+.simulation-chart .modebar-btn {
+  padding: 2px 3px;
+  line-height: 1;
+}
