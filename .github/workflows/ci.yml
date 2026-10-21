@@ -4,11 +4,15 @@ name: CI
 # typecheck, lint, unit tests, build — plus the Playwright smoke test
 # and a separate blocking coverage run (`npm run test:coverage`).
 # Deliberately minimal: no deployment, no release automation, no containers.
+# Runs once per code push on any branch (including pull-request branches) and
+# on explicit manual dispatch only — no pull_request re-run and no schedule,
+# so nothing runs without a new commit. Job names back the required checks.
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch:
 
 jobs:
   gates:
