@@ -4,6 +4,34 @@ All notable changes to Neuropharmacology Sandbox are documented here.
 Versions follow Semantic Versioning; this project is a source-available,
 noncommercial static web application (see [LICENSE](LICENSE)).
 
+### Added — optional effect-site and receptor-occupancy analysis (phase 46)
+
+- **An opt-in effect-site model on top of the existing dynamic PK simulation.**
+  Given an explicitly supplied unbound fraction f_u, equilibration rate k_e0 and
+  equilibrium dissociation constant K_d, the app computes an effect-site
+  concentration Ce and a single-site occupancy Ce/(Ce + K_d) for every emitted
+  PK sample. Nothing is defaulted: a missing parameter is an error, Ki/IC50/EC50
+  are never substituted for K_d, and a molar K_d requires an explicit molecular
+  weight with provenance.
+- **Two new analysis views**: effect-site concentration (mg/L) and receptor
+  occupancy (a dimensionless fraction). Both appear only when the run produced
+  them, and switching views never re-runs the simulation.
+- **Diagnostics explain the model**: the equations, the values that run used
+  including any K_d unit conversion, the piecewise-linear reconstruction of
+  unbound concentration between samples (exact for that reconstruction, not for
+  the true continuous trajectory), the pre-event initial condition, bolus
+  continuity, and that Ce is excluded from drug-mass accounting.
+- **Saved scenarios and `.npsb` backups carry the effect-site settings.** Older
+  scenarios and older archives restore unchanged, as PK-only drafts; no database
+  migration is required.
+
+### Changed — scientific boundaries
+
+- The effect site is a generic equilibration compartment, NOT a brain or CNS
+  model, and occupancy is a binding ratio, not an effect, efficacy or clinical
+  prediction. The one-compartment convergence measurement is not generalised to
+  every two-compartment trajectory.
+
 ## [Unreleased]
 
 ### Added — saved simulation scenarios (phase 45)

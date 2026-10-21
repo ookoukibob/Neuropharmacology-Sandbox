@@ -88,6 +88,12 @@ and unverified data. It never invents pharmacological parameters.
   scans (WCAG 2.x A/AA) over the main screens in the E2E suite.
 - Fully static: no backend, no accounts, no cloud sync.
 
+- **Effect-site and receptor occupancy (optional, phase 46).** Enter an unbound
+  fraction, equilibration rate and equilibrium dissociation constant and the
+  simulation also reports an effect-site concentration Ce and a single-site
+  binding ratio Ce/(Ce + Kd). This is a mathematical model variable and a
+  binding ratio — not a measured brain concentration, an effect, or a
+  prediction of clinical outcome — and nothing is filled in for you.
 ## First public preview
 
 The first public preview is versioned **`v0.1.0-alpha.1`** — a
