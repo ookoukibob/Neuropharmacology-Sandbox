@@ -29,10 +29,12 @@ and unverified data. It never invents pharmacological parameters.
 - A local drug library: create, edit and delete records in the browser
   (IndexedDB). Every stored scientific value carries explicit provenance;
   the application never invents a parameter or a source.
-- The three MVP scientific models — first-order one-compartment
-  elimination, single-site receptor occupancy, Hill/Emax dose–response —
-  calculated only from explicit user-entered parameters or values
-  explicitly loaded from the library.
+- Explicit-input calculation models: first-order one-compartment
+  elimination, single-site receptor occupancy, Hill/Emax dose–response,
+  and a dynamic two-compartment IV pharmacokinetic simulation with an
+  optional effect-site equilibration and receptor-occupancy analysis.
+  Calculations use only supplied parameters or values explicitly loaded
+  from the library.
 - Structured calculation traces: formula, substituted inputs,
   intermediate steps, assumptions and warnings for every result.
 - Chart-agnostic curve data sampled by the engine over an explicit range,
@@ -94,26 +96,28 @@ and unverified data. It never invents pharmacological parameters.
   binding ratio Ce/(Ce + Kd). This is a mathematical model variable and a
   binding ratio — not a measured brain concentration, an effect, or a
   prediction of clinical outcome — and nothing is filled in for you.
-## First public preview
+## Release artifacts and known limitations
 
-The first public preview is versioned **`v0.1.0-alpha.1`** — a
-**pre-release**, not a stable `1.0.0`. Preview scope and known
-limitations are tracked in [CHANGELOG.md](CHANGELOG.md); the auditable
-release procedure lives in [docs/releasing.md](docs/releasing.md).
+Published versioned build archives and their SHA-256 checksums are listed on
+[GitHub Releases](https://github.com/ookoukibob/Neuropharmacology-Sandbox/releases).
+For reproducibility, use the archive attached to the exact release tag; the
+`main` branch and any hosting deployment may be ahead of a published artifact.
 
-What preview users should know up front:
+**NV-2 remains an open verification gap.** Migration tests exercise authentic
+historical IndexedDB schema layouts using synthetic records in real Chromium,
+but no authentic pre-v4 user database has been obtained or inspected. This is
+a limitation of the available evidence, not a claim that a migration defect
+has been observed. Before upgrading a browser profile containing older data,
+export a `.npsb` recovery backup and keep a copy outside the browser profile.
 
-- **NV-2 remains open:** no authentic historical user database has been
-  obtained or inspected. Schema-migration evidence comes from synthetic
-  legacy databases only — historical-database compatibility has **not**
-  been validated against real user data.
-- There is **no bundled authoritative pharmacology database**. External
-  data (PubChem/ChEMBL) are retrieved only when you explicitly request
-  them, and imported records keep their source attribution.
-- Model results are mathematical outputs under declared inputs and
-  assumptions — not clinical predictions and not medical advice.
-- Your data stay in this browser's local storage (see
-  [Data storage and backup](#data-storage-and-backup) below).
+Other boundaries:
+
+- There is no bundled authoritative pharmacology database. PubChem and ChEMBL
+  data are retrieved only when explicitly requested and retain source attribution.
+- Results are mathematical outputs under declared inputs and assumptions, not
+  clinical predictions, dose advice, diagnosis, or medical decision support.
+- Scientific records stay in the current browser profile and origin. There is
+  no application account, backend, or cloud-sync service.
 
 ## Data storage and backup
 
@@ -175,43 +179,43 @@ deployed site:
 
 ## Current status
 
-Development proceeds in numbered review phases. The detailed phase
-record (**Phases 1–33**, moved verbatim from this page) lives in
+Development proceeds in numbered review phases. The full phase record
+(**Phases 1–46**) lives in
 [docs/development-history.md](docs/development-history.md); the
-dependency-ordered roadmap lives in
-[docs/architecture.md](docs/architecture.md) §6. Milestones at a
-glance:
+dependency-ordered roadmap lives in [docs/architecture.md](docs/architecture.md)
+§6. Milestones at a glance:
 
 | Milestone | Record |
 | --- | --- |
-| Phases 1–9 — core application: architecture, calculation engine, drug library, calculator + charts, import/export, accessibility, dependency security audit, recovery backup, settings | done |
-| Phases 10–17 — data-integrity audits and remediations (DI-01…DI-04, GAP-1, GAP-2, GAP-3) | done |
-| Phase 18 — on-demand PubChem/ChEMBL data sources with per-record provenance, licensing and explicit import (plus 18G/18I integrity closures) | done |
-| Phases 19–24 — multi-tab write safety (GAP-4, ADR-21), NV-1 crash durability, NV-3 CSV contract, NV-2 evidence upgrades and the authorized-validation runbook | done |
-| Phases 25–32 — evidence and scientific-calculation audits, curve-validation E2E regression, coverage reporting and the blocking CI coverage gate | done |
-| Phase 33 — repository governance: protected `main` with four required CI checks (`Quality gates`, `Coverage`, `E2E smoke test`, `NV-1 crash durability`) | done |
-| Phases 34–35.1 — first public preview preparation and release-notes consistency (PRs #20 and #21) | `v0.1.0-alpha.1` published 2026-10-13 |
+| Phases 1–9 — core application: architecture, calculation engine, drug library, calculator and charts, import/export, accessibility, dependency security audit, recovery backup, settings | done |
+| Phases 10–17 — data-integrity audits, remediations and regression coverage | done |
+| Phase 18 — on-demand PubChem/ChEMBL sources with provenance, licensing and explicit import | done |
+| Phases 19–24 — multi-tab write safety, NV-1 crash durability, NV-3 CSV contract, NV-2 evidence upgrade and authorized-validation procedure | done; NV-2 remains open |
+| Phases 25–32 — evidence and scientific-calculation audits, curve-validation E2E regression, coverage reporting and blocking coverage gate | done |
+| Phase 33 — protected `main` and four required CI checks | done |
+| Phases 34–35.1 — first public preview and release-notes consistency | `v0.1.0-alpha.1` published 2026-10-13 |
+| Phases 36–46 — further integrity and numerical audits, two-compartment IV PK simulation, editable and saved scenarios, and optional effect-site/occupancy analysis | done |
 
-Known open issues are listed under "Known limitations" in
-[CHANGELOG.md](CHANGELOG.md) — above all **NV-2** (no authentic
-historical user database has been obtained or inspected; see
-[First public preview](#first-public-preview) above) and the documented
-multi-tab edit-conflict recovery workflow (ADR-21).
+The only remaining audit verification gap is **NV-2**: no authentic historical
+user database has been available for migration testing. Synthetic legacy
+databases have been tested in real Chromium; see
+[docs/data-integrity-audit.md](docs/data-integrity-audit.md) and
+[docs/nv2-authorized-validation.md](docs/nv2-authorized-validation.md).
+Concurrent edits from multiple tabs are rejected safely rather than silently
+overwritten; users must reconcile a stale draft explicitly (ADR-21).
 
-All quality gates run locally and in CI (`.github/workflows/ci.yml`):
-typecheck, lint, tests, build, a blocking coverage run, and the
-Playwright end-to-end and crash-durability suites.
-
-See [docs/architecture.md](docs/architecture.md) for the roadmap and
-[docs/spec-review.md](docs/spec-review.md) for specification issues found
-during design, with proposed corrections.
+The required quality gates are defined in
+[.github/workflows/ci.yml](.github/workflows/ci.yml): strict type checks,
+lint, unit/integration tests, production build, blocking coverage, Playwright
+E2E, and browser-process crash-durability tests. CI runs on branch pushes and
+manual dispatch, not on a scheduled timer or pull-request event.
 
 ## Quick start
 
 Prerequisites: Node.js 22+ and npm (matches CI).
 
 ```bash
-npm install            # install dependencies
+npm ci                 # install the locked dependency tree
 npm run dev            # start the dev server (Vite)
 npm test               # run unit + schema tests (Vitest)
 npm run typecheck      # strict TypeScript check (tsc -b)
@@ -224,12 +228,13 @@ npm run test:crash     # NV-1 crash-durability suite (supervised Chromium, dedic
 ```
 
 The build output in `dist/` is a static frontend deployable to Cloudflare
-Pages, GitHub Pages or any equivalent static host. There is no backend,
-no API key and no build-time service dependency — the initial shell
-renders from static assets alone. Packaged preview builds (static ZIP
-plus a SHA-256 checksum) are published as **pre-release** GitHub Releases
-following [docs/releasing.md](docs/releasing.md); nothing has been
-publicly released until that page says so.
+Pages, GitHub Pages or any equivalent static host. There is no application
+backend, no API key and no build-time service dependency — the initial shell
+renders from static assets alone. GitHub Releases provide versioned ZIP
+archives plus SHA-256 checksums. Hosting deployments are a separate channel
+and may track a branch rather than a release tag; use the tagged release
+assets when you need a reproducible version. See
+[docs/releasing.md](docs/releasing.md).
 
 ## Documentation
 
@@ -243,11 +248,12 @@ publicly released until that page says so.
 | [docs/validation.md](docs/validation.md) | Layered validation and the import pipeline |
 | [docs/data-sources.md](docs/data-sources.md) | On-demand PubChem/ChEMBL retrieval: three-layer model, provenance/licensing, explicit selection and import rules |
 | [docs/testing.md](docs/testing.md) | Test strategy, required test matrix, round-trip testing |
-| [docs/releasing.md](docs/releasing.md) | Release procedure for the static build: checks, tagging, ZIP + SHA-256, GitHub pre-release |
-| [CHANGELOG.md](CHANGELOG.md) | Release notes per version, starting with the `0.1.0-alpha.1` preview |
+| [docs/releasing.md](docs/releasing.md) | Stable and prerelease procedures for tagged static builds, checks, ZIP + SHA-256 verification |
+| [CHANGELOG.md](CHANGELOG.md) | Versioned release notes and known limitations |
 | [docs/decisions.md](docs/decisions.md) | Architecture decision records (ADR) with rationale |
 | [docs/spec-review.md](docs/spec-review.md) | Weaknesses in the specification and proposed corrections |
-| [docs/development-history.md](docs/development-history.md) | The numbered phase record (Phases 1–33), preserved in full |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, scientific contribution principles and verification checklist |
+| [docs/development-history.md](docs/development-history.md) | The numbered phase record (Phases 1–46), preserved in full |
 
 ## Scientific boundary
 
