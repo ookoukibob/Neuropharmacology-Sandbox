@@ -35,7 +35,14 @@ import type {
 // Public contract
 // ---------------------------------------------------------------------------
 
-export type SimulationChartId = 'concentration' | 'amount' | 'infusion-rate'
+export type SimulationChartId =
+  | 'concentration'
+  | 'amount'
+  | 'infusion-rate'
+  /** Effect-site concentration (phase 46; only when the scenario opted in). */
+  | 'effect-site'
+  /** Receptor occupancy as a dimensionless fraction (phase 46). */
+  | 'occupancy'
 
 /** One chart-ready series: parallel x/y arrays plus the full source samples. */
 export interface SimulationTrace {
@@ -353,6 +360,81 @@ export function infusionRateHoverTexts(result: SimulationResult): readonly strin
  * Build every chart for a successful result, or a typed failure.
  * `result` must come from `simulate()` (`report.ok === true ? report.result : null`).
  */
+/**
+ * Effect-site concentration over time (phase 46).
+ *
+ * Reads `result.effectSite.series` — the engine's own derived series — in
+ * emission order, with no interpolation, reordering or recomputation. The
+ * value is a MODEL VARIABLE, not a measured tissue or brain concentration.
+ * Returns null when the scenario did not request effect-site analysis, so no
+ * view is offered and nothing is fabricated.
+ */
+export function effectSiteChart(result: SimulationResult): SimulationChart | null {
+  const series = result.effectSite?.series
+  if (series === undefined || series.length === 0) return null
+  const samples = result.samples
+  return {
+    id: 'effect-site',
+    title: 'Effect-site concentration over time',
+    xLabel: 'Time',
+    xUnit: TIME_UNIT,
+    yLabel: 'Effect-site concentration',
+    yUnit: result.effectSite?.concentrationUnit ?? CONCENTRATION_UNIT,
+    xType: 'linear',
+    yType: 'linear',
+    traces: [
+      {
+        id: 'simulation.effect-site.ce',
+        name: 'Effect site (model variable)',
+        x: series.map((point) => point.time),
+        y: series.map((point) => point.effectSiteConcentration),
+        samples,
+        // Event markers come from the PK samples, which the series mirrors 1:1.
+        isEventSeries: series.some((_, index) => {
+          const sample = samples[index]
+          return sample !== undefined && isEventSample(sample)
+        }),
+      },
+    ],
+  }
+}
+
+/**
+ * Receptor occupancy over time (phase 46).
+ *
+ * Occupancy is the DIMENSIONLESS fraction Ce/(Ce + Kd) in [0, 1) — never a
+ * percentage and never a clinical response. Derived values come from the
+ * engine's sidecar unchanged.
+ */
+export function occupancyChart(result: SimulationResult): SimulationChart | null {
+  const series = result.effectSite?.series
+  if (series === undefined || series.length === 0) return null
+  const samples = result.samples
+  return {
+    id: 'occupancy',
+    title: 'Receptor occupancy over time (binding ratio)',
+    xLabel: 'Time',
+    xUnit: TIME_UNIT,
+    yLabel: 'Occupancy (fraction of receptors)',
+    yUnit: 'fraction',
+    xType: 'linear',
+    yType: 'linear',
+    traces: [
+      {
+        id: 'simulation.occupancy',
+        name: 'Occupancy Ce/(Ce + Kd)',
+        x: series.map((point) => point.time),
+        y: series.map((point) => point.occupancy),
+        samples,
+        isEventSeries: series.some((_, index) => {
+          const sample = samples[index]
+          return sample !== undefined && isEventSample(sample)
+        }),
+      },
+    ],
+  }
+}
+
 export function buildSimulationCharts(
   result: SimulationResult | null | undefined,
 ): SimulationChartsResult {

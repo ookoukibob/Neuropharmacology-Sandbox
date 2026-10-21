@@ -10,6 +10,8 @@ import {
   CHART_VIEWS,
   chartForView,
   firstAvailableView,
+  unavailableReason,
+  OPT_IN_VIEWS,
   type ChartViewId,
   type ResultCharts,
 } from './resultCharts'
@@ -132,6 +134,10 @@ function ChartViewTabs({
     >
       {CHART_VIEWS.map((item) => {
         const available = chartForView(charts, item.id) !== null
+        // Phase 46 views exist only when the run produced them: a PK-only or
+        // failed run offers no effect-site/occupancy tab at all (no fabricated
+        // series, no disabled placeholder implying the data exists).
+        if (OPT_IN_VIEWS.has(item.id) && !available) return null
         const checked = active === item.id
         // Exactly one tabbable option: the selected view when it is
         // available, otherwise the first available view.
@@ -167,14 +173,14 @@ function ChartViewTabs({
                 : 'text-muted-foreground hover:text-foreground'
             } ${available ? '' : 'cursor-not-allowed opacity-40'}`}
             data-testid={`view-tab-${item.id}`}
-            title={available ? item.label : `${item.shortLabel} — not applicable: this run has no infusion`}
+            title={available ? item.label : `${item.shortLabel} — ${unavailableReason(item.id)}`}
           >
             {item.shortLabel}
             {available ? null : <span className="sr-only"> (not available)</span>}
           </button>
         )
       })}
-      {CHART_VIEWS.some((item) => chartForView(charts, item.id) === null) ? (
+      {charts.infusionRate === null ? (
         <span className="ml-2 text-xs text-muted-foreground" data-testid="view-availability-note">
           Infusion rate unavailable: this run has no infusion.
         </span>

@@ -22,12 +22,14 @@ import { buildSimulationCharts } from '@/components/charts/simulationAdapter'
 import {
   compileScenario,
   demoDraft,
+  emptyEffectSiteDraft,
   newBolusRow,
   newInfusionRow,
   type CompileResult,
   type EventRow,
   type SimulationDraft,
 } from './draft'
+import { EffectSiteSection } from './components/EffectSiteSection'
 import { EventEditor } from './components/EventEditor'
 import {
   HorizonSection,
@@ -188,6 +190,12 @@ export function SimulationView({ scenarioRepository }: { readonly scenarioReposi
           onChange={(field, value) =>
             edit((current) => ({ ...current, solver: { ...current.solver, [field]: value } }))
           }
+        />
+
+        <EffectSiteSection
+          draft={draft.effectSite ?? emptyEffectSiteDraft()}
+          errors={draftErrors ?? []}
+          onChange={(next) => edit((current) => ({ ...current, effectSite: next }))}
         />
 
         <SavedScenariosPanel library={library} draft={draft} onDraftReplaced={replaceDraft} />

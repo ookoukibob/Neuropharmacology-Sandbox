@@ -35,7 +35,17 @@ import { DEMO_SCENARIO } from './demoScenario'
  * conversion functions use), filtered by physical dimension — never a
  * hand-maintained list that could drift from what the engine accepts.
  */
-export type EditorUnitDimension = 'volume' | 'clearance' | 'mass' | 'mass-flow-rate'
+export type EditorUnitDimension =
+  | 'volume'
+  | 'clearance'
+  | 'mass'
+  | 'mass-flow-rate'
+  /**
+   * Concentration units for Kd (phase 46). The catalog exposes both mass and
+   * molar concentrations; Kd's dimension compatibility with the model
+   * concentration is enforced by `resolveEffectSite`, not by this list.
+   */
+  | 'concentration'
 
 // ---------------------------------------------------------------------------
 // Draft shapes
