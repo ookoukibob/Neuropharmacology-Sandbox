@@ -523,6 +523,36 @@ SimulationView (draft state)  ──passed as a prop──▶  SavedScenariosPan
   counts as unsaved once edited.
 - **Deletion** is an inline confirmation naming the scenario and stating
   that the editor draft is not affected; Escape cancels and focus returns.
+### 4.3e Optional effect-site and receptor occupancy (phase 46)
+
+```
+SimulationScenario.effectSite?  ──resolveEffectSite()──▶  validated f_u, k_e0, K_d
+        │                                                  (unit conversion + provenance)
+        ▼
+  simulate()  ── PK samples (existing, unchanged) ──▶ propagateEffectSite()
+        │                                                  │
+        ▼                                                  ▼
+  result.samples[i] ◀── 1:1 aligned ──▶ result.effectSite.series[i]
+                                       { Ce, occupancy, time, side, eventGroup }
+```
+
+- **Opt-in and additive.** `effectSite` is optional on both the scenario and the
+  result. Absent means PK-only: no key is added, samples keep their shape, and
+  every PK value is identical to a run without the feature.
+- **Derived, not integrated.** Ce is NOT a fifth physical ODE state. It is
+  post-processed from the emitted PK samples, so it never enters the state
+  vector, `initialState`, cumulative input or the mass-balance residual.
+- **Equations.** dCe/dt = k_e0·(f_u·Cc − Ce) and Occupancy = Ce/(Ce + K_d). Ce
+  starts at equilibrium with the PRE-EVENT central concentration at startTime
+  (Ce(0) = f_u·Cc), so a bolus at that time changes Cc but not Ce or occupancy.
+- **Numerical contract.** Between emitted samples the unbound concentration is
+  reconstructed as piecewise linear and Ce is propagated with the exact
+  solution of that reconstruction (stable `expm1`/series evaluation for small
+  k_e0·h). This is exact for the reconstruction — not for the true continuous PK
+  trajectory and not identical to jointly integrating both ODEs.
+- **Units and provenance.** K_d must be a concentration compatible with the
+  model concentration; a molar K_d needs an explicit molecular weight (g/mol)
+  with provenance. Ki, IC50 and EC50 are never substituted for K_d.
 ### 4.4 Import (all-or-nothing)
 
 ```

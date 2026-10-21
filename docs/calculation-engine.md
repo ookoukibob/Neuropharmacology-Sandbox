@@ -542,3 +542,40 @@ The reports that reach the charts are unchanged, so the chart semantics of
 for edited scenarios exactly as for the example. The infusion-rate chart
 uses `result.infusionRates` — the engine's summed pre/post snapshots — and
 is absent when the scenario never activated an infusion.
+
+## 11. Effect-site equilibration and occupancy (phase 46) — optional
+
+Every input is supplied explicitly by the user; nothing is defaulted, and
+Ki/IC50/EC50 are never substituted for K_d.
+
+**Effect site.** dC_e/dt = k_e0·(f_u·C_c − C_e), where f_u is the stated
+unbound fraction and C_c the central concentration the PK engine already
+emitted. Between two emitted samples the unbound concentration is
+reconstructed as piecewise linear and the ODE is propagated exactly over that
+reconstruction:
+
+    C_e1 = C_e0·e^(−x) + u0·(r − φ) + u1·φ
+    x = k_e0·h,  r = −expm1(−x),  φ = 1 − r/x
+
+φ is evaluated by a Horner series below x = 1e-2, where the direct quotient
+loses precision; the threshold was chosen from measured error, not intuition.
+h = 0 (a bolus's pre-event/post-event pair) keeps C_e unchanged.
+
+**Occupancy.** C_e/(C_e + K_d), a single-site equilibrium binding ratio in
+[0, 1). K_d must be a concentration compatible with the model concentration; a
+molar K_d requires an explicit molecular weight (g/mol) with provenance.
+
+**Initial condition and events.** C_e(startTime) = f_u·C_c(startTime,
+pre-event), so a bolus at the start changes C_c but never jumps C_e or
+occupancy, and the next interval propagates from the post-event concentration.
+C_e is a derived variable excluded from physical drug-mass accounting.
+
+**Measured convergence (one-compartment limit, Q = 0, CL = 2 L/h, Vc = 10 L, no
+start event).** Worst error against the independent analytical solution falls
+1.218e-2, 3.132e-3, 7.890e-4, 1.976e-4 and 4.943e-5 mg/L at output intervals
+1, 0.5, 0.25, 0.125 and 0.0625 h — a ratio of about 4.0 per halving, i.e.
+second order, as the piecewise-linear reconstruction predicts. This bound is
+measured for that configuration only and is NOT claimed for every
+two-compartment trajectory. The method is exact for the reconstruction, not for
+the unknown continuous PK trajectory, and is not jointly integrated ODE
+solving.

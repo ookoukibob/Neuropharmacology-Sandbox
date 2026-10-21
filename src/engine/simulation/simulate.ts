@@ -25,6 +25,15 @@ import {
 } from './units'
 import { createScheduler, type ValidatedEventGroup, type ValidatedSchedule } from './events'
 import {
+  EFFECT_SITE_ASSUMPTIONS,
+  PK_CONCENTRATION_UNIT,
+  initialEffectSiteConcentration,
+  receptorOccupancy,
+  resolveEffectSite,
+  type ResolvedEffectSite,
+} from './effect-site'
+import { propagateEffectSite } from './effect-site-propagation'
+import {
   TWO_COMPARTMENT_DESCRIPTOR,
   TWO_COMPARTMENT_MODEL_ID,
   twoCompartmentSystem,
@@ -34,6 +43,7 @@ import {
 import type {
   DosingEvent,
   DosingQuantity,
+  EffectSiteResult,
   InfusionRatePoint,
   NormalizedParameter,
   OdeState,
@@ -400,6 +410,15 @@ export function simulate(scenario: SimulationScenario): SimulationReport {
   // 1. Scenario and constants.
   const validated = validateScenario(scenario, errors)
   errors.push(...validateSolverOptions(scenario.solver, 'scenario'))
+  // Opt-in effect-site configuration: validated HERE, by the authoritative
+  // resolver, before any sample exists — so a rejected configuration can never
+  // produce a partial successful report.
+  let effectSite: ResolvedEffectSite | undefined
+  if (scenario.effectSite !== undefined) {
+    const resolution = resolveEffectSite(scenario.effectSite)
+    if (!resolution.ok) errors.push(...resolution.errors)
+    else effectSite = resolution.resolved
+  }
   if (validated === null || errors.length > 0) {
     return { ok: false, model: TWO_COMPARTMENT_MODEL_ID, errors }
   }
@@ -597,6 +616,73 @@ export function simulate(scenario: SimulationScenario): SimulationReport {
     return { ok: false, model: TWO_COMPARTMENT_MODEL_ID, errors: invariantErrors }
   }
 
+  // 11b. Effect-site sidecar (phase 46), derived from the PK samples the
+  // engine actually emitted. Ce is NOT a drug amount: it never enters the
+  // state vector, `initialState`, the cumulative input or the mass-balance
+  // residual computed above. The series is aligned positionally with
+  // `samples`, so duplicate-time pre/post-event rows are preserved in order.
+  let effectSiteResult: EffectSiteResult | undefined
+  if (effectSite !== undefined) {
+    // Ce(startTime) = fu·Cc(startTime, pre-event): the FIRST emitted sample is
+    // the initial pre-event state (ADR-25), before any startTime event.
+    const first = samples[0]
+    if (first === undefined) {
+      return {
+        ok: false,
+        model: TWO_COMPARTMENT_MODEL_ID,
+        errors: [
+          {
+            code: 'MISSING_PARAMETER',
+            stage: 'scenario',
+            field: 'samples',
+            message: 'Effect-site analysis requires at least the initial PK sample.',
+          },
+        ],
+      }
+    }
+    const initialCe = initialEffectSiteConcentration(
+      first.centralConcentration,
+      effectSite.unboundFraction,
+    )
+    const propagated = propagateEffectSite({
+      samples: samples.map((sample, index) => ({
+        time: sample.time,
+        centralConcentration: sample.centralConcentration,
+        side: sample.side,
+        ...(sample.eventGroup === undefined ? {} : { eventGroup: sample.eventGroup }),
+        index,
+      })),
+      unboundFraction: effectSite.unboundFraction,
+      ke0: effectSite.ke0,
+      initialCe,
+    })
+    // A failed propagation publishes NO report at all — never a partial series.
+    if (!propagated.ok) {
+      return { ok: false, model: TWO_COMPARTMENT_MODEL_ID, errors: propagated.errors }
+    }
+    effectSiteResult = {
+      series: propagated.series.map((entry, index) => {
+        const sample = samples[index]
+        return {
+          time: sample?.time ?? entry.sample.time,
+          side: entry.sample.side as SimulationSample['side'],
+          ...(entry.sample.eventGroup === undefined ? {} : { eventGroup: entry.sample.eventGroup }),
+          effectSiteConcentration: entry.effectSiteConcentration,
+          occupancy: receptorOccupancy(entry.effectSiteConcentration, effectSite.kdInPkUnit),
+        }
+      }),
+      unboundFraction: effectSite.unboundFraction,
+      ke0: effectSite.ke0,
+      kdInPkUnit: effectSite.kdInPkUnit,
+      kdConversion: effectSite.kdConversion,
+      ...(effectSite.molecularWeightUsed === undefined
+        ? {}
+        : { molecularWeightUsed: effectSite.molecularWeightUsed }),
+      concentrationUnit: PK_CONCENTRATION_UNIT,
+      assumptions: EFFECT_SITE_ASSUMPTIONS,
+    }
+  }
+
   const diagnostics = finalizeDiagnostics(diagnosticsAcc, scenario.solver)
   const maxAbsResidual = Math.max(...samples.map((s) => Math.abs(s.massBalanceResidual)))
 
@@ -633,6 +719,7 @@ export function simulate(scenario: SimulationScenario): SimulationReport {
     massBalance: { maxAbsResidual, tolerance, ok: maxAbsResidual <= tolerance },
     assumptions: TWO_COMPARTMENT_DESCRIPTOR.assumptions,
     warnings,
+    ...(effectSiteResult === undefined ? {} : { effectSite: effectSiteResult }),
   }
   return { ok: true, result }
 }

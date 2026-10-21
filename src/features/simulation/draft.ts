@@ -22,6 +22,7 @@
  * left to the engine, whose typed errors are the authority.
  */
 import type { DosingEvent, SimulationError, SimulationScenario, SolverOptions } from '@/engine/simulation/types'
+import type { EffectSiteInput } from '@/engine/simulation/effect-site'
 import { buildOutputGrid, parseNumericText, type OutputGridResult } from './outputGrid'
 import { DEMO_SCENARIO } from './demoScenario'
 
@@ -34,7 +35,17 @@ import { DEMO_SCENARIO } from './demoScenario'
  * conversion functions use), filtered by physical dimension — never a
  * hand-maintained list that could drift from what the engine accepts.
  */
-export type EditorUnitDimension = 'volume' | 'clearance' | 'mass' | 'mass-flow-rate'
+export type EditorUnitDimension =
+  | 'volume'
+  | 'clearance'
+  | 'mass'
+  | 'mass-flow-rate'
+  /**
+   * Concentration units for Kd (phase 46). The catalog exposes both mass and
+   * molar concentrations; Kd's dimension compatibility with the model
+   * concentration is enforced by `resolveEffectSite`, not by this list.
+   */
+  | 'concentration'
 
 // ---------------------------------------------------------------------------
 // Draft shapes
@@ -85,6 +96,43 @@ export interface SimulationDraft {
   readonly initialPeripheralAmount: string
   readonly events: readonly EventRow[]
   readonly solver: SolverDraft
+  /**
+   * Opt-in effect-site / receptor-occupancy analysis (phase 46). Every text
+   * field stays a STRING so blank or half-typed values remain editable and
+   * savable — the draft is never forced into a runnable configuration.
+   * Absent (legacy drafts) means effect-site analysis is disabled.
+   */
+  readonly effectSite?: EffectSiteDraft
+}
+
+/**
+ * Editable effect-site section. `enabled` is a plain boolean; every numeric
+ * input is draft text and no value is defaulted.
+ */
+export interface EffectSiteDraft {
+  readonly enabled: boolean
+  /** Unbound fraction fu (dimensionless). */
+  readonly unboundFraction: string
+  /** Equilibration rate ke0 in the canonical time base (h⁻¹). */
+  readonly ke0: string
+  /** Kd value with its declared concentration unit. */
+  readonly kd: QuantityDraft
+  /** Molecular weight (g/mol) — only needed when Kd is molar. */
+  readonly molecularWeight: string
+  /** Provenance of the molecular weight, required with a molar Kd. */
+  readonly molecularWeightProvenance: string
+}
+
+/** A fresh effect-site section: disabled, with no invented values. */
+export function emptyEffectSiteDraft(): EffectSiteDraft {
+  return {
+    enabled: false,
+    unboundFraction: '',
+    ke0: '',
+    kd: { value: '', unit: 'mg/L' },
+    molecularWeight: '',
+    molecularWeightProvenance: '',
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +259,26 @@ export function draftFromScenario(scenario: SimulationScenario = DEMO_SCENARIO):
       value: stringify(scenario.parameters.intercompartmentalClearance.value),
       unit: scenario.parameters.intercompartmentalClearance.unit,
     },
+    // A scenario without an effect-site configuration maps to a DISABLED
+    // section: no parameter is invented. A configured one keeps its own
+    // declared text and units.
+    effectSite:
+      scenario.effectSite === undefined
+        ? emptyEffectSiteDraft()
+        : {
+            enabled: true,
+            unboundFraction: stringify(scenario.effectSite.unboundFraction),
+            ke0: stringify(scenario.effectSite.ke0),
+            kd: {
+              value: stringify(scenario.effectSite.kd.value),
+              unit: scenario.effectSite.kd.unit,
+            },
+            molecularWeight:
+              scenario.effectSite.molecularWeight === undefined
+                ? ''
+                : stringify(scenario.effectSite.molecularWeight.value),
+            molecularWeightProvenance: scenario.effectSite.molecularWeightProvenance ?? '',
+          },
     initialCentralAmount: stringify(scenario.initialState.centralAmount),
     initialPeripheralAmount: stringify(scenario.initialState.peripheralAmount),
     events: rows,
@@ -235,6 +303,8 @@ export function outputIntervalOf(times: readonly number[]): string {
 
 /** Fresh draft for the synthetic example (a new object on every call). */
 export function demoDraft(): SimulationDraft {
+  // The synthetic example is PK-only: effect-site analysis is opt-in and no
+  // pharmacological parameter is pre-filled.
   return draftFromScenario(DEMO_SCENARIO)
 }
 
@@ -357,6 +427,51 @@ export type CompileResult =
       readonly gridError?: OutputGridResult & { readonly ok: false }
     }
 
+/**
+ * Compile the effect-site section into the engine's `EffectSiteInput`.
+ *
+ * Draft-level parsing only: blank/unparseable numeric text becomes a typed
+ * draft error (the engine is never called with an incomplete configuration),
+ * and nothing is defaulted. Scientific validation — range, unit dimension,
+ * molecular-weight provenance — stays with `resolveEffectSite` in the engine.
+ */
+function compileEffectSiteDraft(
+  section: EffectSiteDraft,
+  errors: DraftError[],
+): EffectSiteInput | undefined {
+  const before = errors.length
+  const unboundFraction = readNumber(errors, 'effectSite.unboundFraction', 'Unbound fraction f_u', section.unboundFraction)
+  const ke0 = readNumber(errors, 'effectSite.ke0', 'Equilibration rate k_e0', section.ke0)
+  const kd = readQuantity(errors, 'effectSite.kd', 'Equilibrium dissociation constant K_d', section.kd, 'mg/L')
+  // The molecular weight is OPTIONAL in draft terms: the engine requires it
+  // only when Kd is declared in a molar unit. Blank stays absent — never 0.
+  const molecularWeightText = section.molecularWeight.trim()
+  let molecularWeight: { value: number; unit: string } | undefined
+  if (molecularWeightText !== '') {
+    const parsed = parseNumericText(molecularWeightText)
+    if (parsed === null) {
+      errors.push({
+        code: 'NOT_A_NUMBER',
+        field: 'effectSite.molecularWeight',
+        label: 'Molecular weight',
+        message: `Molecular weight must be a finite number (got "${section.molecularWeight}").`,
+      })
+    } else {
+      molecularWeight = { value: parsed, unit: 'g/mol' }
+    }
+  }
+  const provenance = section.molecularWeightProvenance.trim()
+  if (errors.length > before) return undefined
+  if (unboundFraction === undefined || ke0 === undefined || kd.value === undefined) return undefined
+  return {
+    unboundFraction,
+    ke0,
+    kd: { value: kd.value, unit: kd.unit },
+    ...(molecularWeight === undefined ? {} : { molecularWeight }),
+    ...(provenance === '' ? {} : { molecularWeightProvenance: provenance }),
+  }
+}
+
 export function compileScenario(draft: SimulationDraft): CompileResult {
   const errors: DraftError[] = []
 
@@ -447,6 +562,21 @@ export function compileScenario(draft: SimulationDraft): CompileResult {
     maxStep,
     maxSteps,
   }
+  // Effect-site section (phase 46): opt-in. When disabled it contributes
+  // nothing at all — no defaults, no zero-filling, no `effectSite` key.
+  let effectSite: EffectSiteInput | undefined
+  const effectSiteDraft = draft.effectSite
+  if (effectSiteDraft !== undefined && effectSiteDraft.enabled) {
+    const parsed = compileEffectSiteDraft(effectSiteDraft, errors)
+    if (parsed !== undefined) effectSite = parsed
+    else {
+      return {
+        ok: false,
+        errors,
+        ...(grid !== undefined && !grid.ok ? { gridError: grid } : {}),
+      }
+    }
+  }
   return {
     ok: true,
     scenario: {
@@ -460,6 +590,7 @@ export function compileScenario(draft: SimulationDraft): CompileResult {
         clearance: { value: clearance.value, unit: clearance.unit },
         intercompartmentalClearance: { value: intercompartmentalClearance.value, unit: intercompartmentalClearance.unit },
       },
+      ...(effectSite === undefined ? {} : { effectSite }),
       events,
       solver,
     },

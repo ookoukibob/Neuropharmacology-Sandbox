@@ -10,6 +10,8 @@ import {
   CHART_VIEWS,
   chartForView,
   firstAvailableView,
+  unavailableReason,
+  OPT_IN_VIEWS,
   type ChartViewId,
   type ResultCharts,
 } from './resultCharts'
@@ -132,6 +134,10 @@ function ChartViewTabs({
     >
       {CHART_VIEWS.map((item) => {
         const available = chartForView(charts, item.id) !== null
+        // Phase 46 views exist only when the run produced them: a PK-only or
+        // failed run offers no effect-site/occupancy tab at all (no fabricated
+        // series, no disabled placeholder implying the data exists).
+        if (OPT_IN_VIEWS.has(item.id) && !available) return null
         const checked = active === item.id
         // Exactly one tabbable option: the selected view when it is
         // available, otherwise the first available view.
@@ -167,14 +173,14 @@ function ChartViewTabs({
                 : 'text-muted-foreground hover:text-foreground'
             } ${available ? '' : 'cursor-not-allowed opacity-40'}`}
             data-testid={`view-tab-${item.id}`}
-            title={available ? item.label : `${item.shortLabel} — not applicable: this run has no infusion`}
+            title={available ? item.label : `${item.shortLabel} — ${unavailableReason(item.id)}`}
           >
             {item.shortLabel}
             {available ? null : <span className="sr-only"> (not available)</span>}
           </button>
         )
       })}
-      {CHART_VIEWS.some((item) => chartForView(charts, item.id) === null) ? (
+      {charts.infusionRate === null ? (
         <span className="ml-2 text-xs text-muted-foreground" data-testid="view-availability-note">
           Infusion rate unavailable: this run has no infusion.
         </span>
@@ -368,11 +374,82 @@ function Diagnostics({ result }: { readonly result: SimulationResult }) {
           </ul>
         </div>
       </div>
+      {result.effectSite === undefined ? null : <EffectSiteExplanation result={result} />}
       <p className="rounded-md border p-3 text-xs text-muted-foreground" data-testid="qualification-note">
         A completed numerical run means the integrator finished within its configured tolerances
         and reported a mass balance inside its derived tolerance. It does not mean the model has
         been externally qualified or clinically validated.
       </p>
     </section>
+  )
+}
+
+/**
+ * Effect-site model explanation for ONE run (phase 46).
+ *
+ * Every value shown is the one that run actually used — read from
+ * `result.effectSite`, never recomputed here. The assumptions come from the
+ * engine's own `EFFECT_SITE_ASSUMPTIONS` list carried on the sidecar, so the
+ * UI cannot drift from the engine's stated contract.
+ */
+function EffectSiteExplanation({ result }: { readonly result: SimulationResult }) {
+  const effect = result.effectSite
+  if (effect === undefined) return null
+  return (
+    <div className="flex min-w-0 flex-col gap-2 rounded-md border p-3 text-sm" data-testid="effect-site-explanation">
+      <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Effect-site and receptor occupancy
+      </h4>
+      <ul className="list-disc space-y-1 pl-4 text-xs" data-testid="effect-site-equations">
+        <li className="font-mono">dC_e/dt = k_e0 · (f_u · C_c − C_e)</li>
+        <li className="font-mono">Occupancy(t) = C_e(t) / (C_e(t) + K_d)</li>
+      </ul>
+      <dl
+        className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 text-xs"
+        data-testid="effect-site-parameters"
+      >
+        <dt className="text-muted-foreground">Unbound fraction f_u</dt>
+        <dd className="font-mono">{formatNumber(effect.unboundFraction)}</dd>
+        <dt className="text-muted-foreground">Equilibration rate k_e0</dt>
+        <dd className="font-mono">{formatNumber(effect.ke0)} h⁻¹</dd>
+        <dt className="text-muted-foreground">K_d used for occupancy</dt>
+        <dd className="font-mono">
+          {formatNumber(effect.kdInPkUnit)} {effect.concentrationUnit}
+        </dd>
+        <dt className="text-muted-foreground">K_d unit conversion</dt>
+        <dd className="font-mono">
+          {effect.kdConversion === 'same-unit'
+            ? 'none (declared in the model unit)'
+            : effect.kdConversion === 'unit-conversion'
+              ? 'mass-concentration conversion'
+              : 'molar → mass via the supplied molecular weight'}
+        </dd>
+        {effect.molecularWeightUsed === undefined ? null : (
+          <>
+            <dt className="text-muted-foreground">Molecular weight used</dt>
+            <dd className="font-mono">{formatNumber(effect.molecularWeightUsed)} g/mol</dd>
+          </>
+        )}
+      </dl>
+      <p className="text-xs text-muted-foreground" data-testid="effect-site-method-note">
+        The effect-site series is post-processed from the emitted PK samples, reconstructing the
+        unbound concentration as piecewise linear between them. It is exact for that reconstruction
+        — not for the true continuous PK trajectory, and not identical to integrating the PK and
+        effect-site equations jointly. Convergence with a finer output grid was measured for the
+        analytical one-compartment case only; the same bound is not claimed for every
+        two-compartment trajectory.
+      </p>
+      <p className="text-xs text-muted-foreground" data-testid="effect-site-event-note">
+        C_e starts at equilibrium with the pre-event central concentration at the start time
+        (C_e = f_u · C_c, pre-event). An instantaneous bolus changes C_c but not C_e or occupancy;
+        propagation over the following interval starts from the post-event concentration. C_e is a
+        derived concentration variable and is excluded from physical drug-mass accounting.
+      </p>
+      <ul className="list-disc space-y-1 pl-4 text-xs" data-testid="effect-site-assumptions">
+        {effect.assumptions.map((assumption) => (
+          <li key={assumption}>{assumption}</li>
+        ))}
+      </ul>
+    </div>
   )
 }
