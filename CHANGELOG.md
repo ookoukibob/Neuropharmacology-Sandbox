@@ -4,6 +4,40 @@ All notable changes to Neuropharmacology Sandbox are documented here.
 Versions follow Semantic Versioning; this project is a source-available,
 noncommercial static web application (see [LICENSE](LICENSE)).
 
+## [Unreleased]
+
+## [1.0.0] - 2026-10-21
+
+The first stable release. This version consolidates the implemented core
+workflows and makes their data-integrity and scientific boundaries explicit.
+
+### Highlights
+
+- Transparent one-compartment elimination, receptor occupancy and Hill/Emax
+  dose-response calculations, plus a dynamic two-compartment IV PK simulator
+  with scheduled bolus/infusion events and optional effect-site analysis.
+- A browser-local drug library with value-level provenance, explicit
+  PubChem/ChEMBL retrieval, review-before-import workflows and auditable
+  calculation traces.
+- Versioned `.npsl`/JSON interchange, explicitly mapped CSV import, visibly
+  lossy CSV export, and full-storage `.npsb` recovery backup/restore.
+- Saved simulation scenarios, device-local preferences, keyboard-accessible
+  workflows and automated unit, integration, E2E, coverage and crash-durability
+  verification.
+- No backend, accounts, cloud sync, bundled pharmacology database or black-box
+  AI inference. Outputs remain mathematical results under stated assumptions.
+
+### Known limitations
+
+- **NV-2 remains open:** migration coverage uses synthetic legacy IndexedDB
+  records and real Chromium, but no authentic pre-v4 user database has been
+  obtained or inspected. Back up existing browser data before upgrading.
+- This is source-available software under the PolyForm Noncommercial License,
+  not OSI-approved open-source software. Commercial use is not granted.
+- Results are not clinical predictions, dosage recommendations or medical
+  advice. The application does not supply authoritative parameters or infer
+  missing values.
+
 ### Added — optional effect-site and receptor-occupancy analysis (phase 46)
 
 - **An opt-in effect-site model on top of the existing dynamic PK simulation.**
@@ -32,7 +66,6 @@ noncommercial static web application (see [LICENSE](LICENSE)).
   prediction. The one-compartment convergence measurement is not generalised to
   every two-compartment trajectory.
 
-## [Unreleased]
 
 ### Added — saved simulation scenarios (phase 45)
 
@@ -55,7 +88,6 @@ noncommercial static web application (see [LICENSE](LICENSE)).
   empty scenario library) and libraries without scenarios produce the
   unchanged seven-key archive.
 
-## [Unreleased]
 
 ### Fixed — simulation charts no longer overlap the surrounding text (phase 44)
 
@@ -81,7 +113,6 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 - The infusion-rate view stays unavailable (and explains why) when the run
   has no infusion; no zero-rate line is invented.
 
-## [Unreleased]
 
 ### Added — general simulation scenario editor (phase 43)
 
@@ -114,7 +145,6 @@ noncommercial static web application (see [LICENSE](LICENSE)).
   `scrollable-region-focusable`), which also benefits existing tables.
 - No persistence, database schema, network or import/export change.
 
-## [Unreleased]
 
 ### Added — simulation demonstration page and charts (phase 42)
 
@@ -146,7 +176,6 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 - No persistence, store, schema migration, network access or scenario
   editing in this phase.
 
-## [Unreleased]
 
 ### Added — dynamic pharmacokinetic simulation engine (phase 41)
 

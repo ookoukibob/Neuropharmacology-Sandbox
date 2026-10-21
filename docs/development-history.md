@@ -1,20 +1,13 @@
 # Development history — the numbered phase record
 
 Development proceeds in numbered review phases. This file is the
-detailed record of those phases (1–33), moved verbatim from the README
-landing page so that the front page stays readable for first-time
-visitors without losing any deliverable detail. A concise current-state
-summary lives in [README.md](../README.md#current-status); the
-dependency-ordered MVP roadmap lives in [architecture.md](architecture.md)
-§6. Milestones after phase 33 — the first public preview
-`v0.1.0-alpha.1`, published 2026-10-13 — are recorded in
-[CHANGELOG.md](../CHANGELOG.md) and landed through pull requests #20
-and #21 (phases 34–35.1: release preparation and release-notes
-consistency).
+authoritative detailed record of **Phases 1–46**. The README keeps a concise
+current-state summary for first-time visitors; version-level changes and
+known release limitations live in [CHANGELOG.md](../CHANGELOG.md). The
+dependency-ordered roadmap lives in [architecture.md](architecture.md) §6.
 
-Development proceeds in numbered review phases; the table below is the
-authoritative record. Phases 1–24 are summarized with their full
-deliverables; the most recent phases (25–33) follow:
+The phase table below records the completed deliverables and their verification
+status. Release history is versioned separately from the phase-by-phase record.
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |

@@ -1,31 +1,37 @@
 # Release procedure
 
-Neuropharmacology Sandbox is a **static web application**: a release is
-a versioned, checksummed ZIP of the production `dist/` output, published
-as a **GitHub pre-release** with its source tag. There is no npm
-publication (`private: true` stays `true`), no deployment pipeline and no
-backend. This document is the auditable, repeatable procedure.
+Neuropharmacology Sandbox is a **static web application**. A release is a
+versioned, checksummed ZIP of the production `dist/` output, attached to a
+GitHub Release and tied to an exact source tag. There is no npm publication
+(`private: true` stays `true`) and no backend. Hosting deployment is separate
+from the versioned release archive.
 
-Rules that never bend:
+## Rules that never bend
 
-- **No tag and no published release may point to an unmerged PR
-  commit.** Releases are cut only from verified commits on `main`.
-- **No release without green gates.** Every check listed in step 3 must
-  be run and pass on the exact commit being released.
-- Artifacts (ZIP, checksum, test reports) are **never committed** to the
-  repository; they live outside the source tree.
+- **Release only a verified commit on `main`.** Never tag an unmerged PR
+  commit or a branch-only commit.
+- **No release without green gates** on the exact commit being released.
+- Build the ZIP from the tagged source after a clean dependency install.
+- Artifacts (ZIP, checksum, test reports) are never committed to the repository.
+- A stable release (for example `1.0.0`) is published as a normal GitHub
+  Release, not marked as a prerelease. SemVer prereleases such as
+  `1.1.0-rc.1` must be marked as prereleases.
 
-Versioning: `package.json` is the single source of the application
-version (the About panel reads it at build time). A preview release uses
-a SemVer prerelease such as `0.1.0-alpha.1`; the tag is `v` + that
-version. Update `package.json` **and** `package-lock.json` together (two
-version fields: top-level and `packages.""`), and update
-[CHANGELOG.md](../CHANGELOG.md) in the same PR.
+## Versioning
 
-## 1. Release-preparation PR (local commands)
+`package.json` is the source of the application version (the About panel reads
+it at build time). The tag is `v` plus that version. Update `package.json` and
+`package-lock.json` together (top-level version and
+`packages[""].version`) and update [CHANGELOG.md](../CHANGELOG.md) in the
+same release-preparation PR. Do not publish a release tag until the PR has
+merged and the resulting `main` commit has passed all checks.
+
+## 1. Release-preparation PR
+
+On the release branch, after updating version, changelog and relevant
+documentation, run:
 
 ```bash
-# On the prepared release branch — version, CHANGELOG, docs updated:
 npm ci
 npm run typecheck
 npm run typecheck:e2e
@@ -33,96 +39,101 @@ npm run lint
 npm test
 npm run test:coverage
 npm run build
-npm run test:e2e          # needs: npx playwright install chromium
-npm run test:crash        # same install; supervised-Chromium suite
-npm audit --omit=dev      # production tree must be clean
+npm run test:e2e          # requires: npx playwright install chromium
+npm run test:crash        # supervised Chromium; same install
+npm audit --omit=dev      # production dependency tree must be clean
 git diff --check
 ```
 
-Open the PR against `main` and wait for the four required CI checks
-(`Quality gates`, `Coverage`, `E2E smoke test`, `NV-1 crash durability`)
-to report **success on the PR head**. `main` is branch-protected: a
-direct push is not possible and must not be attempted.
+Open a PR against `main`. The workflow intentionally runs on branch pushes
+and manual dispatch, not on pull-request events. Push the final PR head and
+confirm these four required checks are successful for that exact commit:
+`Quality gates`, `Coverage`, `E2E smoke test`, and `NV-1 crash durability`.
+The branch protection on `main` requires those checks.
 
 ## 2. Merge and verify `main`
 
-Merge the PR (merge commit, not squash, to keep auditable history).
-Then verify the result:
+Merge the PR using the repository's allowed merge method. Then verify:
 
 ```bash
 git switch main
 git pull --ff-only origin main
-git log -1 --oneline                      # expected: the merge commit
-git status                                # must be clean
+git log -1 --oneline
+git status
 ```
 
-Confirm the GitHub Actions run **triggered by the merge push** is green
-(all four jobs). Do not release from a `main` that has moved since your
-checks: re-run the local gate block from step 1 on the merged commit if
-anything is uncertain.
+The working tree must be clean. Confirm the GitHub Actions run triggered by
+the merge push completed successfully with all four jobs. If `main` moved
+after the checks were run, rerun the gates on the commit that will be tagged.
 
 ## 3. Tag the verified commit
 
+For the stable 1.0.0 release:
+
 ```bash
-git tag -a v0.1.0-alpha.1 -m "Preview release v0.1.0-alpha.1"   # on the verified main HEAD
-git push origin v0.1.0-alpha.1
+git tag -a v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
 ```
 
-The tag object records the exact commit SHA — that is the audit link
-between the release assets and the source.
+Run this on the verified `main` HEAD after the release-preparation PR has
+merged. The annotated tag records the exact source commit represented by the
+release assets.
 
-## 4. Build the release artifacts (local, not committed)
+## 4. Build the release artifacts
 
-```bash
+From a clean checkout of the exact tag:
+
+```powershell
 npm ci
 npm run build
+
+$version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+$archive = "neuropharmacology-sandbox-v$version.zip"
+Compress-Archive -Path dist\* -DestinationPath $archive -Force
+$hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+"$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
 ```
 
-Inspect `dist/` before packaging: it must contain the entry HTML and
-hashed assets, and must **not** contain `.env` files, secrets, local
-audit artifacts, test fixtures that should not ship, or any bundled
-pharmacology database.
+Inspect `dist/` before packaging. It must contain the app entry point and
+built assets, and must not contain environment files, secrets, audit outputs,
+test fixtures that should not ship, or a bundled pharmacology database.
+Keep the ZIP and checksum outside the repository working tree.
+
+## 5. Publish the GitHub Release
+
+Create the release for the exact tag through the GitHub UI or API. For
+`v1.0.0`, **leave “Set as a pre-release” unchecked** and use the
+`[1.0.0]` section of the changelog as the release notes. Upload both files:
+
+1. `neuropharmacology-sandbox-v1.0.0.zip`
+2. `neuropharmacology-sandbox-v1.0.0.zip.sha256`
+
+Do not describe a release as published until the assets are uploaded and
+verified. The application is not published to npm.
+
+## 6. Verify the published assets
+
+Download both assets to a temporary directory and compare the checksum:
 
 ```powershell
-# Windows (PowerShell); equivalent zip/tar/sha256sum commands work on POSIX.
-Compress-Archive -Path dist\* -DestinationPath neuropharmacology-sandbox-v0.1.0-alpha.1.zip -Force
-(Get-FileHash neuropharmacology-sandbox-v0.1.0-alpha.1.zip -Algorithm SHA256).Hash.ToLower() `
-  + "  neuropharmacology-sandbox-v0.1.0-alpha.1.zip" `
-  | Out-File -Encoding ascii neuropharmacology-sandbox-v0.1.0-alpha.1.zip.sha256
+$version = "1.0.0"
+$archive = "neuropharmacology-sandbox-v$version.zip"
+$base = "https://github.com/ookoukibob/Neuropharmacology-Sandbox/releases/download/v$version"
+Invoke-WebRequest -Uri "$base/$archive" -OutFile ".\downloaded.zip"
+Invoke-WebRequest -Uri "$base/$archive.sha256" -OutFile ".\published.sha256"
+$expected = ((Get-Content ".\published.sha256" -Raw).Trim() -split "\s+")[0]
+$actual = (Get-FileHash ".\downloaded.zip" -Algorithm SHA256).Hash.ToLower()
+if ($actual -ne $expected) { throw "Published archive checksum mismatch" }
 ```
 
-Keep the ZIP and `.sha256` file **outside the repository working tree**.
+Also verify that:
 
-## 5. Publish the GitHub pre-release
+- The release page has the intended tag and both assets; a stable release is
+  not marked as a prerelease.
+- The tag resolves to the intended verified `main` commit
+  (`git ls-remote --tags origin v1.0.0` plus the release page's source links).
+- The downloaded ZIP extracts and boots from a static server, and the About
+  panel reports the version represented by the tag.
 
-Create the release through the GitHub UI or API, marking it
-**"This is a pre-release"** (never a latest/stable release for an
-`-alpha` version), with `CHANGELOG.md`'s version section as the release
-notes. Upload:
-
-1. `neuropharmacology-sandbox-v<version>.zip`
-2. `neuropharmacology-sandbox-v<version>.zip.sha256`
-
-## 6. Verify the published release
-
-After publication, verify the real artifacts — never assume the upload
-matched the local files:
-
-```powershell
-# Re-download the published assets to a temp directory and re-hash:
-Invoke-WebRequest -Uri https://github.com/ookoukibob/Neuropharmacology-Sandbox/releases/download/v0.1.0-alpha.1/neuropharmacology-sandbox-v0.1.0-alpha.1.zip -OutFile .\redownloaded.zip
-(Get-FileHash .\redownloaded.zip -Algorithm SHA256).Hash            # must equal the published .sha256
-```
-
-- Confirm the release page shows **Pre-release** (not Latest), the tag
-  `v0.1.0-alpha.1`, and both assets.
-- Confirm the tag resolves to the intended `main` merge commit:
-  `git ls-remote --tags origin v0.1.0-alpha.1` and the release page's
-  "Source code" links.
-- Optionally unzip the downloaded archive into a scratch directory and
-  serve it (`npx vite preview --outDir <dir>` or any static server) to
-  confirm the published bundle boots and the About panel reports the
-  released version.
-
-Only after these steps is the release real. A locally built ZIP that was
-never uploaded and re-verified is a **candidate**, not a release.
+A locally built ZIP that was never uploaded and re-verified is a candidate,
+not a completed release.
