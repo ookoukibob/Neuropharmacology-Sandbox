@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SandboxDatabase } from '../db/database'
 import { DexieScenarioRepository } from './dexieScenarioRepository'
 import { DexieDrugRepository } from './dexieDrugRepository'
@@ -372,5 +372,203 @@ describe('effect-site draft persistence (phase 46)', () => {
     if (!after.ok) throw new Error('restore lost the record')
     expect(after.scenario.draft.effectSite).toEqual(emptyEffectSiteDraft())
     expect(after.scenario.draft.effectSite?.unboundFraction).toBe('')
+  })
+})
+
+describe('.npsb archive compatibility for effect-site drafts (phase 46)', () => {
+  /**
+   * Export → erase → restore through the PRODUCTION archive path
+   * (DexieDrugRepository.exportRecoveryArchive / restoreRecoveryArchive),
+   * never a hand-built serializer.
+   */
+  const roundTrip = async (draft: SimulationDraft) => {
+    const drugs = new DexieDrugRepository(db)
+    const created = await repo.create('Archived', draft)
+    if (!created.ok) throw new Error('setup')
+    const exported = await drugs.exportRecoveryArchive()
+    if (!exported.ok) throw new Error('export failed: ' + JSON.stringify(exported.issues))
+    await db.scenarios.clear()
+    expect(await repo.list()).toMatchObject({ scenarios: [] })
+    const restored = await drugs.restoreRecoveryArchive(exported.text)
+    return { restored, text: exported.text, id: created.scenario.id }
+  }
+
+  // Case A — enabled, with every field including units and provenance.
+  it('Case A: preserves an enabled configuration, units and provenance', async () => {
+    const draft: SimulationDraft = {
+      ...demoDraft(),
+      effectSite: {
+        enabled: true,
+        unboundFraction: '0.5',
+        ke0: '2',
+        kd: { value: '100', unit: 'nM' },
+        molecularWeight: '300',
+        molecularWeightProvenance: 'Declared by the operator for a synthetic example',
+      },
+    }
+    const { restored, id } = await roundTrip(draft)
+    expect(restored.ok).toBe(true)
+    const after = await repo.get(id)
+    if (!after.ok) throw new Error('missing after restore')
+    expect(after.scenario.draft.effectSite).toEqual(draft.effectSite)
+  })
+
+  // Case B — disabled, with nothing invented.
+  it('Case B: preserves a disabled configuration without inventing parameters', async () => {
+    const draft: SimulationDraft = { ...demoDraft(), effectSite: emptyEffectSiteDraft() }
+    const { restored, id } = await roundTrip(draft)
+    expect(restored.ok).toBe(true)
+    const after = await repo.get(id)
+    if (!after.ok) throw new Error('missing after restore')
+    expect(after.scenario.draft.effectSite).toEqual(emptyEffectSiteDraft())
+    expect(after.scenario.draft.effectSite?.unboundFraction).toBe('')
+    expect(after.scenario.draft.effectSite?.ke0).toBe('')
+  })
+
+  // Case C — blank and unparseable text survives verbatim.
+  it('Case C: preserves blank and unparseable draft text exactly', async () => {
+    const blank: SimulationDraft = {
+      ...demoDraft(),
+      clearance: { value: '', unit: 'L/h' },
+      effectSite: {
+        enabled: true,
+        unboundFraction: '',
+        ke0: 'not-a-number',
+        kd: { value: '', unit: 'µg/mL' },
+        molecularWeight: ' ',
+        molecularWeightProvenance: '',
+      },
+    }
+    const { restored, id } = await roundTrip(blank)
+    expect(restored.ok).toBe(true)
+    const after = await repo.get(id)
+    if (!after.ok) throw new Error('missing after restore')
+    // No coercion to numbers, no dropped whitespace, no invented values.
+    expect(after.scenario.draft.effectSite).toEqual(blank.effectSite)
+    expect(after.scenario.draft.clearance.value).toBe('')
+  })
+
+  // Case F — post-Phase-45, pre-Phase-46 archive: scenarios but no effectSite.
+  it('Case F: restores a scenario record written before phase 46', async () => {
+    const drugs = new DexieDrugRepository(db)
+    const legacyDraft = { ...demoDraft() }
+    delete (legacyDraft as { effectSite?: unknown }).effectSite
+    const created = await repo.create('Pre-46', legacyDraft)
+    if (!created.ok) throw new Error('setup')
+    const exported = await drugs.exportRecoveryArchive()
+    if (!exported.ok) throw new Error('export failed')
+    await db.scenarios.clear()
+    const restored = await drugs.restoreRecoveryArchive(exported.text)
+    expect(restored.ok).toBe(true)
+    const after = await repo.get(created.scenario.id)
+    if (!after.ok) throw new Error('missing after restore')
+    expect(after.scenario.draft.effectSite).toBeUndefined()
+    expect(after.scenario.draft.clearance.value).toBe('2')
+  })
+
+  // Case E — pre-Phase-45 archive: the seven-key v1 envelope, no scenarios key.
+  it('Case E: restores a pre-phase-45 archive (no scenarios collection)', async () => {
+    const drugs = new DexieDrugRepository(db)
+    const created = await repo.create('Will vanish', { ...demoDraft(), effectSite: emptyEffectSiteDraft() })
+    if (!created.ok) throw new Error('setup')
+    const exported = await drugs.exportRecoveryArchive()
+    if (!exported.ok) throw new Error('export failed')
+
+    // The documented pre-phase-45 envelope: exactly the seven v1 keys, with
+    // no scenarios array and no scenarioRows count. This is the historical
+    // format contract, not an arbitrary deletion from a modern archive.
+    const doc = JSON.parse(exported.text) as Record<string, unknown>
+    const counts = doc['counts'] as Record<string, unknown>
+    delete doc['scenarios']
+    delete counts['scenarioRows']
+    expect(Object.keys(doc).sort()).toEqual([
+      'backupVersion',
+      'counts',
+      'drugs',
+      'exportedAt',
+      'formatId',
+      'meta',
+      'storage',
+    ])
+    const legacy = JSON.stringify(doc)
+
+    const preview = await drugs.previewRecoveryArchive(legacy)
+    expect(preview.ok).toBe(true)
+    const restored = await drugs.restoreRecoveryArchive(legacy)
+    expect(restored.ok).toBe(true)
+    // The absent collection restores as an empty scenario library.
+    expect((await repo.list()).scenarios).toHaveLength(0)
+  })
+
+  // Case I — counts reflect what was actually written.
+  it('Case I: archive counts match the scenario rows written', async () => {
+    const drugs = new DexieDrugRepository(db)
+    await repo.create('One', { ...demoDraft(), effectSite: emptyEffectSiteDraft() })
+    await repo.create('Two', { ...demoDraft(), effectSite: emptyEffectSiteDraft() })
+    const exported = await drugs.exportRecoveryArchive()
+    if (!exported.ok) throw new Error('export failed')
+    const doc = JSON.parse(exported.text) as {
+      scenarios?: unknown[]
+      counts: { scenarioRows?: number }
+    }
+    expect(doc.scenarios).toHaveLength(2)
+    expect(doc.counts.scenarioRows).toBe(2)
+    const restored = await drugs.restoreRecoveryArchive(exported.text)
+    expect(restored.ok).toBe(true)
+    if (restored.ok) expect(restored.report.counts.scenarioRows).toBe(2)
+  })
+
+  // Case G — corrupt archive rejects with no partial replacement.
+  it('Case G: a corrupt archive rejects and replaces nothing', async () => {
+    const drugs = new DexieDrugRepository(db)
+    const kept = await repo.create('Kept', { ...demoDraft(), effectSite: emptyEffectSiteDraft() })
+    if (!kept.ok) throw new Error('setup')
+    const exported = await drugs.exportRecoveryArchive()
+    if (!exported.ok) throw new Error('export failed')
+    const before = await db.scenarios.toArray()
+
+    // Corrupt the scenarios payload: the entry key no longer matches its id.
+    const doc = JSON.parse(exported.text) as { scenarios: { key: string }[] }
+    doc.scenarios[0]!.key = 'mismatched-key'
+    const corrupt = JSON.stringify(doc)
+
+    const preview = await drugs.previewRecoveryArchive(corrupt)
+    expect(preview.ok).toBe(false)
+    const restored = await drugs.restoreRecoveryArchive(corrupt)
+    expect(restored.ok).toBe(false)
+    // Nothing was replaced: the stored scenario is byte-identical.
+    expect(await db.scenarios.toArray()).toEqual(before)
+  })
+
+  // Case H — injected failure inside the production transaction rolls back
+  // scenarios together with drugs and metadata.
+  it('Case H: a failure inside the restore transaction rolls back scenarios too', async () => {
+    const drugs = new DexieDrugRepository(db)
+    const created = await repo.create('Rollback', { ...demoDraft(), effectSite: emptyEffectSiteDraft() })
+    if (!created.ok) throw new Error('setup')
+    // A metadata row makes the restore's meta.put call real, so the injected
+    // failure fires INSIDE the production transaction (with no metadata row
+    // the write never happens and nothing could be proven).
+    await db.meta.put({ id: 'library', updatedAt: '2026-01-01T00:00:00.000Z' } as never)
+    const exported = await drugs.exportRecoveryArchive()
+    if (!exported.ok) throw new Error('export failed')
+
+    const beforeScenarios = await db.scenarios.toArray()
+    const beforeDrugs = await db.drugs.toArray()
+    const beforeMeta = await db.meta.toArray()
+
+    const putSpy = vi.spyOn(db.meta, 'put').mockImplementationOnce(() => {
+      throw new Error('simulated write failure')
+    })
+    try {
+      await expect(drugs.restoreRecoveryArchive(exported.text)).rejects.toThrow()
+    } finally {
+      putSpy.mockRestore()
+    }
+
+    // All three stores are unchanged — scenarios included.
+    expect(await db.scenarios.toArray()).toEqual(beforeScenarios)
+    expect(await db.drugs.toArray()).toEqual(beforeDrugs)
+    expect(await db.meta.toArray()).toEqual(beforeMeta)
   })
 })
