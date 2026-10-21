@@ -62,6 +62,31 @@ describe('effect-site editor', () => {
     expect(screen.getByTestId('effect-site-fu')).toHaveValue('0.5')
   })
 
+  it('renders effect-site field symbols and the binding ratio as semantic notation', async () => {
+    const user = userEvent.setup()
+    renderView()
+    await enableEffectSite(user)
+
+    const fuField = screen
+      .getByTestId('effect-site-fu')
+      .closest('[data-field-path="effectSite.unboundFraction"]')
+    expect(fuField?.querySelector('label sub')).toHaveTextContent('u')
+
+    const ke0Field = screen
+      .getByTestId('effect-site-ke0')
+      .closest('[data-field-path="effectSite.ke0"]')
+    expect(ke0Field?.querySelector('label sub')).toHaveTextContent('e0')
+
+    const kdField = screen
+      .getByTestId('effect-site-kd')
+      .closest('[data-field-path="effectSite.kd"]')
+    expect(kdField?.querySelector('label sub')).toHaveTextContent('d')
+
+    const description = screen.getByTestId('effect-site-section')
+    expect(description).toHaveTextContent('Ce/(Ce + Kd)')
+    expect(description.querySelectorAll('sub').length).toBeGreaterThanOrEqual(3)
+  })
+
   it('keeps blank and malformed text editable', async () => {
     const user = userEvent.setup()
     renderView()
@@ -160,11 +185,15 @@ describe('effect-site editor', () => {
     const explanation = await screen.findByTestId('effect-site-explanation')
 
     // Equations and the parameters actually used.
-    expect(within(explanation).getByTestId('effect-site-equations')).toHaveTextContent(/dC_e\/dt/)
+    const equations = within(explanation).getByTestId('effect-site-equations')
+    expect(equations).toHaveTextContent(/dCe\/dt/)
+    expect(equations).toHaveTextContent(/ke0/)
+    expect(equations.querySelectorAll('sub')).toHaveLength(8)
     const params = within(explanation).getByTestId('effect-site-parameters')
     expect(params).toHaveTextContent(/0\.5/)
     expect(params).toHaveTextContent(/2 h⁻¹/)
     expect(params).toHaveTextContent(/2 mg\/L/)
+    expect(params.querySelectorAll('sub')).toHaveLength(4)
     // The method caveat is stated, not implied.
     expect(within(explanation).getByTestId('effect-site-method-note')).toHaveTextContent(/piecewise linear/i)
     expect(within(explanation).getByTestId('effect-site-method-note')).toHaveTextContent(/not identical/i)

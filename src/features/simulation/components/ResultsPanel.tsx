@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useRef, useState } from 'react'
+import { ScientificText } from '@/components/scientific/ScientificText'
 import {
   describeSimulationEvent,
   formatNumber,
@@ -307,7 +308,7 @@ function Diagnostics({ result }: { readonly result: SimulationResult }) {
         </dl>
         <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 text-sm" data-testid="mass-balance-diagnostics">
           <dt className="col-span-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Mass balance (A_c + A_p + A_e − A_ref − A_in)
+            <ScientificText value="Mass balance (A_c + A_p + A_e − A_ref − A_in)" />
           </dt>
           <dt className="text-muted-foreground">Largest |residual|</dt>
           <dd className="font-mono text-xs">{formatNumber(massBalance.maxAbsResidual)} mg</dd>
@@ -325,7 +326,9 @@ function Diagnostics({ result }: { readonly result: SimulationResult }) {
           <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1">
             {result.parameters.map((parameter) => (
               <div key={parameter.symbol} className="contents">
-                <dt className="text-muted-foreground">{parameter.label}</dt>
+                <dt className="text-muted-foreground">
+                  <ScientificText value={parameter.label} />
+                </dt>
                 <dd className="text-right font-mono text-xs">
                   {formatNumber(parameter.canonicalValue)} {parameter.canonicalUnit}
                   {parameter.conversionFactor === undefined ? null : (
@@ -347,7 +350,7 @@ function Diagnostics({ result }: { readonly result: SimulationResult }) {
               {warnings.map((warning) => (
                 <li key={warning.code + warning.message}>
                   <span className="mr-1 font-mono text-xs">{warning.code}</span>
-                  {warning.message}
+                  <ScientificText value={warning.message} />
                 </li>
               ))}
             </ul>
@@ -359,7 +362,9 @@ function Diagnostics({ result }: { readonly result: SimulationResult }) {
           <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Model equations</h4>
           <ul className="space-y-1 font-mono text-xs" data-testid="model-equations">
             {result.model.equations.map((equation) => (
-              <li key={equation}>{equation}</li>
+              <li key={equation}>
+                <ScientificText value={equation} />
+              </li>
             ))}
           </ul>
         </div>
@@ -369,7 +374,9 @@ function Diagnostics({ result }: { readonly result: SimulationResult }) {
           </h4>
           <ul className="list-disc space-y-1 pl-4" data-testid="model-assumptions">
             {result.assumptions.map((assumption) => (
-              <li key={assumption}>{assumption}</li>
+              <li key={assumption}>
+                <ScientificText value={assumption} />
+              </li>
             ))}
           </ul>
         </div>
@@ -401,22 +408,34 @@ function EffectSiteExplanation({ result }: { readonly result: SimulationResult }
         Effect-site and receptor occupancy
       </h4>
       <ul className="list-disc space-y-1 pl-4 text-xs" data-testid="effect-site-equations">
-        <li className="font-mono">dC_e/dt = k_e0 · (f_u · C_c − C_e)</li>
-        <li className="font-mono">Occupancy(t) = C_e(t) / (C_e(t) + K_d)</li>
+        <li className="font-mono">
+          <ScientificText value="dC_e/dt = k_e0 · (f_u · C_c − C_e)" />
+        </li>
+        <li className="font-mono">
+          <ScientificText value="Occupancy(t) = C_e(t) / (C_e(t) + K_d)" />
+        </li>
       </ul>
       <dl
         className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 text-xs"
         data-testid="effect-site-parameters"
       >
-        <dt className="text-muted-foreground">Unbound fraction f_u</dt>
+        <dt className="text-muted-foreground">
+          <ScientificText value="Unbound fraction f_u" />
+        </dt>
         <dd className="font-mono">{formatNumber(effect.unboundFraction)}</dd>
-        <dt className="text-muted-foreground">Equilibration rate k_e0</dt>
+        <dt className="text-muted-foreground">
+          <ScientificText value="Equilibration rate k_e0" />
+        </dt>
         <dd className="font-mono">{formatNumber(effect.ke0)} h⁻¹</dd>
-        <dt className="text-muted-foreground">K_d used for occupancy</dt>
+        <dt className="text-muted-foreground">
+          <ScientificText value="K_d used for occupancy" />
+        </dt>
         <dd className="font-mono">
           {formatNumber(effect.kdInPkUnit)} {effect.concentrationUnit}
         </dd>
-        <dt className="text-muted-foreground">K_d unit conversion</dt>
+        <dt className="text-muted-foreground">
+          <ScientificText value="K_d unit conversion" />
+        </dt>
         <dd className="font-mono">
           {effect.kdConversion === 'same-unit'
             ? 'none (declared in the model unit)'
@@ -440,14 +459,21 @@ function EffectSiteExplanation({ result }: { readonly result: SimulationResult }
         two-compartment trajectory.
       </p>
       <p className="text-xs text-muted-foreground" data-testid="effect-site-event-note">
-        C_e starts at equilibrium with the pre-event central concentration at the start time
-        (C_e = f_u · C_c, pre-event). An instantaneous bolus changes C_c but not C_e or occupancy;
-        propagation over the following interval starts from the post-event concentration. C_e is a
-        derived concentration variable and is excluded from physical drug-mass accounting.
+        <ScientificText
+          value={
+            'C_e starts at equilibrium with the pre-event central concentration at the start time ' +
+            '(C_e = f_u · C_c, pre-event). An instantaneous bolus changes C_c but not C_e or ' +
+            'occupancy; propagation over the following interval starts from the post-event ' +
+            'concentration. C_e is a derived concentration variable and is excluded from physical ' +
+            'drug-mass accounting.'
+          }
+        />
       </p>
       <ul className="list-disc space-y-1 pl-4 text-xs" data-testid="effect-site-assumptions">
         {effect.assumptions.map((assumption) => (
-          <li key={assumption}>{assumption}</li>
+          <li key={assumption}>
+            <ScientificText value={assumption} />
+          </li>
         ))}
       </ul>
     </div>

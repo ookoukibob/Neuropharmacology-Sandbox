@@ -15,6 +15,7 @@
 import { ArrowLeft, Pencil, Trash2, Calculator } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { ScientificText } from '@/components/scientific/ScientificText'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -38,7 +39,9 @@ function ParameterRow({
   if (value === undefined) return null
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="w-20 font-medium">{label}</span>
+      <span className="w-20 font-medium">
+        <ScientificText value={label} />
+      </span>
       <span data-testid={`param-${label}`}>
         {value.value} {value.unit}
       </span>

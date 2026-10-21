@@ -13,6 +13,7 @@
  * - Engine/Zod errors are shown inline.
  */
 import { AlertCircle } from 'lucide-react'
+import { ScientificText } from '@/components/scientific/ScientificText'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import type { CalculatorFieldSpec, LibraryCandidate } from '../modelAdapters'
@@ -58,7 +59,7 @@ export function ParameterField({
     <div className="space-y-2 rounded-md border p-3" data-testid={`field-${spec.key}`}>
       <div className="flex items-baseline justify-between gap-2">
         <Label htmlFor={valueId} className="mb-0">
-          <span className="font-mono">{spec.symbol}</span>{' '}
+          <ScientificText value={spec.symbol} className="font-mono" />{' '}
           <span className="text-muted-foreground font-normal">{spec.label}</span>
         </Label>
         {spec.unit.kind === 'fixed' && (
@@ -68,7 +69,11 @@ export function ParameterField({
         )}
       </div>
 
-      {spec.help && <p className="text-xs text-muted-foreground">{spec.help}</p>}
+      {spec.help && (
+        <p className="text-xs text-muted-foreground">
+          <ScientificText value={spec.help} />
+        </p>
+      )}
 
       <div className="flex flex-wrap items-end gap-2">
         <div className="grid gap-1.5 min-w-32 flex-1">

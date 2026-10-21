@@ -44,6 +44,7 @@
  */
 import { Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { ScientificText } from '@/components/scientific/ScientificText'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -132,6 +133,15 @@ function StoredCompoundRow({ compound }: { readonly compound: Compound }) {
   const wasConfirming = useRef(false)
 
   const name = compound.name ?? compound.sourceId
+  const formula = compound.identifiers.molecularFormula
+  const otherIdentifiers = [
+    compound.identifiers.molecularWeight !== undefined
+      ? `MW ${compound.identifiers.molecularWeight} g/mol`
+      : null,
+    compound.identifiers.inchiKey !== undefined
+      ? `InChIKey ${compound.identifiers.inchiKey}`
+      : null,
+  ].filter((part): part is string => part !== null)
   const linked = linkedDrug(drugs, compound)
   // Measurements stored for exactly this external record — the same
   // validated identity link the store uses, never a name comparison.
@@ -200,20 +210,19 @@ function StoredCompoundRow({ compound }: { readonly compound: Compound }) {
         )}
       </p>
       <p className="break-words text-xs text-muted-foreground">
-        {[
-          compound.identifiers.molecularFormula !== undefined
-            ? `formula ${compound.identifiers.molecularFormula}`
-            : null,
-          compound.identifiers.molecularWeight !== undefined
-            ? `MW ${compound.identifiers.molecularWeight} g/mol`
-            : null,
-          compound.identifiers.inchiKey !== undefined
-            ? `InChIKey ${compound.identifiers.inchiKey}`
-            : null,
-          compound.synonyms.length > 0 ? `synonyms: ${compound.synonyms.join(', ')}` : null,
-        ]
-          .filter((part): part is string => part !== null)
-          .join(' · ')}
+        {formula === undefined ? null : (
+          <>
+            formula <ScientificText value={formula} mode="chemical" />
+            {otherIdentifiers.length > 0 || compound.synonyms.length > 0 ? ' · ' : null}
+          </>
+        )}
+        {otherIdentifiers.join(' · ')}
+        {compound.synonyms.length > 0 ? (
+          <>
+            {otherIdentifiers.length > 0 ? ' · ' : null}
+            synonyms: {compound.synonyms.join(', ')}
+          </>
+        ) : null}
       </p>
       <p className="break-words text-xs text-muted-foreground">
         Source:{' '}

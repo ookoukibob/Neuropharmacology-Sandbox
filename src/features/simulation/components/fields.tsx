@@ -1,3 +1,4 @@
+import { ScientificText } from '@/components/scientific/ScientificText'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { EditorUnitDimension } from '../draft'
@@ -39,10 +40,16 @@ export function NumberField({
   return (
     <div className="grid gap-1.5" data-field-path={fieldPath}>
       <Label htmlFor={id} className="text-sm">
-        {symbol === undefined ? null : <span className="font-mono">{symbol}</span>}{' '}
+        {symbol === undefined ? null : (
+          <ScientificText value={symbol} className="font-mono" />
+        )}{' '}
         {label}
       </Label>
-      {help === undefined ? null : <p className="text-xs text-muted-foreground">{help}</p>}
+      {help === undefined ? null : (
+        <p className="text-xs text-muted-foreground">
+          <ScientificText value={help} />
+        </p>
+      )}
       <Input
         id={id}
         value={value}
@@ -90,7 +97,9 @@ export function QuantityField({
   return (
     <div className="grid gap-1.5" data-field-path={fieldPath}>
       <Label htmlFor={id} className="text-sm">
-        {symbol === undefined ? null : <span className="font-mono">{symbol}</span>}{' '}
+        {symbol === undefined ? null : (
+          <ScientificText value={symbol} className="font-mono" />
+        )}{' '}
         {label}
       </Label>
       <div className="flex flex-wrap items-start gap-2">

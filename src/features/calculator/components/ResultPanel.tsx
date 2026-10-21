@@ -10,6 +10,7 @@
  */
 import { Info, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
 import { useState } from 'react'
+import { ScientificText } from '@/components/scientific/ScientificText'
 import { Badge } from '@/components/ui/badge'
 import { ProvenanceBadge } from './ProvenanceBadge'
 import type { CalculationResult } from '@/engine/types'
@@ -60,7 +61,7 @@ export function ResultPanel({
             >
               <div className="flex items-baseline gap-2">
                 {output.symbol && (
-                  <span className="font-mono text-lg">{output.symbol}</span>
+                  <ScientificText value={output.symbol} className="font-mono text-lg" />
                 )}
                 <span className="text-muted-foreground">{output.label}</span>
               </div>
@@ -73,7 +74,9 @@ export function ResultPanel({
       {/* Formula */}
       <section className="space-y-1" data-testid="result-formula">
         <h3 className="text-sm font-medium">Formula</h3>
-        <p className="font-mono text-sm bg-muted p-2 rounded">{result.formula}</p>
+        <p className="font-mono text-sm bg-muted p-2 rounded">
+          <ScientificText value={result.formula} />
+        </p>
       </section>
 
       {/* Inputs used */}
@@ -86,7 +89,7 @@ export function ResultPanel({
               className="flex flex-wrap items-center gap-2 text-sm"
               data-testid="result-input"
             >
-              <span className="font-mono w-16">{input.symbol}</span>
+              <ScientificText value={input.symbol} className="font-mono w-16" />
               <span className="text-muted-foreground w-24">{input.label}</span>
               <span className="font-mono">{input.value} {input.unit}</span>
               {input.provenance ? (
@@ -116,7 +119,7 @@ export function ResultPanel({
           <ul className="ml-4 list-disc space-y-1 text-sm">
             {result.assumptions.map((a, i) => (
               <li key={i} data-testid="assumption">
-                {a}
+                <ScientificText value={a} />
               </li>
             ))}
           </ul>
@@ -147,7 +150,9 @@ export function ResultPanel({
                       </Badge>
                       <span className="font-medium capitalize">{w.severity}</span>
                     </div>
-                    <p className="mt-1">{w.message}</p>
+                    <p className="mt-1">
+                      <ScientificText value={w.message} />
+                    </p>
                   </div>
                 </div>
               </li>

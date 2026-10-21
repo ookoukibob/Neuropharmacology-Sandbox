@@ -11,6 +11,7 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Calculator, Database } from 'lucide-react'
+import { ScientificText } from '@/components/scientific/ScientificText'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -205,7 +206,12 @@ export function CalculatorView() {
               </select>
             </div>
 
-            <p className="text-sm text-muted-foreground font-mono">{MODELS[model as ModelId].formula}</p>
+            <p
+              className="text-sm text-muted-foreground font-mono"
+              data-testid="model-formula"
+            >
+              <ScientificText value={MODELS[model as ModelId].formula} />
+            </p>
 
             {/* PK mode toggle */}
             {isPK && (

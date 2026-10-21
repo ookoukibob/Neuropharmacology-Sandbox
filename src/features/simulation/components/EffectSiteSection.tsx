@@ -9,6 +9,7 @@
  * Field errors are produced by `compileScenario` (draft parsing) and shown
  * next to their control; scientific validation remains the engine's.
  */
+import { ScientificText } from '@/components/scientific/ScientificText'
 import { Label } from '@/components/ui/label'
 import type { EffectSiteDraft } from '../draft'
 import type { DraftError } from '../draft'
@@ -42,10 +43,12 @@ export function EffectSiteSection({ draft, errors, onChange }: EffectSiteSection
             Effect-site and receptor-occupancy analysis
           </Label>
           <p className="text-xs text-muted-foreground">
-            Optional. Adds an effect-site concentration Ce (a mathematical model variable — not a
-            measured brain or CNS concentration) and a single-site binding ratio Ce/(Ce + Kd) — not
-            an effect, efficacy or clinical prediction. Unbound central concentration is
-            reconstructed as piecewise linear between emitted PK samples.
+            Optional. Adds an effect-site concentration <ScientificText value="C_e" /> (a
+            mathematical model variable — not a measured brain or CNS concentration) and a
+            single-site binding ratio{' '}
+            <ScientificText value="C_e/(C_e + K_d)" /> — not an effect, efficacy or clinical
+            prediction. Unbound central concentration is reconstructed as piecewise linear between
+            emitted PK samples.
           </p>
         </div>
       </div>
