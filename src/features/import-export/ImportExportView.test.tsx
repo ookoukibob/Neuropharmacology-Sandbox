@@ -420,7 +420,11 @@ describe('ImportExportView — export', () => {
     URL.revokeObjectURL = vi.fn()
   })
 
-  it('exports the whole library as .npsl, .json and .csv with lossiness warning', async () => {
+  // Three async exports share one budget. Under parallel CI workers the
+  // IndexedDB read plus blob serialization can exceed the default 5 000 ms,
+  // so this integration test gets its own budget; the global default is
+  // unchanged.
+  it('exports the whole library as .npsl, .json and .csv with lossiness warning', { timeout: 10_000 }, async () => {
     await libraryRepository.replaceLibrary(syntheticLibrary([syntheticDrug()]))
     render(<ImportExportView />)
 
@@ -431,6 +435,9 @@ describe('ImportExportView — export', () => {
     // .npsl — canonical envelope with provenance intact.
     fireEvent.click(screen.getByTestId('export-npsl'))
     await screen.findByTestId('export-status')
+    // The status element is re-rendered with the same test id on the next
+    // export, so wait for the blob it reports instead of only the element.
+    await waitFor(() => expect(captured).toHaveLength(1))
     expect(screen.getByTestId('export-status')).toHaveTextContent('Downloaded')
     expect(screen.getByTestId('export-status')).toHaveTextContent('.npsl')
     const npsl = JSON.parse(await captured[0]!.text()) as {
