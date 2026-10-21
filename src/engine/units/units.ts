@@ -34,6 +34,7 @@ export const MASS_DIMENSIONS: readonly DimensionId[] = ['mass']
 export const VOLUME_DIMENSIONS: readonly DimensionId[] = ['volume']
 export const CLEARANCE_DIMENSIONS: readonly DimensionId[] = ['clearance']
 export const MASS_FLOW_RATE_DIMENSIONS: readonly DimensionId[] = ['mass-flow-rate']
+export const MOLAR_MASS_DIMENSIONS: readonly DimensionId[] = ['molar-mass']
 
 export type UnitCheck =
   | { readonly reason: 'ok'; readonly def: UnitDef }
@@ -81,6 +82,8 @@ export function dimensionLabel(dimension: DimensionId): string {
       return 'clearance'
     case 'mass-flow-rate':
       return 'mass-flow rate'
+    case 'molar-mass':
+      return 'molar mass'
   }
 }
 

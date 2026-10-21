@@ -48,6 +48,12 @@ export type DimensionId =
    * hour, not milligrammes and not litres per hour.
    */
   | 'mass-flow-rate'
+  /**
+   * Molar mass — mass per amount of substance, base g/mol (phase 46). Needed
+   * only to convert a molar concentration into a mass concentration; the
+   * application never invents a value for it.
+   */
+  | 'molar-mass'
 
 export interface UnitDef {
   /** Canonical display symbol, e.g. "nM". */

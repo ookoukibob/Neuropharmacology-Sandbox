@@ -83,6 +83,10 @@ const UNITS: readonly UnitDef[] = [
   { symbol: 'µg/min', dimension: 'mass-flow-rate', toBase: 0.06, aliases: ['ug/min'] },
   { symbol: 'g/h', dimension: 'mass-flow-rate', toBase: 1000 },
 
+  // Molar mass — base g/mol (phase 46). Only "g/mol" is offered: the
+  // molecular weight is a declared property, never a converted convenience.
+  { symbol: 'g/mol', dimension: 'molar-mass', toBase: 1, aliases: ['gmol', 'Da'] },
+
   { symbol: '1', dimension: 'dimensionless', toBase: 1 },
   { symbol: '%', dimension: 'dimensionless', toBase: 0.01, aliases: ['percent'] },
 ]
