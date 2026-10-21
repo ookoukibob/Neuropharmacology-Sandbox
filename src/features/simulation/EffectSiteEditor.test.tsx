@@ -149,6 +149,56 @@ describe('effect-site editor', () => {
     expect(screen.getByTestId('simulation-idle')).toBeInTheDocument()
   })
 
+  it('explains the model with the values this run actually used', async () => {
+    const user = userEvent.setup()
+    renderView()
+    await enableEffectSite(user)
+    await user.type(screen.getByTestId('effect-site-fu'), '0.5')
+    await user.type(screen.getByTestId('effect-site-ke0'), '2')
+    await user.type(screen.getByTestId('effect-site-kd'), '2')
+    await user.click(runButton())
+    const explanation = await screen.findByTestId('effect-site-explanation')
+
+    // Equations and the parameters actually used.
+    expect(within(explanation).getByTestId('effect-site-equations')).toHaveTextContent(/dC_e\/dt/)
+    const params = within(explanation).getByTestId('effect-site-parameters')
+    expect(params).toHaveTextContent(/0\.5/)
+    expect(params).toHaveTextContent(/2 h⁻¹/)
+    expect(params).toHaveTextContent(/2 mg\/L/)
+    // The method caveat is stated, not implied.
+    expect(within(explanation).getByTestId('effect-site-method-note')).toHaveTextContent(/piecewise linear/i)
+    expect(within(explanation).getByTestId('effect-site-method-note')).toHaveTextContent(/not identical/i)
+    // Engine assumptions are surfaced, not re-authored in the UI.
+    expect(within(explanation).getByTestId('effect-site-assumptions')).toHaveTextContent(/NOT a brain or CNS model/i)
+    // Initial condition and bolus continuity are documented.
+    expect(within(explanation).getByTestId('effect-site-event-note')).toHaveTextContent(/pre-event/i)
+  })
+
+  it('omits the explanation entirely for a PK-only run', async () => {
+    const user = userEvent.setup()
+    renderView()
+    await user.click(runButton())
+    await screen.findByTestId('stub-chart-concentration')
+    expect(screen.queryByTestId('effect-site-explanation')).not.toBeInTheDocument()
+  })
+
+  it('does not show a previous run\'s parameters after a later failed run', async () => {
+    const user = userEvent.setup()
+    renderView()
+    await enableEffectSite(user)
+    await user.type(screen.getByTestId('effect-site-fu'), '0.5')
+    await user.type(screen.getByTestId('effect-site-ke0'), '2')
+    await user.type(screen.getByTestId('effect-site-kd'), '2')
+    await user.click(runButton())
+    await screen.findByTestId('effect-site-explanation')
+
+    // Break the configuration so the run cannot produce a result.
+    await user.clear(screen.getByTestId('effect-site-ke0'))
+    await waitFor(() => expect(screen.queryByTestId('effect-site-explanation')).not.toBeInTheDocument())
+    await user.click(runButton())
+    expect(screen.queryByTestId('effect-site-explanation')).not.toBeInTheDocument()
+  })
+
   it('is keyboard operable', async () => {
     const user = userEvent.setup()
     renderView()
