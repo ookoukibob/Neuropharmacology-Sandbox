@@ -8,7 +8,7 @@
  * names are display text only.
  */
 import type { SandboxDatabase } from '../db/database'
-import { savedScenarioSchema } from '../schemas/scenarios'
+import { savedScenarioSchema, type SavedScenarioRecord } from '../schemas/scenarios'
 import { newId } from '../id'
 import {
   normalizeScenarioName,
@@ -52,13 +52,26 @@ export class DexieScenarioRepository implements ScenarioRepository {
     this.idFactory = idFactory
   }
 
+  /**
+   * Convert a schema-validated record into the domain type.
+   *
+   * The stored schema is structurally permissive (it exists to validate
+   * STORAGE shape); this narrows the parsed output to `SavedScenario`.
+   * `effectSite` is preserved exactly as stored — absent stays absent, which
+   * is what makes pre-phase-46 records load with effect-site analysis
+   * disabled, and no parameter value is ever invented here.
+   */
+  private static toScenario(record: SavedScenarioRecord): SavedScenario {
+    return record as unknown as SavedScenario
+  }
+
   async list(): Promise<ScenarioListResult> {
     const rows = await this.db.scenarios.toArray()
     const scenarios: SavedScenario[] = []
     const corrupt: { id: string; message: string }[] = []
     for (const row of rows) {
       const parsed = savedScenarioSchema.safeParse(row)
-      if (parsed.success) scenarios.push(parsed.data)
+      if (parsed.success) scenarios.push(DexieScenarioRepository.toScenario(parsed.data))
       else {
         const id = typeof (row as { id?: unknown }).id === 'string' ? (row as { id: string }).id : '(missing id)'
         corrupt.push({ id, message: parsed.error.issues.map((issue) => issue.message).join('; ') })
@@ -75,7 +88,7 @@ export class DexieScenarioRepository implements ScenarioRepository {
     if (!parsed.success) {
       return failure('CORRUPT', `Scenario "${id}" is stored in an unreadable form and was not loaded.`)
     }
-    return { ok: true, scenario: parsed.data }
+    return { ok: true, scenario: DexieScenarioRepository.toScenario(parsed.data) }
   }
 
   async create(name: string, draft: SimulationDraft): Promise<ScenarioOperationOutcome> {
@@ -124,7 +137,7 @@ export class DexieScenarioRepository implements ScenarioRepository {
       const candidate = { ...record, draft: cloneDraft(draft), updatedAt, ...(nextName === undefined ? {} : { name: nextName }) }
       const validated = savedScenarioSchema.safeParse(candidate)
       if (!validated.success) throw new Error(validated.error.issues[0]?.message ?? 'invalid draft')
-      return validated.data
+      return DexieScenarioRepository.toScenario(validated.data)
     })
   }
 
@@ -174,7 +187,7 @@ export class DexieScenarioRepository implements ScenarioRepository {
         if (current === undefined) return { missing: true as const }
         const parsed = savedScenarioSchema.safeParse(current)
         if (!parsed.success) return { corrupt: true as const }
-        const next = update(parsed.data)
+        const next = update(DexieScenarioRepository.toScenario(parsed.data))
         await this.db.scenarios.put(next as SavedScenario)
         return { scenario: next }
       })

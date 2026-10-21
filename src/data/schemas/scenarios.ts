@@ -53,6 +53,23 @@ export const simulationDraftSchema = z.object({
     maxStep: z.string(),
     maxSteps: z.string(),
   }),
+  /**
+   * Effect-site section (phase 46). OPTIONAL: records saved before phase 46
+   * have no such key and stay valid (they load with effect-site analysis
+   * disabled). Every numeric input is a string, so blank or temporarily
+   * unparseable text is stored faithfully — this schema is structural only and
+   * never validates the science.
+   */
+  effectSite: z
+    .object({
+      enabled: z.boolean(),
+      unboundFraction: z.string(),
+      ke0: z.string(),
+      kd: quantityDraftSchema,
+      molecularWeight: z.string(),
+      molecularWeightProvenance: z.string(),
+    })
+    .optional(),
 })
 
 const isoDateTime = z

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { SandboxDatabase } from '../db/database'
 import { DexieScenarioRepository } from './dexieScenarioRepository'
 import { DexieDrugRepository } from './dexieDrugRepository'
-import { demoDraft, type SimulationDraft } from '../../features/simulation/draft'
+import { demoDraft, emptyEffectSiteDraft, type SimulationDraft } from '../../features/simulation/draft'
 
 /**
  * Saved-scenario repository (phase 45): CRUD, draft fidelity, name policy,
@@ -258,5 +258,119 @@ describe('backup integration', () => {
       'storage',
     ])
     expect((doc['counts'] as Record<string, unknown>)['scenarioRows']).toBeUndefined()
+  })
+})
+describe('effect-site draft persistence (phase 46)', () => {
+  const withEffectSite = (draft: SimulationDraft): SimulationDraft => ({
+    ...draft,
+    effectSite: {
+      enabled: true,
+      unboundFraction: '0.5',
+      ke0: '2',
+      kd: { value: '2', unit: 'mg/L' },
+      molecularWeight: '',
+      molecularWeightProvenance: '',
+    },
+  })
+
+  it('round-trips a valid effect-site section', async () => {
+    const created = await repo.create('With effect site', withEffectSite(demoDraft()))
+    if (!created.ok) throw new Error('setup')
+    const loaded = await repo.get(created.scenario.id)
+    expect(loaded.ok).toBe(true)
+    if (!loaded.ok) return
+    expect(loaded.scenario.draft.effectSite).toEqual({
+      enabled: true,
+      unboundFraction: '0.5',
+      ke0: '2',
+      kd: { value: '2', unit: 'mg/L' },
+      molecularWeight: '',
+      molecularWeightProvenance: '',
+    })
+  })
+
+  it('preserves blank and unparseable effect-site draft text verbatim', async () => {
+    const draft = incompleteDraft()
+    const blank: SimulationDraft = {
+      ...draft,
+      effectSite: {
+        enabled: true,
+        unboundFraction: '',
+        ke0: 'abc',
+        kd: { value: '', unit: 'nM' },
+        molecularWeight: ' ',
+        molecularWeightProvenance: '',
+      },
+    }
+    const created = await repo.create('Blank effect site', blank)
+    if (!created.ok) throw new Error('setup')
+    const loaded = await repo.get(created.scenario.id)
+    if (!loaded.ok) throw new Error('reload failed')
+    expect(loaded.scenario.draft.effectSite).toEqual(blank.effectSite)
+  })
+
+  it('keeps the section through rename, duplicate and save-over', async () => {
+    const created = await repo.create('Original', withEffectSite(demoDraft()))
+    if (!created.ok) throw new Error('setup')
+    await repo.rename(created.scenario.id, 'Renamed')
+    const copy = await repo.duplicate(created.scenario.id)
+    if (!copy.ok) throw new Error('duplicate failed')
+    await repo.saveOver(created.scenario.id, withEffectSite({ ...demoDraft(), clearance: { value: '9', unit: 'L/h' } }))
+
+    const original = await repo.get(created.scenario.id)
+    const duplicated = await repo.get(copy.scenario.id)
+    if (!original.ok || !duplicated.ok) throw new Error('reload failed')
+    expect(original.scenario.draft.effectSite?.enabled).toBe(true)
+    expect(duplicated.scenario.draft.effectSite?.enabled).toBe(true)
+    expect(original.scenario.draft.clearance.value).toBe('9')
+    // The copy is independent: its clearance is untouched.
+    expect(duplicated.scenario.draft.clearance.value).toBe('2')
+  })
+
+  it('loads a legacy record with no effect-site section and invents nothing', async () => {
+    const legacy = { ...demoDraft() }
+    delete (legacy as { effectSite?: unknown }).effectSite
+    const created = await repo.create('Legacy', legacy)
+    if (!created.ok) throw new Error('setup')
+    const loaded = await repo.get(created.scenario.id)
+    if (!loaded.ok) throw new Error('reload failed')
+    expect(loaded.scenario.draft.effectSite).toBeUndefined()
+    // Nothing was fabricated for an older record.
+    expect(loaded.scenario.draft.effectSite).not.toEqual(
+      expect.objectContaining({ enabled: true }),
+    )
+  })
+
+  it('preserves the section through a .npsb round trip', async () => {
+    const drugs = new DexieDrugRepository(db)
+    const created = await repo.create('Backed up', withEffectSite(demoDraft()))
+    if (!created.ok) throw new Error('setup')
+    const exported = await drugs.exportRecoveryArchive()
+    if (!exported.ok) throw new Error('export failed')
+    await repo.delete(created.scenario.id)
+    expect((await repo.list()).scenarios).toHaveLength(0)
+    const restored = await drugs.restoreRecoveryArchive(exported.text)
+    expect(restored.ok).toBe(true)
+    const after = await repo.get(created.scenario.id)
+    if (!after.ok) throw new Error('restore lost the record')
+    expect(after.scenario.draft.effectSite?.enabled).toBe(true)
+    expect(after.scenario.draft.effectSite?.ke0).toBe('2')
+  })
+
+  it('round-trips a record with the section DISABLED without inventing values', async () => {
+    const drugs = new DexieDrugRepository(db)
+    const created = await repo.create(
+      'Disabled',
+      { ...demoDraft(), effectSite: emptyEffectSiteDraft() },
+    )
+    if (!created.ok) throw new Error('setup')
+    const exported = await drugs.exportRecoveryArchive()
+    if (!exported.ok) throw new Error('export failed')
+    await repo.delete(created.scenario.id)
+    await drugs.restoreRecoveryArchive(exported.text)
+    const after = await repo.get(created.scenario.id)
+    if (!after.ok) throw new Error('restore lost the record')
+    expect(after.scenario.draft.effectSite).toEqual(emptyEffectSiteDraft())
+    expect(after.scenario.draft.effectSite?.unboundFraction).toBe('')
   })
 })
