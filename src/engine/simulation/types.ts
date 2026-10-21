@@ -30,6 +30,7 @@
  * that is not finite fails the simulation instead of reaching a chart.
  */
 import type { Provenance } from '../../domain/provenance/provenance'
+import type { EffectSiteInput } from './effect-site'
 
 // ---------------------------------------------------------------------------
 // ODE contract
@@ -281,6 +282,14 @@ export interface SimulationScenario {
   readonly parameters: TwoCompartmentParameters
   readonly events: readonly DosingEvent[]
   readonly solver: SolverOptions
+  /**
+   * Opt-in effect-site / receptor-occupancy analysis (phase 46). Absent means
+   * PK-only: no effect-site calculation runs and no sample changes shape. When
+   * present the configuration is validated by `resolveEffectSite` — every
+   * parameter is required, nothing is defaulted, and Ki/IC50/EC50 are never
+   * substituted for Kd.
+   */
+  readonly effectSite?: EffectSiteInput
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +434,38 @@ export interface SimulationResult {
   }
   readonly assumptions: readonly string[]
   readonly warnings: readonly SimulationWarning[]
+  /**
+   * Effect-site sidecar (phase 46), present only when the scenario requested
+   * it. `series[i]` corresponds exactly to `samples[i]` — same order, same
+   * time, side and eventGroup; duplicate-time event samples are preserved.
+   * Ce and occupancy are derived outputs, never drug amounts, and never enter
+   * the mass-balance accounting.
+   */
+  readonly effectSite?: EffectSiteResult
+}
+
+/** One effect-site row, aligned positionally with `SimulationResult.samples[i]`. */
+export interface EffectSitePoint {
+  readonly time: number
+  readonly side: SampleSide
+  readonly eventGroup?: string
+  /** Effect-site concentration in the PK concentration unit (mg/L). */
+  readonly effectSiteConcentration: number
+  /** Single-site occupancy Ce/(Ce + Kd), dimensionless in [0, 1). */
+  readonly occupancy: number
+}
+
+/** The validated effect-site configuration and its aligned series. */
+export interface EffectSiteResult {
+  readonly series: readonly EffectSitePoint[]
+  readonly unboundFraction: number
+  readonly ke0: number
+  /** Kd in the PK concentration unit (mg/L). */
+  readonly kdInPkUnit: number
+  readonly kdConversion: 'same-unit' | 'unit-conversion' | 'molecular-weight'
+  readonly molecularWeightUsed?: number
+  readonly concentrationUnit: string
+  readonly assumptions: readonly string[]
 }
 
 /**
