@@ -1288,7 +1288,7 @@ Rates are found by a bounded, deterministic search; the mixing fraction by the
 coordinate refinement described above. The reported values are re-evaluated at
 the final parameters. The cost is `O(n)` per objective evaluation and grows with
 the number of trial rates; on this implementation a 500-row dataset completes
-both fits in roughly 30 ms and a 25,000-row dataset (the storage limit) in about
+both fits in about 50 ms and a 25,000-row dataset (the storage limit) in about
 one second. The computation happens only after the declaration.
 
 ### 15.7 Interface and boundaries
