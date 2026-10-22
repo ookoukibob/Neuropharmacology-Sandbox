@@ -273,18 +273,76 @@ describe('proportional-variance fit — data integrity and boundaries', () => {
     expect(baselineSeries.map((row) => row.sourceRow)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
   })
 
-  it('requires strictly positive observed concentrations', () => {
-    const result = fitProportionalVarianceDecay(
+  it('accepts a zero observation when a positive row constrains the tail', () => {
+    // 100, 20, 0 at times 0, 1, 2. As q -> infinity every u > 0 prediction is
+    // driven to zero, but the positive row at t = 1 makes the deviance diverge
+    // to +infinity there, so the joint likelihood is bounded and has a finite
+    // interior maximum. Independent reference: q = 3.674, A = 101.294086,
+    // phi = 1.170784, lnL = -8.664868.
+    const data = rows([
+      [0, 100],
+      [1, 20],
+      [2, 0],
+    ])
+    const fit = successful(fitProportionalVarianceDecay(data))
+    expect(Math.abs(fit.dimensionlessRate - 3.674)).toBeLessThan(0.01)
+    expect(fit.amplitude).toBeCloseTo(101.294, 2)
+    expect(fit.dispersion).toBeCloseTo(1.1708, 3)
+    expect(fit.logLikelihood).toBeCloseTo(-8.66487, 4)
+    expect(fit.dimensionlessRate).toBeLessThan(50)
+    expect(fit.rateInformative).toBe(true)
+
+    // The baseline model nests it and stays finite too.
+    const withBaseline = successful(fitProportionalVarianceWithBaseline(data))
+    expect(Number.isFinite(withBaseline.logLikelihood)).toBe(true)
+    expect(withBaseline.deviance).toBeLessThanOrEqual(fit.deviance + 1e-6)
+  })
+
+  it('keeps a zero at the reference time when later rows are positive', () => {
+    // The reference row is zero and later rows are positive: the later rows pin
+    // the amplitude, so no prediction is driven to zero. The constrained rate
+    // collapses to q = 0, which is a reported boundary, not a failure.
+    const fit = successful(
+      fitProportionalVarianceDecay(
+        rows([
+          [0, 0],
+          [1, 50],
+          [2, 20],
+        ]),
+      ),
+    )
+    expect(fit.zeroRate).toBe(true)
+    expect(fit.warnings.map((warning) => warning.code)).toContain('ZERO_RATE_BOUNDARY')
+  })
+
+  it('rejects the configuration whose joint likelihood is unbounded', () => {
+    // Every observation after t = 0 is zero, so nothing constrains the tail:
+    // phi-hat stays finite while sum ln mu -> -infinity, and the likelihood
+    // grows without bound as the rate increases.
+    for (const data of [
       rows([
         [0, 100],
-        [1, 50],
+        [1, 0],
         [2, 0],
       ]),
-    )
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.code).toBe('NON_POSITIVE_OBSERVATION')
-    expect(result.message).toMatch(/strictly positive/i)
+      rows([
+        [0, 100],
+        [1, 0],
+        [2, 0],
+        [3, 0],
+      ]),
+    ]) {
+      for (const result of [
+        fitProportionalVarianceDecay(data),
+        fitProportionalVarianceWithBaseline(data),
+      ]) {
+        expect(result.ok).toBe(false)
+        if (result.ok) continue
+        expect(result.code).toBe('UNBOUNDED_LIKELIHOOD')
+        expect(result.message).toMatch(/after the earliest measured time/i)
+        expect(result.message).toMatch(/increases without bound/i)
+      }
+    }
 
     const allZero = fitProportionalVarianceWithBaseline(
       rows([

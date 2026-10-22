@@ -1194,12 +1194,44 @@ closed form at each `(rate, λ)`; both are still estimated model parameters.
 
 ### 15.2 Valid domain and degeneracies
 
-- **Every observed concentration must be strictly positive.** With variance
-  φ·μ, an observation at exactly zero contributes `ln(φμ) + μ/φ`, which
-  decreases without bound as μ → 0. The likelihood then has **no finite
-  maximum**, so no estimate exists. Such a dataset is rejected with
-  `NON_POSITIVE_OBSERVATION`; it is not rescued with a variance floor, a
-  clamped prediction or an epsilon.
+#### Zero observations
+
+A zero observed concentration is **valid**. For any strictly positive
+prediction its Gaussian density is finite, with contribution
+`ln(φμ) + μ/φ`; the contribution diverges only as μ → 0. Whether that makes the
+*joint* likelihood unbounded depends on the mean model and on the other rows, so
+the two candidates are analysed separately.
+
+**M0** (`μ_i = A·exp(−q·u_i)`). Driving one observation's prediction to zero
+requires `q → ∞`, because `A` is pinned by the positive rows. That also drives
+every other `u > 0` prediction to zero:
+
+- If **any** observation after the first time is positive, its residual term
+  grows like `y²/μ` and the deviance diverges to `+∞`; the likelihood is
+  bounded and a finite optimum exists. Example (used as a test): `100, 20, 0`
+  at times `0, 1, 2` has its maximum at `q ≈ 3.674`, `A ≈ 101.294`,
+  `φ ≈ 1.171`, `lnL ≈ −8.6649` — verified against an independent numerical
+  reference.
+- If **every** observation after the first time is exactly zero, nothing
+  constrains the tail: `φ̂` tends to a finite value while `Σ ln μ_i → −∞`, so
+  the deviance diverges to `−∞` and the likelihood increases without bound. No
+  finite MLE exists.
+
+**M1** (`μ_i = B + A·exp(−q·u_i)`). With `B > 0` every prediction is `≥ B > 0`,
+so no single contribution can diverge. The unbounded configuration appears only
+along `B → 0` with `q → ∞`, which reduces to the M0 case. The criterion is
+therefore identical for both candidates.
+
+The implementation rejects exactly that configuration, with
+`UNBOUNDED_LIKELIHOOD`. It is not reported as a boundary fit at the numerical
+rate cap, and it is not rescued with a variance floor, a clamped prediction or
+an epsilon. Every other dataset containing zeros is fitted normally. A zero at
+the reference time with positive rows later is also valid: the later rows pin
+the amplitude, so the rate may collapse to `q = 0`, which is a reported
+boundary.
+
+#### Other domain constraints
+
 - **Every predicted concentration must be strictly positive and finite.** A
   candidate that cannot satisfy this fails with `NON_POSITIVE_PREDICTION`
   rather than being clamped.
@@ -1244,9 +1276,14 @@ scaling and source order. Nothing is sorted, averaged, deduplicated, excluded
 or mutated, and replicates remain independent observations.
 
 Both searches also assume that the coarse grid brackets the basin containing the
-optimum. A maximum narrower than a grid cell (rate step 1 in `q`, mixing step
-0.125 in λ) could be missed. The grids are a numerical resolution choice, not a
-statistical claim, and the reported point is always the best evaluated one.
+optimum. The implemented coarse grids are **step 0.5 in `q`** (101 points over
+[0, 50], `RATE_COARSE_STEPS = 100`) and **step 0.125 in λ** (9 points,
+`LAMBDA_COARSE_STEPS = 8`); local refinement is golden-section inside the
+bracketing cell, and the admissible rate range is bounded at `q = 50`. A
+maximum narrower than a coarse cell can still be missed, and refinement only
+searches inside the selected bracket. The grids are a numerical resolution
+choice, not a statistical claim, and the reported point is always the best
+evaluated one.
 
 ### 15.4 Conditional AICc
 

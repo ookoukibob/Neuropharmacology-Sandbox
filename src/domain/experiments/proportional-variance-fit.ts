@@ -34,7 +34,31 @@
  *   the profile is minimised at  m = Σ y_i / Σ h_i,
  *   leaving a one-dimensional profile in λ that is searched deterministically.
  *
- * THE LIKELIHOOD IS UNBOUNDED WHERE THE FIT IS EXACT. If a candidate can
+ * ZERO OBSERVATIONS ARE VALID. A zero observed concentration has a finite
+ * Gaussian density for any strictly positive mean: its contribution is
+ * ln(φμ) + μ/φ, which diverges only as μ → 0. Whether that makes the JOINT
+ * likelihood unbounded depends on the mean model and on the other rows, so the
+ * two candidates are analysed separately.
+ *
+ *   M0 (μ_i = A·exp(−q·u_i)). Driving one observation's prediction to zero
+ *   requires q → ∞, because A is pinned by the positive observations. That
+ *   drives EVERY u > 0 prediction to zero. If any of those observations is
+ *   positive, its residual term grows like y²/μ and the deviance diverges to
+ *   +∞, so the likelihood stays bounded and a finite optimum exists. If every
+ *   observation after the first measured time is exactly zero, nothing
+ *   constrains the tail: φ̂ tends to a finite value while Σ ln μ_i → −∞, so the
+ *   likelihood increases without bound and no MLE exists.
+ *
+ *   M1 (μ_i = B + A·exp(−q·u_i)). With B > 0 every prediction is ≥ B > 0, so no
+ *   single contribution can diverge. The unbounded configuration appears only
+ *   along B → 0 with q → ∞, which reduces to the M0 case; the criterion is
+ *   therefore identical for both candidates.
+ *
+ * Only that configuration is rejected (`UNBOUNDED_LIKELIHOOD`); a zero by
+ * itself does not invalidate a dataset. For example, 100, 20, 0 at times 0, 1,
+ * 2 has a finite interior maximum and is fitted normally.
+ *
+ * THE LIKELIHOOD IS ALSO UNBOUNDED WHERE THE FIT IS EXACT. If a candidate can
  * reproduce every observation with μ_i > 0, then φ̂ → 0 and −2 lnL → −∞. That
  * is a degenerate boundary of this error model, not an estimate. Such a fit is
  * reported as a STRUCTURED FAILURE (`DEGENERATE_DISPERSION`), never with a
@@ -138,11 +162,12 @@ export type ProportionalVarianceFailureCode =
   /** φ̂ ≤ 0 or numerically zero: the likelihood has no finite maximum. */
   | 'DEGENERATE_DISPERSION'
   /**
-   * An observed concentration is exactly zero. With variance proportional to
-   * the mean, the Gaussian likelihood grows without bound as that mean
-   * approaches zero, so no maximum-likelihood estimate exists.
+   * Every observation after the earliest measured time is exactly zero. No
+   * positive observation constrains the tail, so the likelihood grows without
+   * bound as the rate increases and no finite maximum-likelihood estimate
+   * exists. A zero observation on its own does NOT trigger this.
    */
-  | 'NON_POSITIVE_OBSERVATION'
+  | 'UNBOUNDED_LIKELIHOOD'
   /** A predicted concentration was not strictly positive and finite. */
   | 'NON_POSITIVE_PREDICTION'
 
@@ -721,21 +746,31 @@ function prepareContext(
     return { ok: false, failure: failure(prepared.code, prepared.message) }
   }
   const { problem } = prepared
-  // DOMAIN RESTRICTION, not a numerical convenience. The variance φ·μ vanishes
-  // with μ, so for an observed zero the log-density is ln(φμ) + μ/φ, which
-  // decreases without bound as μ → 0: the likelihood has no finite maximum on
-  // any set that lets the prediction approach zero. Rejecting the dataset is
-  // the only honest option; a variance floor or a clamped prediction would be
-  // an arbitrary substitution for a model that does not apply here.
+  // A zero observation is valid: its density is finite for any μ > 0. What makes
+  // the JOINT likelihood unbounded is the absence of any positive observation
+  // after the reference time. For M0, driving a late prediction to zero needs
+  // q → ∞, which also drives every other u > 0 prediction to zero; a positive
+  // row there would make the deviance diverge to +∞. Only when every late row is
+  // zero does φ̂ stay finite while Σ ln μ_i → −∞. For M1 the same sequence
+  // requires B → 0, so the criterion is identical. See the module docs.
+  let allLaterObservationsAreZero = true
+  let hasLaterObservation = false
   for (const measurement of measurements) {
-    if (measurement.concentration === 0) {
-      return {
-        ok: false,
-        failure: failure(
-          'NON_POSITIVE_OBSERVATION',
-          'An observed concentration is exactly zero. With variance proportional to the predicted concentration, the likelihood grows without bound as that prediction approaches zero, so no maximum-likelihood estimate exists. This error model requires strictly positive observed concentrations.',
-        ),
+    if (measurement.time > problem.tRef) {
+      hasLaterObservation = true
+      if (measurement.concentration !== 0) {
+        allLaterObservationsAreZero = false
+        break
       }
+    }
+  }
+  if (hasLaterObservation && allLaterObservationsAreZero) {
+    return {
+      ok: false,
+      failure: failure(
+        'UNBOUNDED_LIKELIHOOD',
+        'Every observation after the earliest measured time is exactly zero, so no positive observation constrains the tail. As the decay rate grows, the predicted concentrations approach zero and the likelihood increases without bound: no finite maximum-likelihood estimate exists. This configuration is rejected rather than reported as a fit at the numerical rate cap.',
+      ),
     }
   }
   let totalConcentration = 0

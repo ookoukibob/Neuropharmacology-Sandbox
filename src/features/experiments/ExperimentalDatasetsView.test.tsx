@@ -1213,6 +1213,58 @@ describe('proportional-variance error model (phase 47)', () => {
     expect(within(fresh).queryByTestId('proportional-table')).not.toBeInTheDocument()
   })
 
+  it('fits a dataset that ends in a zero observation', async () => {
+    await select(
+      storedDataset({
+        id: 'pv-trailing-zero',
+        name: 'Trailing zero proportional study',
+        measurements: [
+          row('z1', 1, 0, 100),
+          row('z2', 2, 0.5, 70),
+          row('z3', 3, 1, 45),
+          row('z4', 4, 2, 20),
+          row('z5', 5, 4, 5),
+          row('z6', 6, 6, 0),
+        ],
+      }),
+    )
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('proportional-comparison')
+    fireEvent.click(within(card).getByTestId('proportional-assumption'))
+
+    // A zero at the last time is a valid observation: a positive row at an
+    // earlier time keeps the joint likelihood bounded.
+    expect(within(card).getByTestId('proportional-m0-amplitude')).toHaveTextContent(/mg\/L/)
+    expect(within(card).getByTestId('proportional-m0-loglikelihood')).not.toHaveTextContent('—')
+    expect(within(card).getByTestId('proportional-m0-aicc')).not.toHaveTextContent(/unavailable/i)
+    expect(within(card).queryByTestId('proportional-aicc-reasons')).not.toBeInTheDocument()
+    expect(card).not.toHaveTextContent(/strictly positive observed/i)
+  })
+
+  it('explains the one zero configuration whose likelihood is unbounded', async () => {
+    await select(
+      storedDataset({
+        id: 'pv-unbounded',
+        name: 'Unbounded proportional study',
+        measurements: [
+          row('u1', 1, 0, 100),
+          row('u2', 2, 1, 0),
+          row('u3', 3, 2, 0),
+        ],
+      }),
+    )
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('proportional-comparison')
+    fireEvent.click(within(card).getByTestId('proportional-assumption'))
+
+    expect(within(card).getByTestId('proportional-m0-aicc')).toHaveTextContent(/unavailable/i)
+    expect(within(card).getByTestId('proportional-m1-aicc')).toHaveTextContent(/unavailable/i)
+    const reasons = within(card).getByTestId('proportional-aicc-reasons')
+    expect(reasons).toHaveTextContent(/after the earliest measured time/i)
+    expect(reasons).toHaveTextContent(/increases without bound/i)
+    expect(reasons).not.toHaveTextContent(/strictly positive observed/i)
+  })
+
   it('never writes derived values to the repository', async () => {
     await select(baselineStudy())
     fireEvent.click(screen.getByTestId('dataset-fit'))

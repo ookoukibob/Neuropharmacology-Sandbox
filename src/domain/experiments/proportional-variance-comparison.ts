@@ -122,6 +122,7 @@ export function proportionalVarianceComparisonNotes(): readonly string[] {
     'AICc is relative support WITHIN these two mean models under the declared variance function. It is not proof of the mechanism and says nothing about a model outside this pair.',
     'Declaring the variance function is an assumption, not evidence: this comparison does not test whether the variance really is proportional to the fitted concentration, nor whether errors are independent or Gaussian.',
     'The likelihood requires every predicted concentration to be strictly positive and finite. Candidates that cannot satisfy that are reported as failures; no epsilon, variance floor or clamping is applied to make an invalid likelihood computable.',
+    'An observed concentration of zero is valid: its density is finite for any positive prediction. A dataset whose every observation after the earliest measured time is zero is rejected, because nothing constrains the tail and the likelihood increases without bound as the rate grows.',
     'When a candidate reproduces the data to floating-point resolution, the dispersion is numerically zero and the likelihood has no finite maximum. The criterion is withheld in that case.',
     'Boundary estimates and nonlinear fitting weaken the regularity assumptions behind information criteria. Boundary warnings are shown, and the comparison is less reliable when they appear.',
     'No hypothesis test, confidence interval, standard error, model weight, probability or winner classification is produced, and no AICc threshold is applied.',
