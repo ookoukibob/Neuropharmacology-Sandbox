@@ -326,6 +326,18 @@ test('a11y: the experimental dataset import, detail and destructive states pass 
   })
   await scan(page, 'experimental datasets (fit results, residual plot and objective profile)')
 
+  // Residual structure: both candidates, two views each. This three-row dataset
+  // reports the spread screen as unavailable, which is itself a rendered state.
+  await expect(page.getByTestId('residual-structure')).toBeVisible()
+  await expect(page.getByTestId('residual-structure-m1')).toBeVisible()
+  await expect(page.getByTestId('residual-fitted-chart-m0').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.getByTestId('residual-fitted-chart-m1').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+  await scan(page, 'experimental datasets (residual structure for both models)')
+
   // Phase 47C model comparison: the declared-assumption state is scanned with
   // the criterion block on screen. This three-row dataset is too small for the
   // criterion, which is itself a reported state, not a rendering failure.

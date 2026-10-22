@@ -1,5 +1,5 @@
 /**
- * Experimental datasets page (phases 47A and 47B).
+ * Experimental datasets page: measured data, fitting and diagnostics.
  *
  * Owns layout and user intent only: the repository-backed hook performs every
  * read/write, CSV/`.npex` import cards produce validated previews, and this
@@ -19,6 +19,12 @@ import {
   type MonoExponentialProfileResult,
   type ProfileLocalization,
 } from '@/domain/experiments/mono-exponential-profile'
+import {
+  analyzeBaselineResiduals,
+  analyzeMonoExponentialResiduals,
+  type ResidualStructureModelResult,
+  type SpreadStatus,
+} from '@/domain/experiments/residual-structure'
 import {
   ERROR_MODEL_CAVEAT,
   ERROR_MODEL_STATEMENT,
@@ -79,6 +85,11 @@ const ExperimentalFitResidualChart = lazy(async () => {
 const ExperimentalFitProfileChart = lazy(async () => {
   const module = await import('@/components/charts/ExperimentalFitProfileChart')
   return { default: module.ExperimentalFitProfileChart }
+})
+
+const ExperimentalFitResidualVsFittedChart = lazy(async () => {
+  const module = await import('@/components/charts/ExperimentalFitResidualVsFittedChart')
+  return { default: module.ExperimentalFitResidualVsFittedChart }
 })
 
 export interface ExperimentalDatasetsViewProps {
@@ -296,6 +307,30 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
     () => (fit === null || !fit.ok ? null : compareMonoExponentialModels(dataset.measurements, fit)),
     [dataset.measurements, fit],
   )
+  // Residual structure reuses the two existing fits: M0's diagnostics and the
+  // M1 fit the comparison already produced. Neither model is fitted again.
+  const m0ResidualStructure = useMemo(
+    () => (fit === null || !fit.ok ? null : analyzeMonoExponentialResiduals(dataset.measurements, fit)),
+    [dataset.measurements, fit],
+  )
+  const m1ResidualStructure = useMemo(
+    () =>
+      modelComparison === null || !modelComparison.ok
+        ? null
+        : analyzeBaselineResiduals(dataset.measurements, modelComparison.baselineFit),
+    [dataset.measurements, modelComparison],
+  )
+  // A visible spread pattern is a caveat on how the criterion should be read,
+  // never a change to the criterion itself or to the declared assumption.
+  const spreadConcern = useMemo(() => {
+    const labels: string[] = []
+    for (const structure of [m0ResidualStructure, m1ResidualStructure]) {
+      if (structure !== null && structure.ok && structure.spread.ok && structure.spread.status === 'visible-pattern') {
+        labels.push(structure.label)
+      }
+    }
+    return labels
+  }, [m0ResidualStructure, m1ResidualStructure])
   const runFit = (): void => {
     setStoredFit({ key: fitKey, result: fitMonoExponentialDecay(dataset.measurements) })
   }
@@ -673,9 +708,10 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
                 <CardTitle headingLevel={3}>Residual diagnostics</CardTitle>
                 <p className="text-xs text-muted-foreground">
                   Residual = observed concentration − fitted concentration, in the dataset’s original
-                  concentration unit. The horizontal zero line represents a perfect prediction. These
-                  are raw residuals from the same unweighted least-squares fit, not standardized
-                  residuals; no universal pass/fail cutoff is applied.
+                  concentration unit. These are raw residuals from the same unweighted least-squares
+                  fit, not standardized residuals; no universal pass/fail cutoff is applied. The
+                  residual plots and the spread screen are shown in the residual structure section
+                  below.
                 </p>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -701,14 +737,6 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
                         </dd>
                       </div>
                     </dl>
-                    <Suspense fallback={<p role="status" className="py-6 text-sm text-muted-foreground">Loading residual plot…</p>}>
-                      <ExperimentalFitResidualChart
-                        residuals={fitDiagnostics.residuals}
-                        timeUnit={dataset.timeUnit}
-                        concentrationUnit={dataset.concentrationUnit}
-                        datasetName={dataset.name}
-                      />
-                    </Suspense>
                     <div className="space-y-2 rounded-md border p-3 text-sm" role="note" data-testid="fit-identifiability-screen">
                       <h4 className="font-medium">Preliminary data-support screen</h4>
                       <p className="text-xs text-muted-foreground">
@@ -742,8 +770,19 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
           {modelComparison !== null && (
             <ModelComparisonCard
               comparison={modelComparison}
+              spreadConcern={spreadConcern}
               timeUnit={dataset.timeUnit}
               concentrationUnit={dataset.concentrationUnit}
+            />
+          )}
+
+          {m0ResidualStructure !== null && (
+            <ResidualStructureCard
+              m0={m0ResidualStructure}
+              m1={m1ResidualStructure}
+              timeUnit={dataset.timeUnit}
+              concentrationUnit={dataset.concentrationUnit}
+              datasetName={dataset.name}
             />
           )}
 
@@ -935,6 +974,8 @@ function FitProfileDiagnostics({
 
 interface ModelComparisonCardProps {
   readonly comparison: MonoExponentialModelComparisonResult
+  /** Models whose residual spread screen found a visible pattern. */
+  readonly spreadConcern: readonly string[]
   readonly timeUnit: string
   readonly concentrationUnit: string
 }
@@ -948,6 +989,7 @@ interface ModelComparisonCardProps {
  */
 function ModelComparisonCard({
   comparison,
+  spreadConcern,
   timeUnit,
   concentrationUnit,
 }: ModelComparisonCardProps) {
@@ -1186,6 +1228,17 @@ function ModelComparisonCard({
               </div>
             )}
 
+            {spreadConcern.length > 0 && (
+              <p className="text-xs text-muted-foreground" data-testid="comparison-spread-caveat">
+                The residual spread screen found a visible difference between the fitted halves for{' '}
+                {spreadConcern.join(' and ')}. That raises a concern about the common-variance part
+                of the declared assumption, but it does not establish that the assumption is false:
+                a mean model missing structure, or a few unusual observations, can produce a similar
+                pattern. The values above are unchanged and no different assumption has been
+                substituted.
+              </p>
+            )}
+
             {hasBoundary && (
               <p className="text-xs text-muted-foreground" data-testid="comparison-boundary-note">
                 At least one estimate sits on a constraint boundary or is unresolved. Constrained
@@ -1210,5 +1263,259 @@ function ModelComparisonCard({
         )}
       </CardContent>
     </Card>
+  )
+}
+
+interface ResidualStructureCardProps {
+  readonly m0: ResidualStructureModelResult
+  readonly m1: ResidualStructureModelResult | null
+  readonly timeUnit: string
+  readonly concentrationUnit: string
+  readonly datasetName: string
+}
+
+const SPREAD_STATUS_TEXT: Record<SpreadStatus, string> = {
+  'visible-pattern':
+    'A visible difference in observed mean absolute residual between the two fitted halves.',
+  'no-visible-pattern': 'No visible difference at the screening resolution used here.',
+  inconclusive: 'Inconclusive: these residuals cannot show a spread difference.',
+}
+
+/**
+ * Residual structure for both fitted candidates.
+ *
+ * Every number and classification comes from the domain layer; this component
+ * only arranges it. Charts are lazy-loaded, and each model keeps its own pair
+ * of views so the two candidates are never mixed.
+ */
+function ResidualStructureCard({
+  m0,
+  m1,
+  timeUnit,
+  concentrationUnit,
+  datasetName,
+}: ResidualStructureCardProps) {
+  return (
+    <Card data-testid="residual-structure">
+      <CardHeader>
+        <CardTitle headingLevel={3}>Residual structure</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          The same residuals shown two ways for each fitted model: against the measured time and
+          against the fitted concentration. Markers are individual stored observations — points are
+          never connected, observations sharing a timestamp stay separate, and every point keeps its
+          source row on hover. Nothing here is sorted, averaged or rewritten.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <ResidualStructureBlock
+          structure={m0}
+          idSuffix="m0"
+          timeChartTestId="fit-residual-chart"
+          timeUnit={timeUnit}
+          concentrationUnit={concentrationUnit}
+          datasetName={datasetName}
+        />
+        {m1 === null ? null : (
+          <ResidualStructureBlock
+            structure={m1}
+            idSuffix="m1"
+            timeChartTestId="fit-residual-chart-m1"
+            timeUnit={timeUnit}
+            concentrationUnit={concentrationUnit}
+            datasetName={datasetName}
+          />
+        )}
+
+        <div
+          className="space-y-1 rounded-md border p-3 text-xs text-muted-foreground"
+          role="note"
+          data-testid="residual-structure-notes"
+        >
+          <h4 className="font-medium text-foreground">What these views can and cannot tell you</h4>
+          <ul className="list-disc space-y-1 pl-4">
+            {(m0.ok ? m0.notes : []).map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+interface ResidualStructureBlockProps {
+  readonly structure: ResidualStructureModelResult
+  readonly idSuffix: 'm0' | 'm1'
+  readonly timeChartTestId: string
+  readonly timeUnit: string
+  readonly concentrationUnit: string
+  readonly datasetName: string
+}
+
+function ResidualStructureBlock({
+  structure,
+  idSuffix,
+  timeChartTestId,
+  timeUnit,
+  concentrationUnit,
+  datasetName,
+}: ResidualStructureBlockProps) {
+  const headingId = `residual-structure-${idSuffix}-heading`
+
+  if (!structure.ok) {
+    return (
+      <section aria-labelledby={headingId} data-testid={`residual-structure-${idSuffix}`}>
+        <h4 id={headingId} className="text-sm font-medium">
+          {structure.label}
+        </h4>
+        <p
+          role="status"
+          className="mt-1 text-xs text-muted-foreground"
+          data-testid={`residual-structure-${idSuffix}-unavailable`}
+        >
+          Residual diagnostics are unavailable for this model: {structure.message}
+        </p>
+      </section>
+    )
+  }
+
+  const spread = structure.spread
+  return (
+    <section aria-labelledby={headingId} className="space-y-3" data-testid={`residual-structure-${idSuffix}`}>
+      <div>
+        <h4 id={headingId} className="text-sm font-medium">
+          {structure.label}
+        </h4>
+        <dl className="mt-1 grid gap-x-6 gap-y-1 text-xs sm:grid-cols-3">
+          <div>
+            <dt className="text-muted-foreground">Observations</dt>
+            <dd className="font-mono">{structure.measurementCount}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">RMSE</dt>
+            <dd className="font-mono">
+              {formatNumber(structure.rmse)} {concentrationUnit}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Distinct times</dt>
+            <dd className="font-mono">{structure.timeOrder.distinctTimeCount}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div className="space-y-2 rounded-md border p-3 text-sm" data-testid={`residual-spread-${idSuffix}`}>
+        <h5 className="font-medium">Residual spread screen</h5>
+        <p className="text-xs" data-testid={`residual-spread-status-${idSuffix}`}>
+          {spread.ok ? SPREAD_STATUS_TEXT[spread.status] : 'Unavailable for these data.'}
+        </p>
+        {spread.ok ? (
+          <>
+            {spread.status === 'inconclusive' ? null : (
+              <dl className="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-3">
+                <div>
+                  <dt className="text-muted-foreground">
+                    Mean absolute residual · lower fitted half ({spread.lowerHalf.count})
+                  </dt>
+                  <dd className="font-mono">
+                    {formatNumber(spread.lowerHalf.meanAbsoluteResidual)} {concentrationUnit}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">
+                    Mean absolute residual · upper fitted half ({spread.upperHalf.count})
+                  </dt>
+                  <dd className="font-mono">
+                    {formatNumber(spread.upperHalf.meanAbsoluteResidual)} {concentrationUnit}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Larger ÷ smaller</dt>
+                  <dd className="font-mono" data-testid={`residual-spread-ratio-${idSuffix}`}>
+                    {spread.ratio === null ? 'not defined' : formatNumber(spread.ratio)}
+                  </dd>
+                </div>
+              </dl>
+            )}
+            {spread.status === 'inconclusive' ? null : (
+              <p className="text-xs text-muted-foreground" data-testid={`residual-spread-split-${idSuffix}`}>
+                {spread.splitDisclosure}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground" data-testid={`residual-spread-message-${idSuffix}`}>
+              {spread.message}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Screening only: a ratio of about {formatNumber(spread.heuristicRatio)} or more is
+              reported as a visible difference. It is a documented convention with no p-value, and
+              a smaller ratio is not evidence that the spread is constant. A difference between the
+              halves can also come from the mean model missing structure, or from a few unusual
+              observations, so this does not establish heteroscedasticity or identify its cause.
+            </p>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground" data-testid={`residual-spread-message-${idSuffix}`}>
+            {spread.message}
+          </p>
+        )}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <figure className="min-w-0">
+          <Suspense
+            fallback={
+              <p role="status" className="py-6 text-sm text-muted-foreground">
+                Loading residual plot…
+              </p>
+            }
+          >
+            <ExperimentalFitResidualChart
+              residuals={structure.residuals}
+              timeUnit={timeUnit}
+              concentrationUnit={concentrationUnit}
+              datasetName={datasetName}
+              modelLabel={structure.label}
+              testId={timeChartTestId}
+            />
+          </Suspense>
+          <figcaption className="mt-1 text-xs text-muted-foreground">
+            Residual against measured time, in {concentrationUnit} on the vertical axis. The
+            horizontal zero line is a perfect prediction. Points are not connected because the
+            observations are not a continuous time course.
+          </figcaption>
+        </figure>
+        <figure className="min-w-0">
+          <Suspense
+            fallback={
+              <p role="status" className="py-6 text-sm text-muted-foreground">
+                Loading residual plot…
+              </p>
+            }
+          >
+            <ExperimentalFitResidualVsFittedChart
+              residuals={structure.residuals}
+              timeUnit={timeUnit}
+              concentrationUnit={concentrationUnit}
+              datasetName={datasetName}
+              modelLabel={structure.label}
+              testId={`residual-fitted-chart-${idSuffix}`}
+            />
+          </Suspense>
+          <figcaption className="mt-1 text-xs text-muted-foreground">
+            Residual against fitted concentration, both in {concentrationUnit}. A widening or
+            narrowing cloud describes this sample; it is not a test of constant variance.
+          </figcaption>
+        </figure>
+      </div>
+
+      <div className="space-y-1 text-xs text-muted-foreground" data-testid={`residual-ordering-${idSuffix}`}>
+        <h5 className="font-medium text-foreground">How the points are ordered</h5>
+        <ul className="list-disc space-y-1 pl-4">
+          {structure.timeOrder.notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      </div>
+    </section>
   )
 }

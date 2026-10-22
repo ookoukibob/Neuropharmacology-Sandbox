@@ -335,6 +335,7 @@ describe('the Gaussian AICc formula', () => {
           message: 'The rate optimizer did not converge to a finite value.',
         },
       ],
+      baselineFit: { ok: false, code: 'NON_CONVERGED', message: 'The rate optimizer did not converge to a finite value.' },
       notes: [],
     }
     const aicc = buildComparisonAicc(comparison, GAUSSIAN_ADDITIVE_ERROR_MODEL)
