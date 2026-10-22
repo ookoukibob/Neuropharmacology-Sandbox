@@ -278,3 +278,32 @@ test('.npsb recovery carries and restores the experimental dataset store', async
   await expect(restoredRows.nth(1)).toContainText('exact replicate')
   await expect(restoredRows.nth(3)).toContainText('2.25')
 })
+
+test('fits a mono-exponential decay and overlays the curve', async ({ page }) => {
+  await importCsv(page)
+
+  // Select the imported dataset and run the fit.
+  const list = page.getByRole('list', { name: 'Saved experimental datasets' })
+  await list.getByRole('button', { name: /Synthetic 47A measured study/ }).click()
+  await page.getByTestId('dataset-fit').click()
+
+  const results = page.getByTestId('fit-results')
+  await expect(results).toBeVisible()
+  // Parameters carry the dataset's declared units.
+  await expect(page.getByTestId('fit-tref')).toContainText('h')
+  await expect(page.getByTestId('fit-cref')).toContainText('mg/L')
+  await expect(page.getByTestId('fit-k')).toContainText('h⁻¹')
+  await expect(page.getByTestId('fit-half-life')).toContainText('h')
+
+  // The chart draws a separate fitted line beside the observed markers, and
+  // the accessible measurement table still holds the observed values.
+  await expect(page.getByText('Fitted mono-exponential curve')).toBeVisible()
+  await expect(page.getByTestId('dataset-measurements')).toBeVisible()
+
+  // The fit is derived only: reloading the page loses it and the stored
+  // measurements are unchanged.
+  await page.reload()
+  await list.getByRole('button', { name: /Synthetic 47A measured study/ }).click()
+  await expect(page.getByTestId('fit-results')).toHaveCount(0)
+  await expect(page.getByTestId('dataset-measurements')).toContainText('4')
+})

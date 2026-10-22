@@ -330,3 +330,109 @@ describe('ExperimentalDatasetsView — saved list', () => {
     expect(await screen.findByTestId('stub-experimental-chart')).toBeInTheDocument()
   })
 })
+
+describe('one-compartment mono-exponential fit (phase 47B)', () => {
+  const decayDataset = (overrides: Partial<ExperimentalDataset> = {}): ExperimentalDataset =>
+    storedDataset({
+      name: 'Decay study',
+      measurements: [
+        { id: 'm1', sourceRow: 1, time: 0, concentration: 100 },
+        { id: 'm2', sourceRow: 2, time: 1, concentration: 50 },
+        { id: 'm3', sourceRow: 3, time: 2, concentration: 25 },
+        { id: 'm4', sourceRow: 4, time: 4, concentration: 6.25 },
+      ],
+      ...overrides,
+    })
+
+  /** Select a saved dataset using the shared harness. */
+  const select = async (dataset: ExperimentalDataset): Promise<void> => {
+    repository.rows.set(dataset.id, dataset)
+    renderView()
+    const list = await screen.findByRole('list', { name: 'Saved experimental datasets' })
+    fireEvent.click(within(list).getByRole('button', { name: new RegExp(dataset.name) }))
+    await screen.findByRole('heading', { level: 2, name: dataset.name })
+  }
+
+  it('shows the fit action but no results before fitting', async () => {
+    await select(decayDataset())
+    expect(screen.getByTestId('dataset-fit')).toBeInTheDocument()
+    expect(screen.queryByTestId('fit-results')).not.toBeInTheDocument()
+  })
+
+  it('reports the fitted parameters with the dataset units', async () => {
+    await select(decayDataset())
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const results = await screen.findByTestId('fit-results')
+    expect(within(results).getByTestId('fit-tref')).toHaveTextContent(/0 h/)
+    expect(within(results).getByTestId('fit-cref')).toHaveTextContent(/100 mg\/L/)
+    expect(within(results).getByTestId('fit-k')).toHaveTextContent(/h⁻¹/)
+    expect(within(results).getByTestId('fit-half-life')).toHaveTextContent(/h/)
+    expect(screen.getByTestId('fit-section')).toHaveTextContent(/unweighted least squares/i)
+    expect(screen.getByTestId('fit-section')).toHaveTextContent(/not evidence that this decay model suits/i)
+  })
+
+  it('overlays the fitted curve on the chart without persisting anything', async () => {
+    await select(decayDataset())
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    await screen.findByTestId('fit-results')
+    expect(screen.getByTestId('stub-experimental-chart')).toBeInTheDocument()
+    expect(screen.getByText(/fitted mono-exponential curve/i)).toBeInTheDocument()
+    // No repository mutation of any kind: a fit is never persisted.
+    expect(repository.createCalls).toHaveLength(0)
+    expect(repository.updateCalls).toHaveLength(0)
+    expect(repository.deleteCalls).toHaveLength(0)
+  })
+
+  it('shows the zero-rate boundary warning and no finite half-life', async () => {
+    await select(
+      storedDataset({
+        name: 'Rising study',
+        measurements: [
+          { id: 'r1', sourceRow: 1, time: 0, concentration: 5 },
+          { id: 'r2', sourceRow: 2, time: 1, concentration: 9 },
+          { id: 'r3', sourceRow: 3, time: 2, concentration: 20 },
+        ],
+      }),
+    )
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    await screen.findByTestId('fit-results')
+    expect(screen.getByTestId('fit-warnings')).toHaveTextContent(/no finite half-life/i)
+    expect(screen.getByTestId('fit-half-life')).toHaveTextContent(/no finite half-life/i)
+  })
+
+  it('presents a structured failure without a fit line', async () => {
+    await select(
+      storedDataset({
+        name: 'Single time',
+        measurements: [
+          { id: 's1', sourceRow: 1, time: 2, concentration: 10 },
+          { id: 's2', sourceRow: 2, time: 2, concentration: 12 },
+        ],
+      }),
+    )
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    expect(await screen.findByTestId('fit-error')).toHaveTextContent(/single distinct time/i)
+    expect(screen.queryByTestId('fit-results')).not.toBeInTheDocument()
+    expect(screen.queryByText(/fitted mono-exponential curve/i)).not.toBeInTheDocument()
+  })
+
+  it('invalidates a previous fit when the dataset changes', async () => {
+    // Both datasets exist up front so the switch needs no refresh round trip.
+    const first = decayDataset()
+    const other = storedDataset({ id: 'dataset-2', name: 'Other study' })
+    repository.rows.set(first.id, first)
+    repository.rows.set(other.id, other)
+    renderView()
+
+    const list = await screen.findByRole('list', { name: 'Saved experimental datasets' })
+    fireEvent.click(within(list).getByRole('button', { name: /Decay study/ }))
+    await screen.findByRole('heading', { level: 2, name: 'Decay study' })
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    await screen.findByTestId('fit-results')
+
+    // Select a different dataset: the previous fit must not remain visible.
+    fireEvent.click(within(list).getByRole('button', { name: /Other study/ }))
+    await screen.findByRole('heading', { level: 2, name: 'Other study' })
+    await waitFor(() => expect(screen.queryByTestId('fit-results')).not.toBeInTheDocument())
+  })
+})
