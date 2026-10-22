@@ -13,16 +13,15 @@
  * Nothing runs during render, typing or in an effect: a result exists only
  * after an explicit run, and it is cleared as soon as the draft changes.
  */
-import { AlertCircle, Info, Play, RotateCcw } from 'lucide-react'
+import { AlertCircle, Play, RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ScientificText } from '@/components/scientific/ScientificText'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { buildSimulationCharts } from '@/components/charts/simulationAdapter'
 import {
   compileScenario,
-  demoDraft,
+  emptyDraft,
   emptyEffectSiteDraft,
   newBolusRow,
   newInfusionRow,
@@ -45,11 +44,8 @@ import { useScenarioLibrary } from './useScenarioLibrary'
 import { SavedScenariosPanel } from './components/SavedScenariosPanel'
 import type { ScenarioRepository } from '@/data/repositories/scenarioRepository'
 
-const SYNTHETIC_DISCLAIMER =
-  'The example is a synthetic demonstration: V_c 10 L, V_p 20 L, CL 2 L/h, Q 3 L/h, a 100 mg bolus at 0 h, a 10 mg/h infusion from 2 h to 6 h and a 30 mg bolus at 8 h. These values are invented for testing the simulation engine — they are not real compound parameters, not clinical estimates and not evidence of clinical validity. Values you edit are your own inputs; the application does not verify their provenance.'
-
 export function SimulationView({ scenarioRepository }: { readonly scenarioRepository: ScenarioRepository }) {
-  const [draft, setDraft] = useState<SimulationDraft>(() => demoDraft())
+  const [draft, setDraft] = useState<SimulationDraft>(() => emptyDraft())
   const { state, run, clear } = useSimulationRunner()
   const library = useScenarioLibrary(scenarioRepository)
   const resultsRef = useRef<HTMLDivElement>(null)
@@ -112,8 +108,8 @@ export function SimulationView({ scenarioRepository }: { readonly scenarioReposi
     })
   }
 
-  function resetToExample(): void {
-    setDraft(demoDraft())
+  function clearScenario(): void {
+    setDraft(emptyDraft())
     clear()
   }
 
@@ -122,20 +118,6 @@ export function SimulationView({ scenarioRepository }: { readonly scenarioReposi
 
   return (
     <div className="flex flex-col gap-6">
-      <Alert data-testid="synthetic-scenario-notice">
-        <Info className="size-4" aria-hidden="true" />
-        <AlertTitle>Synthetic example scenario — editable</AlertTitle>
-        <AlertDescription>
-          <p>
-            <ScientificText value={SYNTHETIC_DISCLAIMER} />
-          </p>
-          <p className="mt-1">
-            Model output is mathematics on the parameters below; it is not a clinical prediction and
-            never observed data.
-          </p>
-        </AlertDescription>
-      </Alert>
-
       <form
         className="flex flex-col gap-6"
         onSubmit={(event) => {
@@ -208,9 +190,9 @@ export function SimulationView({ scenarioRepository }: { readonly scenarioReposi
             <Play className="size-4" aria-hidden="true" />
             Run simulation
           </Button>
-          <Button type="button" variant="outline" onClick={resetToExample} data-testid="reset-demo">
+          <Button type="button" variant="outline" onClick={clearScenario} data-testid="clear-scenario">
             <RotateCcw className="size-4" aria-hidden="true" />
-            Reset to synthetic example
+            Clear scenario
           </Button>
         </div>
       </form>
@@ -284,5 +266,3 @@ function eventIdLabel(eventId: string): string {
   return eventId
 }
 
-/** Kept for the page-level focus/announcement behaviour. */
-export { SYNTHETIC_DISCLAIMER }

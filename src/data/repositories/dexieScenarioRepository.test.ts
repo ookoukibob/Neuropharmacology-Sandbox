@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SandboxDatabase } from '../db/database'
 import { DexieScenarioRepository } from './dexieScenarioRepository'
 import { DexieDrugRepository } from './dexieDrugRepository'
-import { demoDraft, emptyEffectSiteDraft, type SimulationDraft } from '../../features/simulation/draft'
+import { emptyEffectSiteDraft, type SimulationDraft } from '../../features/simulation/draft'
+import { demoDraft } from '../../features/simulation/tests/demoDraft'
 
 /**
  * Saved-scenario repository (phase 45): CRUD, draft fidelity, name policy,

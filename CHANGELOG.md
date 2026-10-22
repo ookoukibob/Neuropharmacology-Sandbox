@@ -6,6 +6,18 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Changed — simulation starts with a blank scenario
+
+- Simulation no longer loads synthetic pharmacology/time values or dosing events
+  on page open, and the synthetic-numbers warning is removed. The required
+  scientific inputs and time horizon are blank until supplied by the user.
+- The collapsed solver section retains its technical integration defaults;
+  these are numerical-method settings, not assumed drug parameters.
+- **Clear scenario** returns fields and dosing events to the blank state and
+  clears any previous result. The deterministic synthetic scenario remains
+  available to automated tests only and is not a product default.
+
+
 ### Added — experimental concentration–time datasets (phase 47A)
 
 - **A separate Experimental Data page** at `/experiments`: import explicitly

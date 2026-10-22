@@ -10,8 +10,36 @@ import { test, expect } from '@playwright/test'
  * that data management never runs the simulation.
  */
 
+/** Explicit deterministic test fixture, entered through the real form. */
+async function fillScenario(page: import('@playwright/test').Page): Promise<void> {
+  for (const [testId, value] of [
+    ['central-volume-value', '10'],
+    ['peripheral-volume-value', '20'],
+    ['clearance-value', '2'],
+    ['q-value', '3'],
+    ['initial-central-value', '0'],
+    ['initial-peripheral-value', '0'],
+    ['start-time-value', '0'],
+    ['end-time-value', '24'],
+    ['output-interval-value', '0.25'],
+  ] as const) {
+    await page.getByTestId(testId).fill(value)
+  }
+  await page.getByTestId('add-bolus').click()
+  await page.getByTestId('bolus-1-time').fill('0')
+  await page.getByTestId('bolus-1-amount').fill('100')
+  await page.getByTestId('add-bolus').click()
+  await page.getByTestId('bolus-2-time').fill('8')
+  await page.getByTestId('bolus-2-amount').fill('30')
+  await page.getByTestId('add-infusion').click()
+  await page.getByTestId('infusion-3-start').fill('2')
+  await page.getByTestId('infusion-3-stop').fill('6')
+  await page.getByTestId('infusion-3-rate').fill('10')
+}
+
 test('save, reload, load, rename, duplicate and delete a scenario', async ({ page }) => {
   await page.goto('/simulation')
+  await fillScenario(page)
   await expect(page.getByTestId('scenarios-empty')).toBeVisible()
 
   // 2. Represent a draft: change one parameter and one event row.

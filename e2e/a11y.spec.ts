@@ -21,6 +21,29 @@ import { mockChEMBL } from './sourceMocks.js'
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
 
+/** Fill a minimal, explicit test scenario; the production editor starts blank. */
+async function fillMinimalScenario(page: Page, withInfusion = false): Promise<void> {
+  for (const [testId, value] of [
+    ['central-volume-value', '10'],
+    ['peripheral-volume-value', '20'],
+    ['clearance-value', '2'],
+    ['q-value', '3'],
+    ['initial-central-value', '100'],
+    ['initial-peripheral-value', '0'],
+    ['start-time-value', '0'],
+    ['end-time-value', '24'],
+    ['output-interval-value', '0.25'],
+  ] as const) {
+    await page.getByTestId(testId).fill(value)
+  }
+  if (withInfusion) {
+    await page.getByTestId('add-infusion').click()
+    await page.getByTestId('infusion-1-start').fill('2')
+    await page.getByTestId('infusion-1-stop').fill('6')
+    await page.getByTestId('infusion-1-rate').fill('10')
+  }
+}
+
 interface Violation {
   readonly id: string
   readonly impact: string
@@ -396,22 +419,24 @@ test('a11y: the settings page passes the axe scan in its default and confirm sta
 test('a11y: the simulation scenario editor passes the axe scans', async ({ page }) => {
   await page.goto('/simulation')
   await expect(page.getByRole('heading', { level: 1, name: 'Simulation' })).toBeVisible()
-  // Initial editor with the synthetic example.
-  await scan(page, 'simulation editor (initial, synthetic example)')
+  // Initial editor is blank and does not display a numerical example warning.
+  await expect(page.getByTestId('synthetic-scenario-notice')).toHaveCount(0)
+  await expect(page.getByTestId('central-volume-value')).toHaveValue('')
+  await scan(page, 'simulation editor (initial, blank)')
 
-  // Validation errors: the summary and the field wiring are on screen.
-  await page.getByTestId('clearance-value').fill('')
+  // Validation errors: a blank required field blocks the run.
   await page.getByTestId('run-simulation').click()
   await expect(page.getByTestId('form-errors')).toBeVisible()
   await scan(page, 'simulation editor (form validation errors)')
-  await page.getByTestId('reset-demo').click()
+  await page.getByTestId('clear-scenario').click()
 
   // Event editing: an added bolus row with blank values.
   await page.getByTestId('add-bolus').click()
   await scan(page, 'simulation editor (added event row)')
-  await page.getByTestId('remove-event-4').click()
+  await page.getByTestId('remove-event-1').click()
 
   // Successful simulation with charts, event table and diagnostics.
+  await fillMinimalScenario(page, true)
   await page.getByTestId('run-simulation').click()
   await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
     timeout: 30_000,
@@ -423,10 +448,10 @@ test('a11y: the simulation scenario editor passes the axe scans', async ({ page 
   await page.getByTestId('run-simulation').click()
   await expect(page.getByTestId('simulation-errors')).toBeVisible()
   await scan(page, 'simulation editor (engine error)')
-  await page.getByTestId('reset-demo').click()
+  await page.getByTestId('clear-scenario').click()
 
-  // Infusion-rate chart unavailable: remove the example infusion session.
-  await page.getByTestId('remove-event-3').click()
+  // Infusion-rate chart unavailable: a valid scenario with no infusion.
+  await fillMinimalScenario(page)
   await page.getByTestId('run-simulation').click()
   await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
     timeout: 30_000,
@@ -438,6 +463,7 @@ test('a11y: the simulation scenario editor passes the axe scans', async ({ page 
 
 test('a11y: each simulation chart view passes the axe scan', async ({ page }) => {
   await page.goto('/simulation')
+  await fillMinimalScenario(page, true)
   await page.getByTestId('run-simulation').click()
   await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
     timeout: 30_000,

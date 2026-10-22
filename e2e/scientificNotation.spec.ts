@@ -75,6 +75,19 @@ test('simulation: effect-site fields and equations use sub/sup and the chart leg
 }) => {
   const errors = watchErrors(page)
   await page.goto('/simulation')
+  for (const [testId, value] of [
+    ['central-volume-value', '10'],
+    ['peripheral-volume-value', '20'],
+    ['clearance-value', '2'],
+    ['q-value', '3'],
+    ['initial-central-value', '100'],
+    ['initial-peripheral-value', '0'],
+    ['start-time-value', '0'],
+    ['end-time-value', '24'],
+    ['output-interval-value', '0.25'],
+  ] as const) {
+    await page.getByTestId(testId).fill(value)
+  }
   await page.getByTestId('effect-site-enabled').check()
   await page.getByTestId('effect-site-fu').fill('0.5')
   await page.getByTestId('effect-site-ke0').fill('2')

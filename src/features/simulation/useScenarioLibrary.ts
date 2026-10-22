@@ -145,9 +145,9 @@ export function useScenarioLibrary(repository: ScenarioRepository): ScenarioLibr
    *
    * A draft with NO baseline (a fresh page, or a draft never loaded from or
    * saved as a scenario) counts as unsaved once it moves away from the value
-   * it was first seen at: the editor seeds the synthetic example on mount, and
-   * any later change is the user's own work that a load would destroy. The
-   * first observation therefore records the seed snapshot rather than
+   * it was first seen at: the editor starts with a blank draft, and any
+   * later change is the user's own work that a load would destroy. The first
+   * observation therefore records the initial blank snapshot rather than
    * silently treating an edited, never-saved draft as clean.
    */
   const syncDirty = useCallback((draft: SimulationDraft): void => {

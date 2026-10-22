@@ -38,6 +38,23 @@ beforeEach(() => {
 const renderView = () => render(<SimulationView scenarioRepository={repository} />)
 const runButton = () => screen.getByTestId('run-simulation')
 
+/** Supply valid baseline PK inputs for UI tests that exercise successful runs. */
+async function fillBaseScenario(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  for (const [testId, value] of [
+    ['central-volume-value', '10'],
+    ['peripheral-volume-value', '20'],
+    ['clearance-value', '2'],
+    ['q-value', '3'],
+    ['initial-central-value', '100'],
+    ['initial-peripheral-value', '0'],
+    ['start-time-value', '0'],
+    ['end-time-value', '24'],
+    ['output-interval-value', '0.25'],
+  ] as const) {
+    await user.type(screen.getByTestId(testId), value)
+  }
+}
+
 async function enableEffectSite(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(screen.getByTestId('effect-site-enabled'))
 }
@@ -115,6 +132,7 @@ describe('effect-site editor', () => {
   it('runs when configured and shows the effect-site and occupancy views', async () => {
     const user = userEvent.setup()
     renderView()
+    await fillBaseScenario(user)
     await enableEffectSite(user)
     await user.type(screen.getByTestId('effect-site-fu'), '0.5')
     await user.type(screen.getByTestId('effect-site-ke0'), '2')
@@ -132,6 +150,7 @@ describe('effect-site editor', () => {
   it('offers no effect-site views for a PK-only run', async () => {
     const user = userEvent.setup()
     renderView()
+    await fillBaseScenario(user)
     await user.click(runButton())
     await waitFor(() => expect(control.calls).toBe(1))
     const group = await screen.findByRole('radiogroup', { name: 'Chart view' })
@@ -142,6 +161,7 @@ describe('effect-site editor', () => {
   it('switching to the occupancy view is presentation-only', async () => {
     const user = userEvent.setup()
     renderView()
+    await fillBaseScenario(user)
     await enableEffectSite(user)
     await user.type(screen.getByTestId('effect-site-fu'), '0.5')
     await user.type(screen.getByTestId('effect-site-ke0'), '2')
@@ -161,6 +181,7 @@ describe('effect-site editor', () => {
   it('invalidates a stale effect-site result after a relevant edit', async () => {
     const user = userEvent.setup()
     renderView()
+    await fillBaseScenario(user)
     await enableEffectSite(user)
     await user.type(screen.getByTestId('effect-site-fu'), '0.5')
     await user.type(screen.getByTestId('effect-site-ke0'), '2')
@@ -177,6 +198,7 @@ describe('effect-site editor', () => {
   it('explains the model with the values this run actually used', async () => {
     const user = userEvent.setup()
     renderView()
+    await fillBaseScenario(user)
     await enableEffectSite(user)
     await user.type(screen.getByTestId('effect-site-fu'), '0.5')
     await user.type(screen.getByTestId('effect-site-ke0'), '2')
@@ -206,6 +228,7 @@ describe('effect-site editor', () => {
   it('omits the explanation entirely for a PK-only run', async () => {
     const user = userEvent.setup()
     renderView()
+    await fillBaseScenario(user)
     await user.click(runButton())
     await screen.findByTestId('stub-chart-concentration')
     expect(screen.queryByTestId('effect-site-explanation')).not.toBeInTheDocument()
@@ -214,6 +237,7 @@ describe('effect-site editor', () => {
   it('does not show a previous run\'s parameters after a later failed run', async () => {
     const user = userEvent.setup()
     renderView()
+    await fillBaseScenario(user)
     await enableEffectSite(user)
     await user.type(screen.getByTestId('effect-site-fu'), '0.5')
     await user.type(screen.getByTestId('effect-site-ke0'), '2')

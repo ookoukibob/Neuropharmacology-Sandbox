@@ -10,6 +10,33 @@ import { test, expect, type Page } from '@playwright/test'
  * still two same-time samples.
  */
 
+/** Explicit UI test fixture; product pages start with blank scientific inputs. */
+async function fillSyntheticScenario(page: Page): Promise<void> {
+  for (const [testId, value] of [
+    ['central-volume-value', '10'],
+    ['peripheral-volume-value', '20'],
+    ['clearance-value', '2'],
+    ['q-value', '3'],
+    ['initial-central-value', '0'],
+    ['initial-peripheral-value', '0'],
+    ['start-time-value', '0'],
+    ['end-time-value', '24'],
+    ['output-interval-value', '0.25'],
+  ] as const) {
+    await page.getByTestId(testId).fill(value)
+  }
+  await page.getByTestId('add-bolus').click()
+  await page.getByTestId('bolus-1-time').fill('0')
+  await page.getByTestId('bolus-1-amount').fill('100')
+  await page.getByTestId('add-bolus').click()
+  await page.getByTestId('bolus-2-time').fill('8')
+  await page.getByTestId('bolus-2-amount').fill('30')
+  await page.getByTestId('add-infusion').click()
+  await page.getByTestId('infusion-3-start').fill('2')
+  await page.getByTestId('infusion-3-stop').fill('6')
+  await page.getByTestId('infusion-3-rate').fill('10')
+}
+
 const chartBox = async (page: Page) =>
   page.evaluate(() => {
     const root = document.querySelector('[data-testid^="simulation-chart-"]') as HTMLElement | null
@@ -40,6 +67,7 @@ test.describe('simulation charts — layout and interaction', () => {
     ] as const) {
       await page.setViewportSize({ width, height: 900 })
       await page.goto('/simulation')
+      await fillSyntheticScenario(page)
       await page.getByTestId('run-simulation').click()
       await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
         timeout: 30_000,
@@ -64,6 +92,7 @@ test.describe('simulation charts — layout and interaction', () => {
   test('resizing the window re-lays the chart out', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 })
     await page.goto('/simulation')
+      await fillSyntheticScenario(page)
     await page.getByTestId('run-simulation').click()
     await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
       timeout: 30_000,
@@ -82,6 +111,7 @@ test.describe('simulation charts — layout and interaction', () => {
 
   test('view switching changes the chart without re-running the simulation', async ({ page }) => {
     await page.goto('/simulation')
+      await fillSyntheticScenario(page)
     await page.getByTestId('run-simulation').click()
     await expect(page.getByTestId('simulation-chart-concentration')).toBeVisible({ timeout: 30_000 })
     await expect(page.getByTestId('simulation-summary')).toContainText('Run 1')
@@ -103,6 +133,7 @@ test.describe('simulation charts — layout and interaction', () => {
 
   test('zoom and reset return the axis to the full simulation range', async ({ page }) => {
     await page.goto('/simulation')
+      await fillSyntheticScenario(page)
     await page.getByTestId('run-simulation').click()
     const plot = page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')
     await expect(plot).toBeVisible({ timeout: 30_000 })
@@ -166,6 +197,7 @@ test.describe('simulation charts — layout and interaction', () => {
 
   test('hovering a plotted point shows time, value, unit and event side', async ({ page }) => {
     await page.goto('/simulation')
+      await fillSyntheticScenario(page)
     await page.getByTestId('run-simulation').click()
     const plot = page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')
     await expect(plot).toBeVisible({ timeout: 30_000 })
@@ -219,6 +251,7 @@ test.describe('simulation charts — layout and interaction', () => {
 
   test('the bolus remains two same-time samples in the plotted trace', async ({ page }) => {
     await page.goto('/simulation')
+      await fillSyntheticScenario(page)
     await page.getByTestId('run-simulation').click()
     await expect(page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot')).toBeVisible({
       timeout: 30_000,
@@ -240,6 +273,7 @@ test.describe('simulation charts — layout and interaction', () => {
 
   test('infusion-rate view keeps the engine step values and the unavailable state', async ({ page }) => {
     await page.goto('/simulation')
+      await fillSyntheticScenario(page)
     await page.getByTestId('run-simulation').click()
     await page.getByTestId('view-tab-infusion-rate').click()
     const plot = page.getByTestId('simulation-chart-infusion-rate').locator('.js-plotly-plot')
@@ -268,6 +302,7 @@ test.describe('simulation charts — layout and interaction', () => {
 
   test('the view switcher is operable with the keyboard', async ({ page }) => {
     await page.goto('/simulation')
+      await fillSyntheticScenario(page)
     await page.getByTestId('run-simulation').click()
     await expect(page.getByTestId('simulation-chart-concentration')).toBeVisible({ timeout: 30_000 })
     await page.getByTestId('view-tab-concentration').focus()

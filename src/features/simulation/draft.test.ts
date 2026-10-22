@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { simulate } from '@/engine/simulation/simulate'
-import { DEMO_SCENARIO } from './demoScenario'
+import { DEMO_SCENARIO } from './tests/demoScenario'
+import { demoDraft } from './tests/demoDraft'
 import {
   bolusEventId,
   compileScenario,
-  demoDraft,
   draftFromScenario,
   infusionIdOf,
   infusionStartEventId,

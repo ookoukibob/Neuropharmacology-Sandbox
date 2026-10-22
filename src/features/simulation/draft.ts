@@ -14,7 +14,7 @@
  *                          including every scientific validation error.
  *
  * The draft is never mutated: `compileScenario` reads it, returns new
- * objects, and leaves `DEMO_SCENARIO` and every previous result untouched.
+ * objects, and leaves its input scenario and every previous result untouched.
  *
  * Draft-level errors are limited to what parsing can decide (a required field
  * is blank, a number is unparseable, the output grid is unbuildable). Anything
@@ -24,7 +24,6 @@
 import type { DosingEvent, SimulationError, SimulationScenario, SolverOptions } from '@/engine/simulation/types'
 import type { EffectSiteInput } from '@/engine/simulation/effect-site'
 import { buildOutputGrid, parseNumericText, type OutputGridResult } from './outputGrid'
-import { DEMO_SCENARIO } from './demoScenario'
 
 // ---------------------------------------------------------------------------
 // Units offered by the editor
@@ -135,6 +134,35 @@ export function emptyEffectSiteDraft(): EffectSiteDraft {
   }
 }
 
+/**
+ * Fresh blank scenario for the editor. Scientific and time-horizon inputs stay
+ * empty until the user supplies them; unit choices and solver configuration
+ * remain technical editor defaults rather than a pre-filled drug scenario.
+ */
+export function emptyDraft(): SimulationDraft {
+  return {
+    startTime: '',
+    endTime: '',
+    outputInterval: '',
+    centralVolume: { value: '', unit: 'L' },
+    peripheralVolume: { value: '', unit: 'L' },
+    clearance: { value: '', unit: 'L/h' },
+    intercompartmentalClearance: { value: '', unit: 'L/h' },
+    initialCentralAmount: '',
+    initialPeripheralAmount: '',
+    events: [],
+    solver: {
+      absoluteTolerance: '1e-10',
+      relativeTolerance: '1e-10',
+      initialStep: '0.01',
+      minStep: '1e-12',
+      maxStep: '0.25',
+      maxSteps: '200000',
+    },
+    effectSite: emptyEffectSiteDraft(),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Draft errors
 // ---------------------------------------------------------------------------
@@ -211,11 +239,11 @@ export function newInfusionRow(rows: readonly EventRow[]): InfusionRow {
 // ---------------------------------------------------------------------------
 
 /**
- * Derive the editable draft from the synthetic example. Paired engine events
- * are folded back into one infusion session row, so the round trip
- * demo → draft → scenario preserves the demonstration exactly.
+ * Derive an editable draft from a supplied scenario. Paired engine events
+ * are folded back into one infusion session row, preserving one infusion
+ * session in the editor while retaining both engine boundary events.
  */
-export function draftFromScenario(scenario: SimulationScenario = DEMO_SCENARIO): SimulationDraft {
+export function draftFromScenario(scenario: SimulationScenario): SimulationDraft {
   const rows: EventRow[] = []
   const infusions = new Map<string, { start: number; stop?: number; rate: { value: number; unit: string } }>()
   let key = 0
@@ -299,13 +327,6 @@ export function outputIntervalOf(times: readonly number[]): string {
   const first = times[0] ?? 0
   const second = times[1] ?? first
   return stringify(second - first)
-}
-
-/** Fresh draft for the synthetic example (a new object on every call). */
-export function demoDraft(): SimulationDraft {
-  // The synthetic example is PK-only: effect-site analysis is opt-in and no
-  // pharmacological parameter is pre-filled.
-  return draftFromScenario(DEMO_SCENARIO)
 }
 
 // ---------------------------------------------------------------------------

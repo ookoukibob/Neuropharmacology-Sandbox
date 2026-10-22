@@ -1,9 +1,9 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SimulationView } from './SimulationView'
 import { FakeScenarioRepository } from './tests/fakeScenarioRepository'
-import { DEMO_SCENARIO } from './demoScenario'
+import { DEMO_SCENARIO } from './tests/demoScenario'
 
 /**
  * Page behaviour of the phase-43 scenario editor.
@@ -46,6 +46,44 @@ vi.mock('@/engine/simulation/simulate', async (importOriginal) => {
 
 const runButton = () => screen.getByTestId('run-simulation')
 const renderView = () => render(<SimulationView scenarioRepository={repository} />)
+
+/**
+ * Explicit fixture setup for tests exercising a successful run. The product
+ * editor itself now starts blank; these values are test inputs, not UI defaults.
+ */
+const renderConfiguredView = () => {
+  const view = renderView()
+  const setValue = (testId: string, value: string) =>
+    fireEvent.change(screen.getByTestId(testId), { target: { value } })
+
+  for (const [testId, value] of [
+    ['central-volume-value', '10'],
+    ['peripheral-volume-value', '20'],
+    ['clearance-value', '2'],
+    ['q-value', '3'],
+    ['initial-central-value', '0'],
+    ['initial-peripheral-value', '0'],
+    ['start-time-value', '0'],
+    ['end-time-value', '24'],
+    ['output-interval-value', '0.25'],
+  ] as const) {
+    setValue(testId, value)
+  }
+
+  fireEvent.click(screen.getByTestId('add-bolus'))
+  setValue('bolus-1-time', '0')
+  setValue('bolus-1-amount', '100')
+
+  fireEvent.click(screen.getByTestId('add-bolus'))
+  setValue('bolus-2-time', '8')
+  setValue('bolus-2-amount', '30')
+
+  fireEvent.click(screen.getByTestId('add-infusion'))
+  setValue('infusion-3-start', '2')
+  setValue('infusion-3-stop', '6')
+  setValue('infusion-3-rate', '10')
+  return view
+}
 const runOnce = async () => {
   const user = userEvent.setup()
   await user.click(runButton())
@@ -60,29 +98,35 @@ beforeEach(() => {
   control.failureFor = null
 })
 
-describe('SimulationView — synthetic example and editing', () => {
-  it('labels the example as synthetic and says user values are not verified', () => {
+describe('SimulationView — blank starting state and editing', () => {
+  it('starts with blank scientific and horizon inputs, no dose rows, and no synthetic-values warning', () => {
     renderView()
-    const notice = screen.getByTestId('synthetic-scenario-notice')
-    expect(notice).toHaveTextContent(/synthetic example scenario/i)
-    expect(notice).toHaveTextContent(/not real compound parameters/i)
-    expect(notice).toHaveTextContent(/your own inputs/i)
+    expect(screen.queryByTestId('synthetic-scenario-notice')).not.toBeInTheDocument()
+    for (const testId of [
+      'central-volume-value',
+      'peripheral-volume-value',
+      'clearance-value',
+      'q-value',
+      'initial-central-value',
+      'initial-peripheral-value',
+      'start-time-value',
+      'end-time-value',
+      'output-interval-value',
+    ]) {
+      expect(screen.getByTestId(testId)).toHaveValue('')
+    }
+    expect(screen.getByTestId('no-events')).toBeInTheDocument()
     expect(screen.getByTestId('simulation-idle')).toBeInTheDocument()
   })
 
-  it('seeds every field from the documented example values', () => {
+  it('keeps solver configuration defaults in the collapsed advanced section', () => {
     renderView()
-    expect(screen.getByTestId('central-volume-value')).toHaveValue('10')
-    expect(screen.getByTestId('peripheral-volume-value')).toHaveValue('20')
-    expect(screen.getByTestId('clearance-value')).toHaveValue('2')
-    expect(screen.getByTestId('q-value')).toHaveValue('3')
-    expect(screen.getByTestId('initial-central-value')).toHaveValue('0')
-    expect(screen.getByTestId('initial-peripheral-value')).toHaveValue('0')
-    expect(screen.getByTestId('start-time-value')).toHaveValue('0')
-    expect(screen.getByTestId('end-time-value')).toHaveValue('24')
-    expect(screen.getByTestId('output-interval-value')).toHaveValue('0.25')
     expect(screen.getByTestId('solver-absolute-tolerance')).toHaveValue('1e-10')
     expect(screen.getByTestId('solver-max-steps')).toHaveValue('200000')
+    const details = screen.getByTestId('solver-section')
+    expect(details.tagName).toBe('DETAILS')
+    expect(details).not.toHaveAttribute('open')
+    expect(within(details).getByText(/advanced solver settings/i)).toBeInTheDocument()
   })
 
   it('gives every parameter field an accessible name that includes its symbol', () => {
@@ -104,41 +148,25 @@ describe('SimulationView — synthetic example and editing', () => {
     ] as const) {
       const id = labelledBy(testId)
       expect(id).not.toBe('')
-      // The control's own <label for=…> carries the accessible name.
       const labelElement = document.querySelector(`label[for="${id}"]`)
       expect(labelElement?.textContent ?? '').toMatch(new RegExp(label))
       expect(screen.getByTestId(testId)).toHaveAttribute('id', id)
     }
-    // Unit selects are labelled too.
     expect(screen.getByLabelText('Central volume unit')).toHaveValue('L')
     expect(screen.getByLabelText('Systemic clearance unit')).toHaveValue('L/h')
   })
 
-  it('shows the example rows (two boluses, one infusion) with their values', () => {
+  it('does not add dosing rows until the user requests them', () => {
     renderView()
-    // The example compiles to bolus, bolus, infusion in row order.
-    expect(screen.getByTestId('event-row-1')).toHaveTextContent('IV bolus')
-    expect(screen.getByTestId('event-row-2')).toHaveTextContent('IV bolus')
-    expect(screen.getByTestId('event-row-3')).toHaveTextContent('IV infusion')
-    expect(screen.getByTestId('bolus-1-amount')).toHaveValue('100')
-    expect(screen.getByTestId('bolus-1-time')).toHaveValue('0')
-    expect(screen.getByTestId('bolus-2-amount')).toHaveValue('30')
-    expect(screen.getByTestId('infusion-3-start')).toHaveValue('2')
-    expect(screen.getByTestId('infusion-3-stop')).toHaveValue('6')
-    expect(screen.getByTestId('infusion-3-rate')).toHaveValue('10')
-  })
-
-  it('keeps the advanced solver settings in a collapsed advanced section', () => {
-    renderView()
-    const details = screen.getByTestId('solver-section')
-    expect(details.tagName).toBe('DETAILS')
-    expect(within(details).getByText(/advanced solver settings/i)).toBeInTheDocument()
+    expect(screen.getByTestId('no-events')).toBeInTheDocument()
+    expect(screen.queryByTestId('event-row-1')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('bolus-1-amount')).not.toBeInTheDocument()
   })
 })
 
 describe('SimulationView — running', () => {
-  it('calls the real engine exactly once per run with the compiled example scenario', async () => {
-    renderView()
+  it('calls the real engine exactly once with the explicitly entered scenario', async () => {
+    renderConfiguredView()
     await runOnce()
     expect(control.calls).toHaveLength(1)
     const scenario = control.calls[0] as typeof DEMO_SCENARIO
@@ -150,14 +178,14 @@ describe('SimulationView — running', () => {
   })
 
   it('does not run while typing or on render', async () => {
-    renderView()
+    renderConfiguredView()
     const user = userEvent.setup()
     await user.type(screen.getByTestId('clearance-value'), '5')
     expect(control.calls).toHaveLength(0)
   })
 
   it('renders the concentration view, events and diagnostics from the actual report', async () => {
-    renderView()
+    renderConfiguredView()
     await runOnce()
     expect(await screen.findByTestId('stub-chart-concentration')).toBeInTheDocument()
     expect(screen.getByTestId('simulation-summary')).toHaveTextContent('Run 1')
@@ -169,7 +197,7 @@ describe('SimulationView — running', () => {
   })
 
   it('passes edited solver settings through instead of replacing them', async () => {
-    renderView()
+    renderConfiguredView()
     const user = userEvent.setup()
     const tolerance = screen.getByTestId('solver-absolute-tolerance')
     await user.clear(tolerance)
@@ -181,7 +209,7 @@ describe('SimulationView — running', () => {
   })
 
   it('reruns deterministically and labels the new run', async () => {
-    renderView()
+    renderConfiguredView()
     const user = await runOnce()
     await screen.findByTestId('stub-chart-concentration')
     const first = control.calls[0]
@@ -192,7 +220,7 @@ describe('SimulationView — running', () => {
   })
 
   it('is reachable and activatable from the keyboard', async () => {
-    renderView()
+    renderConfiguredView()
     const user = userEvent.setup()
     runButton().focus()
     expect(runButton()).toHaveFocus()
@@ -203,7 +231,7 @@ describe('SimulationView — running', () => {
 
 describe('SimulationView — stale results and failures', () => {
   it('clears a successful result as soon as the draft changes', async () => {
-    renderView()
+    renderConfiguredView()
     const user = await runOnce()
     await screen.findByTestId('stub-chart-concentration')
     await user.type(screen.getByTestId('clearance-value'), '1')
@@ -213,7 +241,7 @@ describe('SimulationView — stale results and failures', () => {
   })
 
   it('shows typed engine errors and no chart when the engine rejects the scenario', async () => {
-    renderView()
+    renderConfiguredView()
     const user = userEvent.setup()
     await user.clear(screen.getByTestId('central-volume-value'))
     await user.type(screen.getByTestId('central-volume-value'), '0')
@@ -227,7 +255,7 @@ describe('SimulationView — stale results and failures', () => {
   })
 
   it('does not call the engine with an unparseable draft and explains why', async () => {
-    renderView()
+    renderConfiguredView()
     const user = userEvent.setup()
     await user.clear(screen.getByTestId('end-time-value'))
     await user.click(runButton())
@@ -238,7 +266,7 @@ describe('SimulationView — stale results and failures', () => {
   })
 
   it('marks the offending field and associates the message with it', async () => {
-    renderView()
+    renderConfiguredView()
     const user = userEvent.setup()
     await user.clear(screen.getByTestId('clearance-value'))
     await user.type(screen.getByTestId('clearance-value'), 'abc')
@@ -250,7 +278,7 @@ describe('SimulationView — stale results and failures', () => {
   })
 
   it('never lets a prior success stand in for a failed run', async () => {
-    renderView()
+    renderConfiguredView()
     const user = await runOnce()
     await screen.findByTestId('stub-chart-concentration')
     control.failureFor = (call) =>
@@ -269,26 +297,27 @@ describe('SimulationView — stale results and failures', () => {
   })
 })
 
-describe('SimulationView — reset', () => {
-  it('restores the whole example and invalidates the previous result', async () => {
-    renderView()
+describe('SimulationView — clear scenario', () => {
+  it('clears all scenario inputs and invalidates the previous result', async () => {
+    renderConfiguredView()
     const user = userEvent.setup()
     await user.clear(screen.getByTestId('central-volume-value'))
     await user.type(screen.getByTestId('central-volume-value'), '42')
     await user.click(runButton())
     await screen.findByTestId('stub-chart-concentration')
-    await user.click(screen.getByTestId('reset-demo'))
-    expect(screen.getByTestId('central-volume-value')).toHaveValue('10')
+    await user.click(screen.getByTestId('clear-scenario'))
+    expect(screen.getByTestId('central-volume-value')).toHaveValue('')
+    expect(screen.getByTestId('output-interval-value')).toHaveValue('')
     expect(screen.queryByTestId('stub-chart-concentration')).not.toBeInTheDocument()
-    expect(screen.getByTestId('bolus-1-amount')).toHaveValue('100')
-    expect(screen.getByTestId('infusion-3-stop')).toHaveValue('6')
+    expect(screen.queryByTestId('event-row-1')).not.toBeInTheDocument()
+    expect(screen.getByTestId('no-events')).toBeInTheDocument()
     expect(screen.getByTestId('solver-max-steps')).toHaveValue('200000')
   })
 })
 
 describe('SimulationView — chart views', () => {
   it('shows one analysis view at a time and switches without re-running the engine', async () => {
-    renderView()
+    renderConfiguredView()
     const user = await runOnce()
     expect(await screen.findByTestId('stub-chart-concentration')).toBeInTheDocument()
     expect(screen.queryByTestId('stub-chart-amount')).not.toBeInTheDocument()
@@ -308,7 +337,7 @@ describe('SimulationView — chart views', () => {
   })
 
   it('the deferred post-run focus never steals focus from a control the user moved to', async () => {
-    renderView()
+    renderConfiguredView()
     const user = await runOnce()
     await screen.findByTestId('stub-chart-concentration')
     // The run's focus move is deferred to an animation frame. Moving focus
@@ -324,7 +353,7 @@ describe('SimulationView — chart views', () => {
   })
 
   it('exposes the view switcher as a radio group with an accessible name', async () => {
-    renderView()
+    renderConfiguredView()
     await runOnce()
     const group = await screen.findByRole('radiogroup', { name: 'Chart view' })
     const radios = within(group).getAllByRole('radio')
@@ -334,7 +363,7 @@ describe('SimulationView — chart views', () => {
   })
 
   it('moves selection and focus with the arrow keys, wrapping around', async () => {
-    renderView()
+    renderConfiguredView()
     const user = await runOnce()
     await screen.findByTestId('stub-chart-concentration')
     const tab = (view: string) => screen.getByTestId(`view-tab-${view}`)
@@ -368,7 +397,7 @@ describe('SimulationView — chart views', () => {
   })
 
   it('keeps Tab entering the group at the selected option', async () => {
-    renderView()
+    renderConfiguredView()
     const user = await runOnce()
     await screen.findByTestId('stub-chart-concentration')
     const tab = (view: string) => screen.getByTestId(`view-tab-${view}`)
@@ -381,7 +410,7 @@ describe('SimulationView — chart views', () => {
   })
 
   it('Home and End jump to the first and last available views', async () => {
-    renderView()
+    renderConfiguredView()
     const user = await runOnce()
     await screen.findByTestId('stub-chart-concentration')
     screen.getByTestId('view-tab-amount').focus()
@@ -394,7 +423,7 @@ describe('SimulationView — chart views', () => {
   })
 
   it('disables and explains the infusion view when the scenario has no infusion', async () => {
-    renderView()
+    renderConfiguredView()
     const user = userEvent.setup()
     await user.click(screen.getByTestId('remove-event-3')) // remove the example infusion
     await user.click(runButton())
@@ -418,7 +447,7 @@ describe('SimulationView — chart views', () => {
   })
 
   it('keeps the event table and diagnostics visible regardless of the active view', async () => {
-    renderView()
+    renderConfiguredView()
     const user = await runOnce()
     await screen.findByTestId('stub-chart-concentration')
     for (const view of ['amount', 'infusion-rate', 'concentration']) {
