@@ -1243,6 +1243,11 @@ so they use the same rows, `t_ref = min(t)`, observed span, concentration
 scaling and source order. Nothing is sorted, averaged, deduplicated, excluded
 or mutated, and replicates remain independent observations.
 
+Both searches also assume that the coarse grid brackets the basin containing the
+optimum. A maximum narrower than a grid cell (rate step 1 in `q`, mixing step
+0.125 in λ) could be missed. The grids are a numerical resolution choice, not a
+statistical claim, and the reported point is always the best evaluated one.
+
 ### 15.4 Conditional AICc
 
     AIC  = −2·lnL̂ + 2K
@@ -1277,6 +1282,9 @@ together.
 - Boundary estimates and nonlinear fitting weaken the regularity assumptions
   behind information criteria; boundary warnings are shown and the comparison
   is explicitly less reliable when they appear.
+- The coarse search can miss a likelihood maximum narrower than a grid cell, and
+  the M1 refinement is coordinate-based; it is a numerical search, not a proof
+  that the global maximum was found.
 - No model weight, probability, confidence interval, standard error, hypothesis
   test or winner classification is produced, and no threshold is applied.
 - A residual-spread pattern (§14) never selects or activates this model. The
