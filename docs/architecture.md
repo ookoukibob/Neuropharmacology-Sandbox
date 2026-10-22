@@ -64,13 +64,17 @@ Strict top-down dependencies. A layer may only import from layers below it.
                 │
 ┌───────────────▼──────────────────────────────────────────────────┐
 │  Serialization / file formats                                    │
-│  src/data/schemas/**  (Zod: NPSL file format; CSV maps onto it)   │
+│  src/data/schemas/**  (Zod: NPSL file format; CSV maps onto it;   │
+│  experimental dataset records), src/data/npex/** (versioned .npex) │
+│  src/data/recovery/** (versioned .npsb all-store archive)          │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 Calculator input schemas are Zod too, but they are not an interchange
 format: they live next to the calculator feature
 (`src/features/calculator/schemas.ts`) and validate form drafts.
+Experimental-dataset CSV mapping lives in `src/features/experiments/` but
+reuses the shared RFC 4180 parser and validates against the same schemas.
 
 Mermaid version:
 
@@ -96,7 +100,9 @@ flowchart TD
    `CalculationReport` / `CurveData` objects.
 2. **Application state** orchestrates (selection, drafts, async loading). It
    calls the engine and repositories; it does not reimplement their logic.
-   Stores are per-feature, not a single global blob.
+   Stores are per-feature, not a single global blob. The experimental-dataset
+   page uses a feature-local React hook instead of a global store; its
+   repository is injected from the app composition root.
 3. **Calculation engine** is pure: no React, no Zustand, no IndexedDB, no DOM,
    no network, no ambient time or randomness. Same input → same output.
    (Enforced by review; a lint rule for forbidden imports is planned.)
@@ -104,9 +110,12 @@ flowchart TD
    nothing from layers above.
 5. **Persistence** sits behind a repository interface
    (`getAllDrugs`, `getDrug`, `createDrug`, `updateDrug`, `deleteDrug`,
-   `importLibrary`, `exportLibrary`). React never touches Dexie directly.
-6. **Serialization** (NPSL/CSV) lives in `src/data`, never inside components
-   or the engine. Import/export can change without touching either.
+   `importLibrary`, `exportLibrary`; separately
+   `ExperimentalDatasetRepository` for measured datasets). React never
+   touches Dexie directly.
+6. **Serialization** (NPSL/CSV/`.npex`/`.npsb`) lives in `src/data`, never
+   inside components or the engine. Import/export can change without
+   touching either.
 
 ### Why the data layer is independent
 
@@ -127,12 +136,14 @@ src/
 │   ├── calculatorStore.ts   # composition root: calculator session store
 │   ├── preferencesStore.ts  # composition root: preferences ↔ calculator wiring (phase 9B)
 │   ├── dataSourcesStore.ts  # composition root: source-data repo (shared DB) + adapters (phase 18)
+│   ├── experimentDatasetRepository.ts # composition root: Dexie dataset repository (phase 47A)
 │   ├── layout/              # AppLayout, PageHeader
 │   └── pages/               # route-level views (thin; delegate to features)
 ├── components/
 │   ├── ui/                  # shadcn/ui primitives (generated, treat as vendor code)
 │   ├── charts/              # CurveData -> Plotly adapter + lazy chart component (phase 4);
-│   │                        # simulationAdapter + SimulationChart (phase 42)
+│   │                        # simulationAdapter + SimulationChart (phase 42);
+│   │                        # experimentalDatasetAdapter + marker-only chart (phase 47A)
 ├── features/                # one folder per feature
 │   ├── drug-library/        #   list/detail/form views (phase 3)
 │   ├── calculator/          #   model adapter registry, input drafts, session store,
@@ -143,6 +154,8 @@ src/
 │   │                        #   VisualizationPanel, ErrorPanel, ProvenanceBadge
 │   ├── simulation/          #   demo scenario, session runner, SimulationView (phase 42)
 │   │                        #   ephemeral: component state only, nothing persisted
+│   ├── experiments/         #   measured dataset page, CSV mapping/validation,
+│   │                        #   .npex import, repository-backed hook (phase 47A)
 │   ├── import-export/       #   import/export UI (phase 5)
 │   │   ├── csv/             #   RFC 4180 reader/writer, stable CSV schema,
 │   │   │                    #   explicit mapping -> versioned NPSL document
@@ -160,6 +173,7 @@ src/
 │   ├── pharmacology/        #   ScientificValue, units + unit catalog
 │   ├── provenance/          #   Provenance union + guards
 │   ├── sources/             #   Layer A compound + Layer B observation (phase 18)
+│   ├── experiments/         #   ExperimentalDataset + ExperimentalMeasurement (phase 47A)
 │   └── library/             #   DrugLibrary, LibraryMetadata
 ├── engine/                  # pure calculation engine (all 3 MVP models implemented, phase 2)
 │   ├── types.ts             #   CalculationReport, trace, CurveData contracts
@@ -179,14 +193,17 @@ src/
 ├── data/
 │   ├── schemas/             # Zod schemas (NPSL file format; CSV builds an NPSL document first)
 │   │                        # sources.ts: loose record schemas for imported source data (phase 18)
+│   │                        # experimentalDatasets.ts: dataset input/record/.npex shapes (phase 47A)
+│   ├── npex/                # versioned single-dataset .npex parse/build (phase 47A)
+│   ├── recovery/            # versioned .npsb all-store archive, fidelity scan, restore (phase 8B; 47A store extension)
 │   ├── db/                  # single versioned Dexie module + upgrade hooks (phase 3; v3 adds
-│   │                        # `compounds` + `observations` stores, phase 18)
+│   │                        # `compounds` + `observations`, v5 `scenarios`, v6 `experimentDatasets`)
 │   ├── mappers/             # persistence DTO <-> domain, NPSL export document
 │   ├── import/              # NPSL parse -> schema -> semantic -> preview pipeline
 │   ├── sources/             # HTTP transport, PubChem/ChEMBL adapters, registry (phase 18)
 │   ├── id.ts                # stable id helpers
 │   └── repositories/        # repository interfaces + Dexie implementations (phase 3;
-│                            # sourceDataRepository phase 18)
+│                            # sourceDataRepository phase 18; experimental dataset repository phase 47A)
 ├── tests/
 │   ├── setup.ts             # Vitest setup (jest-dom matchers)
 │   ├── report.ts            # shared report assertion helpers
@@ -553,6 +570,60 @@ SimulationScenario.effectSite?  ──resolveEffectSite()──▶  validated f_
 - **Units and provenance.** K_d must be a concentration compatible with the
   model concentration; a molar K_d needs an explicit molecular weight (g/mol)
   with provenance. Ki, IC50 and EC50 are never substituted for K_d.
+### 4.3f Experimental datasets (phase 47A)
+
+```
+CSV file ──parseCsv──▶ explicit mapping + units ──validate each row──▶ preview
+.npex file ──version/size/duplicate-key checks──▶ strict schema ──────▶ preview
+                                                                    │
+                                                          explicit confirmation
+                                                                    ▼
+                                           ExperimentalDatasetRepository.create()
+                                                    validation again, ids,
+                                                    one Dexie transaction
+                                                                    │
+                                                                    ▼
+                                           v6 experimentDatasets store
+                                                                    │
+                              ┌─────────────────────────────────────┴────────────┐
+                              ▼                                                  ▼
+                    ordered measurement table                       marker-only Plotly chart
+                    (accessible authority)                          (declared units, no fit)
+                                                                    │
+                                                export one dataset ─┴─▶ `.npex` 1.0.0
+```
+
+- **Separate model and stores.** Experimental datasets never reuse the
+  source-data `ExperimentalObservation` type, never enter the drug library,
+  and never change NPSL. The v6 `experimentDatasets` store is additive.
+- **Explicit import.** CSV columns and both units are selected by the user;
+  no header, filename or value magnitude is inspected to infer them. `.npex`
+  carries both units and a strict, independently versioned envelope. Every
+  preview is read-only; only confirmation calls the repository, which
+  validates again inside its transaction.
+- **Measured data stay measured.** Source order, duplicate timestamps,
+  exact replicates and sample ids are retained. No averaging, sorting,
+  deduplication, interpolation, unit conversion or fitted curve is performed
+  anywhere in this flow. `sourceRow` is provenance, never a database key.
+- **Atomic, validated persistence.** `list`/`get` validate stored rows on
+  read and report unreadable ones without deleting them. `create`, `update`
+  and `delete` use single-store transactions; `update` and `delete` compare
+  the caller's `updatedAt` token inside the transaction, so a stale view
+  cannot silently replace a newer name or delete a newer dataset. Only name
+  and notes are mutable; units, measurements and provenance are immutable.
+- **Presentation-only visualization.** The chart adapter maps stored
+  measurements verbatim to one marker trace. React and Plotly perform no
+  scientific calculation. The measurement table is always rendered and is
+  the accessible source of every value.
+- **Recovery.** `.npsb` 1.1.0 snapshots and restores all six persistent
+  stores, including `experimentDatasets`, in the same atomic full-replacement
+  transaction; older archives are still restorable with explicit warnings
+  that absent stores will be cleared. `.npex` remains the portable
+  single-dataset interchange format.
+
+See [experimental-data.md](experimental-data.md) for the full contract and
+ADR-28 for the separation decision.
+
 ### 4.4 Import (all-or-nothing)
 
 ```
@@ -723,14 +794,18 @@ automatically (see `docs/data-sources.md`).
 | `/library/new` | New Drug Record (create form, explicit units) | 3 (done) |
 | `/library/:drugId` | Drug Detail (targets, read-only PK, provenance, edit/delete, Calculate link) | 3 (done) |
 | `/calculator` | Calculator — **implemented**: model selector, input forms, results, calculation trace, curve controls + charts | 4 (done) |
+| `/simulation` | Simulation — **implemented**: editable scenario, dynamic PK simulation, saved scenarios, effect-site analysis, charts and diagnostics | 42–46 (done) |
+| `/experiments` | Experimental Datasets — **implemented**: CSV/`.npex` import, saved datasets, ordered measurements, marker-only chart, rename/delete, `.npex` export | 47A (done) |
 | `/data-sources` | Data Sources — **implemented**: PubChem/ChEMBL search, measurements fetch, preview → confirm import, stored records, Layer C apply | 18 (done) |
-| `/import-export` | Import / Export — placeholder (header only) | 5 |
+| `/import-export` | Import / Export — **implemented**: NPSL/JSON/CSV import and export, plus the `.npsb` Recovery tab | 5, 8B (done) |
 | `/settings` | Settings — **implemented**: theme, per-model curve display defaults, data-management links, About, scoped preference reset | 9 (done) |
 | `*` | Not found | 1 (done) |
 
 Every route has a page in `src/app/pages/` so routing, layout and
 navigation are wired and tested; `/import-export` delegates to the
-phase-5 import/export feature and `/settings` (phase 9B) manages
+phase-5 import/export feature and its phase-8B Recovery tab, `/simulation`
+delegates to the phase-42–46 simulation feature, `/experiments` to the
+phase-47A measured-dataset feature, and `/settings` (phase 9B) manages
 device-local presentation preferences — see §4.7.
 
 ---
@@ -760,6 +835,7 @@ device-local presentation preferences — see §4.7.
 | 18G | Source-data integrity closure (three narrow fixes on phase 18): (a) a colliding id whose STORED row fails the authoritative source-record validator is a blocking `QUARANTINE_CONFLICT` in `importSourceRecords` — quarantine preserved byte-identical, never skipped/overwritten, no partial writes, and an observation is never imported as valid against a malformed compound row (same protection-wins policy as the drug merge import, GAP-3); (b) cross-field identity invariants at the repository boundary (deterministic id vs `source`/`sourceId`/provenance, observation id vs provenance, `compoundId` vs `provenance.source:compoundSourceId`) — internally contradictory records rejected as `INVALID_RECORD` before any write and quarantined on read; (c) portable Layer C attribution — promoted parameters carry `sourceRecordId`/`url`/`accessedAt`/`licenseNotice`/`licenseUrl` (optional NPSL provenance fields, badge display, round-trip tested) so exported libraries stay citable without the source stores; (d) existing-target safety — `findTargetMismatch` compares the observation's reported target with the chosen row (name/species) and requires an explicit `confirmTargetMismatch` acknowledgement shown with both sides in the UI, with the acknowledgement recorded in the parameter's provenance notes | 18 | done |
 | 36 | Complete Data Sources → Library import: "Add to drug library" now attaches a typed source-data snapshot (`Drug.sourceRecords: DrugSourceRecord[]`) instead of reducing a compound to name/synonyms/CAS. The snapshot carries the external identity (`source` + `sourceId`), the preferred name and every synonym, the full `CompoundIdentifiers` shape (PubChem CID, ChEMBL id, InChIKey, SMILES, molecular formula, molecular weight, CAS), the complete `SourceAttribution` (record URL, retrieval time, source version, license notice and URL) and every stored `ExperimentalObservation` of exactly that record (endpoint, value, unit, qualifier, raw relation, target name/id/URL/organism, species, assay, reference, activity comment, data-validity note, per-measurement provenance). Observations join by validated source identity (`compoundId === \`${source}:${sourceId}\``), never by display name, and are never promoted to `kd`/`ki`/`ec50`/`ic50` automatically. Repeat imports are idempotent (`already-linked`, append-only new measurements); a same-source record with a different id is a typed `conflict` never merged; a same-name compound with a different identity is a separate record; an existing drug record is linked only by an explicit id and only `sourceRecords` is submitted (targets, parameters, target metadata and notes preserved, revision-guarded). Detail-page sections (identifiers, chemical properties, attribution/license, imported observations with honest "not reported" and empty states), a list-level source-origin indicator, and created/linked/already-linked/conflict/failed reporting in the panel. The field is a known schema-validated field that survives reloads, ordinary edits, `.npsl` round trips and `.npsb` recovery; optional and additive, so no schema/persistence/database version bump and no migration (ADR-22). CSV stays a lossy parameter projection and does not carry it | 18, 18I | done |
 | 18I | Target-identity reference closure: `ReceptorTarget` gains an optional typed `sourceReferences` array (`TargetSourceReference` per source — `source`, `sourceName`, `sourceTargetId`, reported `name`/`organism`, HTTPS target-record `url`, verbatim license terms; ADR-20, no version bump); the ChEMBL adapter carries `target_chembl_id` + the target-record URL onto observations (`sourceTargetUrl`, absent when the source reports no id); `findTargetMismatch` reports a same-source id conflict as a structured `'source-id'` difference with `sourceIdConflict` detail — refusing before any drug write without `confirmTargetMismatch`, while an acknowledged conflict keeps the stored reference verbatim (never overwritten, merged or relabelled) and records both ids in provenance notes; apply semantics: new target carries the reference, a missing reference is attached idempotently to a compatible row (no duplicates, one reference per source, other sources never replaced); preservation through the drug-form edit path, the persistence mapper (reference-level unknown keys matched by source, never position), raw IndexedDB rows and NPSL round trips; read-only UI display with an accessible source link and an honest not-biologically-identity note; regression suites (domain/adapter/schema/mapper/store/form, real repository + fake-indexeddb) plus one new E2E workflow with a synthetic conflicting-target mock | 18, 18G | done |
+| 47A | Experimental PK dataset foundation (measured data only): a distinct `ExperimentalDataset`/`ExperimentalMeasurement` domain model, explicit-catalog time and concentration units, strict row-level CSV mapping/validation (no inferred columns or units; qualifiers, markers, negative and non-finite values rejected; zero valid; duplicates and exact replicates preserved), a separate versioned `.npex` single-dataset interchange format with strict envelopes, independent semantic-version rule, size/depth/row limits and exact scientific round-trip, an additive Dexie v6 `experimentDatasets` store with a validated repository (corruption reporting, transactional CRUD, `updatedAt` optimistic concurrency, immutable measurements/units/provenance), an accessible `/experiments` page with import previews, saved list, ordered table, presentation-only marker chart, rename, confirmed delete and `.npex` export/import, and a `.npsb` 1.1.0 full-store extension carrying all six persistent scientific stores with legacy absent-store warnings and atomic restore. No fitting, parameter estimation, diagnostics, calculations or drug-library mutation (ADR-28) | 3, 8B, 18 | done |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full

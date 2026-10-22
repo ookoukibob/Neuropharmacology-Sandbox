@@ -1,0 +1,260 @@
+import 'fake-indexeddb/auto'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import type {
+  ExperimentalDataset,
+  ExperimentalDatasetInput,
+} from '../../domain/experiments/experimental-dataset'
+import { SandboxDatabase } from '../db/database'
+import { DexieExperimentalDatasetRepository } from './dexieExperimentalDatasetRepository'
+
+let db: SandboxDatabase
+let repo: DexieExperimentalDatasetRepository
+let nowValue: string
+let idCounter: number
+
+const now = (): string => nowValue
+const ids = (): string => {
+  idCounter += 1
+  return `id-${String(idCounter)}`
+}
+
+function input(overrides: Partial<ExperimentalDatasetInput> = {}): ExperimentalDatasetInput {
+  return {
+    name: 'Study A',
+    timeUnit: 'h',
+    concentrationUnit: 'mg/L',
+    notes: 'Imported study',
+    provenance: {
+      source: 'csv',
+      fileName: 'study.csv',
+      importedAt: '2026-01-01T00:00:00.000Z',
+    },
+    measurements: [
+      { sourceRow: 1, time: 0, concentration: 0, sampleId: 'A', note: 'baseline' },
+      { sourceRow: 2, time: 0, concentration: 0, sampleId: 'A', note: 'replicate' },
+      { sourceRow: 3, time: 2, concentration: 1.5, sampleId: 'B' },
+    ],
+    ...overrides,
+  }
+}
+
+beforeEach(() => {
+  nowValue = '2026-02-01T00:00:00.000Z'
+  idCounter = 0
+  db = new SandboxDatabase(`test-experiment-datasets-${Math.random().toString(36).slice(2)}`)
+  repo = new DexieExperimentalDatasetRepository(db, now, ids)
+})
+
+afterEach(async () => {
+  await db.delete()
+})
+
+describe('DexieExperimentalDatasetRepository', () => {
+  it('creates with local ids and preserves order, duplicates and replicate ids', async () => {
+    const outcome = await repo.create(input())
+    if (!outcome.ok) throw new Error(outcome.message)
+    expect(outcome.dataset.id).toBe('id-1')
+    expect(outcome.dataset.createdAt).toBe(nowValue)
+    expect(outcome.dataset.updatedAt).toBe(nowValue)
+    expect(outcome.dataset.measurements.map((measurement) => measurement.id)).toEqual([
+      'id-2',
+      'id-3',
+      'id-4',
+    ])
+    expect(outcome.dataset.measurements.map((measurement) => measurement.sourceRow)).toEqual([
+      1, 2, 3,
+    ])
+    expect(outcome.dataset.measurements[0]?.time).toBe(0)
+    expect(outcome.dataset.measurements[1]?.time).toBe(0)
+    expect(outcome.dataset.measurements[1]?.sampleId).toBe('A')
+
+    const stored = await db.experimentDatasets.get('id-1')
+    expect(stored?.measurements).toHaveLength(3)
+
+    const listed = await repo.list()
+    expect(listed.corrupt).toEqual([])
+    expect(listed.datasets).toEqual([
+      expect.objectContaining({
+        id: 'id-1',
+        name: 'Study A',
+        measurementCount: 3,
+        timeUnit: 'h',
+        concentrationUnit: 'mg/L',
+      }),
+    ])
+  })
+
+  it('rejects invalid fields and writes nothing', async () => {
+    const cases: Partial<ExperimentalDatasetInput>[] = [
+      { name: '   ' },
+      { timeUnit: 'mg/L' },
+      { concentrationUnit: 'fortnight' },
+      {
+        measurements: [{ sourceRow: 1, time: -1, concentration: 1 }],
+      },
+      {
+        measurements: [{ sourceRow: 0, time: 1, concentration: 1 }],
+      },
+    ]
+    for (const overrides of cases) {
+      const outcome = await repo.create(input(overrides))
+      expect(outcome.ok).toBe(false)
+      if (!outcome.ok) expect(['VALIDATION']).toContain(outcome.code)
+    }
+    expect(await db.experimentDatasets.count()).toBe(0)
+  })
+
+  it('updates the name under an optimistic token without touching measurements', async () => {
+    const created = await repo.create(input())
+    if (!created.ok) throw new Error('setup')
+    const before = created.dataset
+
+    const updated = await repo.update(
+      before.id,
+      { name: '  Renamed study  ', notes: 'New notes' },
+      before.updatedAt,
+    )
+    if (!updated.ok) throw new Error(updated.message)
+    expect(updated.dataset.name).toBe('Renamed study')
+    expect(updated.dataset.notes).toBe('New notes')
+    expect(updated.dataset.measurements).toEqual(before.measurements)
+    expect(updated.dataset.timeUnit).toBe(before.timeUnit)
+    expect(updated.dataset.provenance).toEqual(before.provenance)
+    expect(updated.dataset.updatedAt).not.toBe(before.updatedAt)
+
+    const stale = await repo.update(before.id, { name: 'Stale overwrite' }, before.updatedAt)
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) expect(stale.code).toBe('CONFLICT')
+    expect((await db.experimentDatasets.get(before.id))?.name).toBe('Renamed study')
+  })
+
+  it('clears notes explicitly and keeps them when the field is absent', async () => {
+    const created = await repo.create(input())
+    if (!created.ok) throw new Error('setup')
+    const renamed = await repo.update(created.dataset.id, { name: 'No notes change' }, created.dataset.updatedAt)
+    if (!renamed.ok) throw new Error(renamed.message)
+    expect(renamed.dataset.notes).toBe('Imported study')
+
+    const cleared = await repo.update(
+      created.dataset.id,
+      { notes: undefined },
+      renamed.dataset.updatedAt,
+    )
+    if (!cleared.ok) throw new Error(cleared.message)
+    expect(cleared.dataset.notes).toBeUndefined()
+  })
+
+  it('keeps updatedAt tokens strictly increasing even when the clock is frozen', async () => {
+    const created = await repo.create(input())
+    if (!created.ok) throw new Error('setup')
+    const first = await repo.update(created.dataset.id, { name: 'One' }, created.dataset.updatedAt)
+    if (!first.ok) throw new Error(first.message)
+    expect(first.dataset.updatedAt).toBe('2026-02-01T00:00:00.001Z')
+
+    const second = await repo.update(created.dataset.id, { name: 'Two' }, first.dataset.updatedAt)
+    if (!second.ok) throw new Error(second.message)
+    expect(second.dataset.updatedAt).toBe('2026-02-01T00:00:00.002Z')
+
+    const stale = await repo.update(created.dataset.id, { name: 'Stale' }, first.dataset.updatedAt)
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) expect(stale.code).toBe('CONFLICT')
+  })
+
+  it('deletes only under the current token and reports a stale delete', async () => {
+    const created = await repo.create(input())
+    if (!created.ok) throw new Error('setup')
+    const renamed = await repo.update(created.dataset.id, { name: 'Current' }, created.dataset.updatedAt)
+    if (!renamed.ok) throw new Error('setup')
+
+    const stale = await repo.delete(created.dataset.id, created.dataset.updatedAt)
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) expect(stale.code).toBe('CONFLICT')
+    expect(await db.experimentDatasets.get(created.dataset.id)).toBeDefined()
+
+    const removed = await repo.delete(created.dataset.id, renamed.dataset.updatedAt)
+    expect(removed.ok).toBe(true)
+    expect(await db.experimentDatasets.get(created.dataset.id)).toBeUndefined()
+    expect(await repo.list().then((result) => result.datasets)).toEqual([])
+  })
+
+  it('reports corrupt rows instead of trusting, editing or deleting them', async () => {
+    const created = await repo.create(input())
+    if (!created.ok) throw new Error('setup')
+    const firstMeasurement = created.dataset.measurements[0]
+    if (firstMeasurement === undefined) throw new Error('setup')
+    const corruptRow: ExperimentalDataset = {
+      ...created.dataset,
+      measurements: [{ ...firstMeasurement, time: -5 }],
+    }
+    await db.experimentDatasets.put(corruptRow)
+
+    const listed = await repo.list()
+    expect(listed.datasets).toEqual([])
+    expect(listed.corrupt).toHaveLength(1)
+    expect(listed.corrupt[0]?.id).toBe(created.dataset.id)
+
+    const get = await repo.get(created.dataset.id)
+    expect(get.ok).toBe(false)
+    if (!get.ok) expect(get.code).toBe('CORRUPT')
+
+    const update = await repo.update(
+      created.dataset.id,
+      { name: 'Should not write' },
+      created.dataset.updatedAt,
+    )
+    expect(update.ok).toBe(false)
+    if (!update.ok) expect(update.code).toBe('CORRUPT')
+
+    const deleted = await repo.delete(created.dataset.id, created.dataset.updatedAt)
+    expect(deleted.ok).toBe(false)
+    if (!deleted.ok) expect(deleted.code).toBe('CORRUPT')
+    expect(await db.experimentDatasets.get(created.dataset.id)).toBeDefined()
+  })
+
+  it('does not silently overwrite a change made through another repository instance', async () => {
+    const other = new DexieExperimentalDatasetRepository(db, () => '2026-02-02T00:00:00.000Z', () => 'other')
+    const created = await repo.create(input())
+    if (!created.ok) throw new Error('setup')
+    const otherUpdate = await other.update(
+      created.dataset.id,
+      { name: 'Other tab' },
+      created.dataset.updatedAt,
+    )
+    if (!otherUpdate.ok) throw new Error(otherUpdate.message)
+
+    const stale = await repo.update(
+      created.dataset.id,
+      { name: 'This tab' },
+      created.dataset.updatedAt,
+    )
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) expect(stale.code).toBe('CONFLICT')
+    expect((await db.experimentDatasets.get(created.dataset.id))?.name).toBe('Other tab')
+  })
+
+  it('lists most recently updated datasets first', async () => {
+    const first = await repo.create(input({ name: 'First' }))
+    if (!first.ok) throw new Error('setup')
+    nowValue = '2026-02-02T00:00:00.000Z'
+    const second = await repo.create(input({ name: 'Second' }))
+    if (!second.ok) throw new Error('setup')
+    nowValue = '2026-02-03T00:00:00.000Z'
+    const renamed = await repo.update(second.dataset.id, { name: 'Second updated' }, second.dataset.updatedAt)
+    if (!renamed.ok) throw new Error(renamed.message)
+
+    const listed = await repo.list()
+    expect(listed.datasets.map((dataset) => dataset.name)).toEqual(['Second updated', 'First'])
+  })
+
+  it('returns NOT_FOUND for missing ids', async () => {
+    const get = await repo.get('missing')
+    expect(get.ok).toBe(false)
+    if (!get.ok) expect(get.code).toBe('NOT_FOUND')
+    const update = await repo.update('missing', { name: 'x' }, nowValue)
+    expect(update.ok).toBe(false)
+    if (!update.ok) expect(update.code).toBe('NOT_FOUND')
+    const deleted = await repo.delete('missing', nowValue)
+    expect(deleted.ok).toBe(false)
+    if (!deleted.ok) expect(deleted.code).toBe('NOT_FOUND')
+  })
+})

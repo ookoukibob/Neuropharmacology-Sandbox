@@ -32,6 +32,9 @@
  *   old token.
  */
 import type { Drug, DrugId, ReceptorTarget } from '../../domain/drug/drug'
+import type { ExperimentalDataset } from '../../domain/experiments/experimental-dataset'
+import type { Compound } from '../../domain/sources/compound'
+import type { ExperimentalObservation } from '../../domain/sources/observation'
 import type { SavedScenario } from '../../domain/simulation/saved-scenario'
 import {
   DEFAULT_LIBRARY_ID,
@@ -508,30 +511,59 @@ export class DexieDrugRepository implements DrugRepository {
   }
 
   async exportRecoveryArchive(): Promise<RecoveryExportOutcome> {
-    let snapshot: { drugs: RawSnapshotRow[]; meta: RawSnapshotRow[]; scenarios: RawSnapshotRow[] }
+    let snapshot: {
+      drugs: RawSnapshotRow[]
+      meta: RawSnapshotRow[]
+      compounds: RawSnapshotRow[]
+      observations: RawSnapshotRow[]
+      scenarios: RawSnapshotRow[]
+      experimentDatasets: RawSnapshotRow[]
+    }
     try {
-      // One read-only transaction over BOTH stores (docs/recovery-backup.md
-      // §7): cursor callbacks capture the real IndexedDB primary key next
-      // to each structured-cloned value, and both reads finish inside the
-      // transaction before any CPU-heavy work (scanning, classification,
-      // serialization) runs on the copies — so counts and entries can
-      // never mix the pre- and post-write sides of a concurrent change.
-      // No fallback path: a read failure is fail-closed BACKUP_READ_FAILED.
-      snapshot = await this.db.transaction('r', this.db.drugs, this.db.meta, this.db.scenarios, async () => {
-        const drugs: RawSnapshotRow[] = []
-        await this.db.drugs.each((value, cursor) => {
-          drugs.push({ key: cursor.primaryKey, value })
-        })
-        const meta: RawSnapshotRow[] = []
-        await this.db.meta.each((value, cursor) => {
-          meta.push({ key: cursor.primaryKey, value })
-        })
-        const scenarios: RawSnapshotRow[] = []
-        await this.db.scenarios.each((value, cursor) => {
-          scenarios.push({ key: cursor.primaryKey, value })
-        })
-        return { drugs, meta, scenarios }
-      })
+      // One read-only transaction over every persistent scientific store
+      // (docs/recovery-backup.md §7): cursor callbacks capture the real
+      // IndexedDB primary key next to each structured-cloned value, and every
+      // read finishes inside the transaction before any CPU-heavy work runs on
+      // the copies — counts and entries can never mix both sides of a
+      // concurrent change. No fallback path: read failure is fail-closed.
+      snapshot = await this.db.transaction(
+        'r',
+        [
+          this.db.drugs,
+          this.db.meta,
+          this.db.compounds,
+          this.db.observations,
+          this.db.scenarios,
+          this.db.experimentDatasets,
+        ],
+        async () => {
+          const drugs: RawSnapshotRow[] = []
+          await this.db.drugs.each((value, cursor) => {
+            drugs.push({ key: cursor.primaryKey, value })
+          })
+          const meta: RawSnapshotRow[] = []
+          await this.db.meta.each((value, cursor) => {
+            meta.push({ key: cursor.primaryKey, value })
+          })
+          const compounds: RawSnapshotRow[] = []
+          await this.db.compounds.each((value, cursor) => {
+            compounds.push({ key: cursor.primaryKey, value })
+          })
+          const observations: RawSnapshotRow[] = []
+          await this.db.observations.each((value, cursor) => {
+            observations.push({ key: cursor.primaryKey, value })
+          })
+          const scenarios: RawSnapshotRow[] = []
+          await this.db.scenarios.each((value, cursor) => {
+            scenarios.push({ key: cursor.primaryKey, value })
+          })
+          const experimentDatasets: RawSnapshotRow[] = []
+          await this.db.experimentDatasets.each((value, cursor) => {
+            experimentDatasets.push({ key: cursor.primaryKey, value })
+          })
+          return { drugs, meta, compounds, observations, scenarios, experimentDatasets }
+        },
+      )
     } catch (error) {
       return {
         ok: false,
@@ -546,7 +578,10 @@ export class DexieDrugRepository implements DrugRepository {
     return buildRecoveryArchive({
       drugs: snapshot.drugs,
       meta: snapshot.meta,
+      compounds: snapshot.compounds,
+      observations: snapshot.observations,
       scenarios: snapshot.scenarios,
+      experimentDatasets: snapshot.experimentDatasets,
       storage: {
         databaseVersion: this.db.verno,
         persistenceVersion: PERSISTENCE_VERSION,
@@ -570,30 +605,36 @@ export class DexieDrugRepository implements DrugRepository {
 
     // Raw, verbatim writes are confined to this one operation (ADR-18):
     // validated JSON-domain rows are written as stored — no schema
-    // re-validation, no normalization, no bookkeeping backfill — so
-    // unknown fields and quarantined rows survive exactly. `put` derives
-    // the key from the in-line `id`, which validation proved equals the
-    // entry key. Both stores are cleared and rewritten inside one `rw`
-    // transaction: full replacement, atomic (any failure aborts and rolls
-    // back — the previous library is intact), and never partially mixed.
-    // Phase 20: the revision table is NOT part of the archive format —
-    // every restored id's local revision advances instead, so an editor
-    // form still holding a pre-restore token is rejected rather than
-    // silently overwriting restored data (ADR-21).
+    // re-validation, no normalization, no bookkeeping backfill — so unknown
+    // fields and quarantined rows survive exactly. `put` derives the key from
+    // the in-line `id`, which validation proved equals the entry key. Every
+    // persistent scientific store is cleared and rewritten inside ONE `rw`
+    // transaction: full replacement is atomic (any failure aborts and rolls
+    // back — the previous state is intact) and never partially mixed. An
+    // absent additive-store array in an older archive yields an empty array
+    // here, so that store is emptied too (with an explicit preview warning).
+    // Phase 20: the revision table is NOT part of the archive format — every
+    // restored id's local revision advances instead, so an editor form still
+    // holding a pre-restore token is rejected rather than silently
+    // overwriting restored data (ADR-21).
     await this.db.transaction(
       'rw',
-      this.db.drugs,
-      this.db.meta,
-      this.db.revisions,
-      // Phase 45: saved scenarios are replaced in the SAME transaction, so a
-      // failure rolls back drugs, metadata and scenarios together.
-      this.db.scenarios,
+      [
+        this.db.drugs,
+        this.db.meta,
+        this.db.compounds,
+        this.db.observations,
+        this.db.revisions,
+        this.db.scenarios,
+        this.db.experimentDatasets,
+      ],
       async () => {
         await this.db.drugs.clear()
         await this.db.meta.clear()
-        // An archive written before phase 45 has no scenarios: the store is
-        // then emptied, consistently with the rest of the snapshot.
+        await this.db.compounds.clear()
+        await this.db.observations.clear()
         await this.db.scenarios.clear()
+        await this.db.experimentDatasets.clear()
         for (const row of parsed.archive.drugs) {
           await this.db.drugs.put(row.value as unknown as DrugRecord)
           // The id the write above used: the in-line `id` of the row
@@ -604,8 +645,17 @@ export class DexieDrugRepository implements DrugRepository {
         for (const row of parsed.archive.meta) {
           await this.db.meta.put(row.value as unknown as LibraryMetadata)
         }
+        for (const row of parsed.archive.compounds) {
+          await this.db.compounds.put(row.value as unknown as Compound)
+        }
+        for (const row of parsed.archive.observations) {
+          await this.db.observations.put(row.value as unknown as ExperimentalObservation)
+        }
         for (const row of parsed.archive.scenarios) {
           await this.db.scenarios.put(row.value as unknown as SavedScenario)
+        }
+        for (const row of parsed.archive.experimentDatasets) {
+          await this.db.experimentDatasets.put(row.value as unknown as ExperimentalDataset)
         }
       },
     )

@@ -59,6 +59,18 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`
 }
 
+function archiveStoreCounts(counts: RecoveryReport['counts']): readonly {
+  readonly label: string
+  readonly count: number | undefined
+}[] {
+  return [
+    { label: 'Experimental datasets', count: counts.experimentDatasetRows },
+    { label: 'Compounds', count: counts.compoundRows },
+    { label: 'Observations', count: counts.observationRows },
+    { label: 'Saved scenarios', count: counts.scenarioRows },
+  ]
+}
+
 /** One structured issue as a human-readable line (store/key/path/type). */
 function formatIssue(issue: RecoveryIssue): string {
   const where: string[] = []
@@ -103,7 +115,11 @@ function RestoreReportCard({ outcome }: { readonly outcome: LibraryRestoreOutcom
             {report.currentBuild.readable} readable and {quarantined} quarantined
             {quarantined > 0
               ? ' — quarantined rows remain stored and appear in the quarantine report on the Drug Library page.'
-              : '.'}
+              : '.'}{' '}
+            Extension stores restored: {plural(report.counts.compoundRows ?? 0, 'compound row')},{' '}
+            {plural(report.counts.observationRows ?? 0, 'observation row')},{' '}
+            {plural(report.counts.scenarioRows ?? 0, 'saved scenario')} and{' '}
+            {plural(report.counts.experimentDatasetRows ?? 0, 'experimental dataset')}.
           </p>
         </AlertDescription>
       </Alert>
@@ -148,7 +164,7 @@ function RestoreReportCard({ outcome }: { readonly outcome: LibraryRestoreOutcom
         <AlertTitle>Restore failed — no changes were written</AlertTitle>
         <AlertDescription>
           <p>
-            The restore transaction was rolled back; the current library is unchanged. You can
+            The restore transaction was rolled back; the current data is unchanged. You can
             fix the cause (for example, free disk space) and try again.
           </p>
           <p className="break-words" data-testid="recovery-restore-error">
@@ -160,7 +176,7 @@ function RestoreReportCard({ outcome }: { readonly outcome: LibraryRestoreOutcom
   }
   return (
     <Alert variant="destructive" data-testid="recovery-rejected">
-      <AlertTitle>Restore rejected — the current library was not modified</AlertTitle>
+      <AlertTitle>Restore rejected — the current data was not modified</AlertTitle>
       <AlertDescription>
         <IssueList issues={outcome.issues} />
       </AlertDescription>
@@ -198,7 +214,7 @@ export function RecoveryPanel() {
       const counts = result.counts
       setExportStatus({
         kind: 'ok',
-        message: `Downloaded ${fileName} — ${plural(counts.drugRows, 'stored row')} (${counts.readableAtExport} readable, ${counts.quarantinedAtExport} quarantined at export) and ${plural(counts.metaRows, 'metadata row')}. This archive has no checksum or signature: it proves schema conformance only, not integrity or authenticity — verify where a file came from before restoring it.`,
+        message: `Downloaded ${fileName} — ${plural(counts.drugRows, 'stored row')} (${counts.readableAtExport} readable, ${counts.quarantinedAtExport} quarantined at export), ${plural(counts.metaRows, 'metadata row')}, ${plural(counts.compoundRows ?? 0, 'compound row')}, ${plural(counts.observationRows ?? 0, 'observation row')}, ${plural(counts.scenarioRows ?? 0, 'saved scenario')} and ${plural(counts.experimentDatasetRows ?? 0, 'experimental dataset')}. This archive has no checksum or signature: it proves schema conformance only, not integrity or authenticity — verify where a file came from before restoring it.`,
       })
     } catch (error) {
       setExportStatus({
@@ -276,11 +292,11 @@ export function RecoveryPanel() {
         <CardHeader>
           <CardTitle headingLevel={2}>Create a full recovery backup (.npsb)</CardTitle>
           <p className="text-sm text-muted-foreground">
-            A .npsb archive is a complete snapshot of local storage: every stored row — including
-            rows this build cannot validate (quarantined) and unknown future fields — plus every
-            library-metadata row, from both object stores. It is separate from the interchange
-            formats on the Import/Export tabs, which exclude quarantined rows. Export is
-            read-only: creating a backup never modifies the library.
+            A .npsb archive is a complete snapshot of local storage: every stored row from all
+            archive-backed scientific stores — including rows this build cannot validate
+            (quarantined) and unknown future fields — plus every library-metadata row. It is
+            separate from the interchange formats on the Import/Export tabs, which exclude
+            quarantined rows. Export is read-only: creating a backup never modifies local data.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -323,9 +339,10 @@ export function RecoveryPanel() {
         <CardHeader>
           <CardTitle headingLevel={2}>Restore a recovery backup (.npsb)</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Restoring REPLACES the entire current library — every record and all library
-            metadata — with the archive contents. Selecting a file only validates and previews
-            it; nothing is written until you confirm below.
+            Restoring REPLACES all archive-backed scientific data — drugs, metadata, compounds,
+            observations, saved scenarios and experimental datasets — with the archive contents.
+            Selecting a file only validates and previews it; nothing is written until you confirm
+            below.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -358,7 +375,7 @@ export function RecoveryPanel() {
 
           {rejected !== null && (
             <Alert variant="destructive" data-testid="recovery-rejected">
-              <AlertTitle>Archive rejected — the current library was not modified</AlertTitle>
+              <AlertTitle>Archive rejected — the current data was not modified</AlertTitle>
               <AlertDescription>
                 <IssueList issues={rejected} />
               </AlertDescription>
@@ -385,8 +402,21 @@ export function RecoveryPanel() {
                   {active.report.currentBuild.readable} readable,{' '}
                   {active.report.currentBuild.quarantined} quarantined.
                 </p>
+                <div>
+                  <strong>Additional scientific stores recorded in this archive:</strong>
+                  <ul className="list-disc pl-4" data-testid="recovery-store-counts">
+                    {archiveStoreCounts(active.report.counts).map((entry) => (
+                      <li key={entry.label}>
+                        {entry.label}:{' '}
+                        {entry.count === undefined
+                          ? 'absent (the archive predates this store; full replacement empties it)'
+                          : plural(entry.count, 'row')}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
                 <p>
-                  <strong>Current library that will be replaced:</strong>{' '}
+                  <strong>Current drug library that will be replaced:</strong>{' '}
                   {plural(drugs.length, 'record')} and {plural(quarantine.length, 'quarantined row')}
                   .
                 </p>
@@ -397,8 +427,8 @@ export function RecoveryPanel() {
                   <AlertTitle>Warnings — the restore can still proceed</AlertTitle>
                   <AlertDescription>
                     <ul className="list-disc pl-4">
-                      {active.report.warnings.map((warning) => (
-                        <li key={warning.code}>
+                      {active.report.warnings.map((warning, index) => (
+                        <li key={`${warning.code}-${String(index)}`}>
                           [{warning.code}] {warning.message}
                         </li>
                       ))}
@@ -408,12 +438,19 @@ export function RecoveryPanel() {
               )}
 
               <Alert variant="destructive" data-testid="recovery-restore-warning">
-                <AlertTitle>Replace the entire library with this archive?</AlertTitle>
+                <AlertTitle>Replace all current data with this archive?</AlertTitle>
                 <AlertDescription>
                   <p>
-                    Restoring permanently overwrites every existing record and all library
-                    metadata with the archive contents (
-                    {plural(active.report.counts.drugRows, 'row')}). This cannot be undone.
+                    Restoring permanently overwrites every existing record in all archive-backed
+                    scientific stores — drugs, metadata, compounds, observations, saved scenarios
+                    and experimental datasets — with the archive contents (
+                    {plural(active.report.counts.drugRows, 'drug row')},{' '}
+                    {plural(active.report.counts.metaRows, 'metadata row')},{' '}
+                    {plural(active.report.counts.compoundRows ?? 0, 'compound row')},{' '}
+                    {plural(active.report.counts.observationRows ?? 0, 'observation row')},{' '}
+                    {plural(active.report.counts.scenarioRows ?? 0, 'saved scenario')} and{' '}
+                    {plural(active.report.counts.experimentDatasetRows ?? 0, 'experimental dataset')}
+                    ). This cannot be undone.
                   </p>
                   <label className="mt-2 flex items-center gap-2 text-sm">
                     <input
@@ -423,7 +460,7 @@ export function RecoveryPanel() {
                       disabled={busy}
                       onChange={(e) => setAck(e.target.checked)}
                     />
-                    I understand this will permanently replace my current library —{' '}
+                    I understand this will permanently replace my current data —{' '}
                     {plural(drugs.length, 'record')} and{' '}
                     {plural(quarantine.length, 'quarantined row')} — with the archive contents (
                     {plural(active.report.counts.drugRows, 'row')})

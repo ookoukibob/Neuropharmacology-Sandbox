@@ -6,6 +6,70 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Added — experimental concentration–time datasets (phase 47A)
+
+- **A separate Experimental Data page** at `/experiments`: import explicitly
+  mapped CSV files or one `.npex` dataset, inspect declared units and
+  provenance, review the complete ordered measurement table, rename or
+  permanently delete a saved dataset, and export/re-import it as `.npex`.
+- **A distinct measured-data model**, never the source-data
+  `ExperimentalObservation` and never a drug-library record:
+  `ExperimentalDataset` plus ordered `ExperimentalMeasurement` rows with
+  local ids, source-row provenance, optional sample ids/notes, and explicit
+  catalog time and concentration units. Units are never inferred from
+  headers, filenames, magnitudes or neighbouring values.
+- **Fail-closed CSV import** through the existing RFC 4180 parser with
+  explicit column mapping. Blank cells, qualifiers/markers (`<0.1`, `BLQ`,
+  `N/A`, ranges), negative values and non-finite numbers are rejected with
+  source-row-specific errors; zero is valid. Import is all-or-nothing and
+  never averages, sorts, deduplicates, interpolates or rewrites source
+  order, duplicate timestamps or exact replicates.
+- **A versioned `.npex` 1.0.0 single-dataset format**, independent of NPSL
+  and `.npsb`, with a strict envelope, duplicate-key rejection,
+  size/depth/measurement limits, a same-major/reader-minor compatibility
+  rule and exact scientific round-trip. The file carries original import
+  provenance but no local database or measurement ids; re-import assigns
+  new local identity.
+- **Additive Dexie v6 storage** (`experimentDatasets`) behind a validated
+  repository: transactional create/update/delete, corruption reported on
+  read instead of trusted or deleted, and in-transaction `updatedAt`
+  optimistic concurrency. Units, measurements and provenance are immutable;
+  only name and notes can change.
+- **A presentation-only Plotly chart** showing one marker per stored
+  measurement with declared-unit axis titles. There is no fitted curve,
+  interpolation, smoothing or scientific calculation in React or the chart
+  adapter; the ordered table remains the accessible source of every value.
+
+### Changed — recovery backup now covers every scientific store (phase 47A)
+
+- **`.npsb` is now version 1.1.0** and snapshots all six persistent
+  scientific stores: `drugs`, `meta`, `compounds`, `observations`,
+  `scenarios` and `experimentDatasets`, including empty stores and explicit
+  counts. This closes the gap where source data and saved scenarios were
+  absent from a full backup.
+- **Older supported archives still restore.** A missing additive
+  array/count pair is accepted as an empty store, produces one explicit
+  `ARCHIVE_STORE_ABSENT` preview warning per store, and is cleared by full
+  replacement; a one-sided pair fails validation before any write.
+- **Restore remains one atomic transaction** over all six stores plus the
+  local revision table, with stale-write revision safeguards preserved.
+  Validation failure writes nothing, and a mid-transaction failure rolls
+  back every store to its previous contents.
+- **No fitting or diagnostics.** Phase 47A stores and plots measured
+  observations only; Phase 47B/47C behavior is not present. No application
+  version, published `v1.0.0` asset, calculation, NPSL schema or unrelated
+  format was changed.
+
+### Documentation and verification (phase 47A)
+
+- Added `docs/experimental-data.md` and ADR-28; updated architecture, the
+  phase roadmap/history, testing matrix, recovery contract, README and this
+  changelog.
+- Added domain, CSV, `.npex`, repository, database/recovery and chart tests,
+  real-Chromium desktop/narrow E2E workflows, and axe scans for the new page.
+  The full Vitest suite passes 88 files / 1,568 tests; all required gates are
+  recorded in the pull request.
+
 ## [1.0.0] - 2026-10-21
 
 The first stable release. This version consolidates the implemented core

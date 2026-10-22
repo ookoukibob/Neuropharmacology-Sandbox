@@ -1,4 +1,4 @@
-import { Calculator, Database, Library, ArrowLeftRight, Settings, Activity } from 'lucide-react'
+import { Calculator, Database, Library, ArrowLeftRight, Settings, Activity, FlaskConical } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -15,6 +15,7 @@ const NAV_ITEMS: readonly NavItem[] = [
   { to: '/library', label: 'Drug Library', icon: Library },
   { to: '/calculator', label: 'Calculator', icon: Calculator },
   { to: '/simulation', label: 'Simulation', icon: Activity },
+  { to: '/experiments', label: 'Experimental Data', icon: FlaskConical },
   { to: '/data-sources', label: 'Data Sources', icon: Database },
   { to: '/import-export', label: 'Import / Export', icon: ArrowLeftRight },
   { to: '/settings', label: 'Settings', icon: Settings },
@@ -26,6 +27,7 @@ function titleForPath(pathname: string): string {
   if (pathname === '/library' || pathname === '/') return 'Drug Library'
   if (pathname === '/calculator') return 'Calculator'
   if (pathname === '/simulation') return 'Simulation'
+  if (pathname === '/experiments') return 'Experimental Datasets'
   if (pathname === '/data-sources') return 'Data Sources'
   if (pathname === '/import-export') return 'Import / Export'
   if (pathname === '/settings') return 'Settings'

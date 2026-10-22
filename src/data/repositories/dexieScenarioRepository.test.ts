@@ -243,21 +243,32 @@ describe('backup integration', () => {
     expect((await repo.list()).scenarios).toHaveLength(0)
   })
 
-  it('does not invent a scenarios key when the store is empty', async () => {
+  it('emits every additive store and count even when the stores are empty', async () => {
     const drugs = new DexieDrugRepository(db)
     const exported = await drugs.exportRecoveryArchive()
     if (!exported.ok) throw new Error('export failed')
     const doc = JSON.parse(exported.text) as Record<string, unknown>
     expect(Object.keys(doc).sort()).toEqual([
       'backupVersion',
+      'compounds',
       'counts',
       'drugs',
+      'experimentDatasets',
       'exportedAt',
       'formatId',
       'meta',
+      'observations',
+      'scenarios',
       'storage',
     ])
-    expect((doc['counts'] as Record<string, unknown>)['scenarioRows']).toBeUndefined()
+    expect(doc['scenarios']).toEqual([])
+    expect(doc['experimentDatasets']).toEqual([])
+    expect(doc['counts']).toMatchObject({
+      compoundRows: 0,
+      observationRows: 0,
+      scenarioRows: 0,
+      experimentDatasetRows: 0,
+    })
   })
 })
 describe('effect-site draft persistence (phase 46)', () => {
@@ -475,12 +486,21 @@ describe('.npsb archive compatibility for effect-site drafts (phase 46)', () => 
     if (!exported.ok) throw new Error('export failed')
 
     // The documented pre-phase-45 envelope: exactly the seven v1 keys, with
-    // no scenarios array and no scenarioRows count. This is the historical
+    // none of the additive store arrays or counts. This is the historical
     // format contract, not an arbitrary deletion from a modern archive.
     const doc = JSON.parse(exported.text) as Record<string, unknown>
     const counts = doc['counts'] as Record<string, unknown>
-    delete doc['scenarios']
-    delete counts['scenarioRows']
+    for (const store of ['compounds', 'observations', 'scenarios', 'experimentDatasets']) {
+      delete doc[store]
+    }
+    for (const count of [
+      'compoundRows',
+      'observationRows',
+      'scenarioRows',
+      'experimentDatasetRows',
+    ]) {
+      delete counts[count]
+    }
     expect(Object.keys(doc).sort()).toEqual([
       'backupVersion',
       'counts',

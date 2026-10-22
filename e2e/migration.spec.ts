@@ -21,11 +21,12 @@ import { expect, test, type Page } from '@playwright/test'
  * and normalizes the incoming version back with `runUpgraders(db, oldVer / 10, …)`.
  * A build that declared schema version N therefore wrote native version
  * 10·N: 10 for the v1 declaration, 20 for the v2-era builds (phase 3–17),
- * 30 for the v3-era builds (phase 18–19), and the current v4 build opens
- * at native 40. Seeding at 1/2/3 would fabricate version numbers no build
- * of this application ever produced, so these tests seed at the authentic
- * native versions; the seeded-then-upgraded chains below therefore run
- * with exactly the declared-version semantics the unit tests model.
+ * 30 for the v3-era builds (phase 18–19), 40 for the v4-era builds (phase
+ * 20–44), 50 for the v5-era builds (phase 45–46), and the current v6 build
+ * opens at native 60. Seeding at 1/2/3 would fabricate version numbers no
+ * build of this application ever produced, so these tests seed at the
+ * authentic native versions; the seeded-then-upgraded chains below therefore
+ * run with exactly the declared-version semantics the unit tests model.
  *
  * What this does NOT prove (audit NV-2 stays open): these are SYNTHETIC
  * legacy rows built from the historical schema contract. No authentic
@@ -74,11 +75,12 @@ const NATIVE_V1 = 10
 const NATIVE_V2 = 20
 const NATIVE_V3 = 30
 /**
- * The application's current schema: declared v5 (phase 45 adds the additive
- * `scenarios` store) → native 50. The historical seeded versions (10/20/30)
- * are unchanged; only the version the app must now reach has moved.
+ * The application's current schema: declared v6 (phase 47A adds the additive
+ * `experimentDatasets` store) → native 60. The historical seeded versions
+ * (10/20/30) are unchanged; only the version the app must now reach has
+ * moved.
  */
-const NATIVE_V5 = 50
+const NATIVE_V6 = 60
 
 interface SeedIndexSpec {
   name: string
@@ -126,8 +128,8 @@ const STORES_V3: SeedStoreSpec[] = [
   },
 ]
 
-/** The current schema the app must reach: v4 (de95c95) plus additive v5. */
-const EXPECTED_V4_STORES = {
+/** The current schema the app must reach: v4 (de95c95) plus additive v5/v6. */
+const EXPECTED_V6_STORES = {
   drugs: ['origin', 'updatedAt'],
   meta: [],
   compounds: [],
@@ -135,6 +137,8 @@ const EXPECTED_V4_STORES = {
   revisions: [],
   // Added by phase 45 (schema v5): saved simulation scenarios.
   scenarios: ['updatedAt'],
+  // Added by phase 47A (schema v6): experimental concentration–time datasets.
+  experimentDatasets: ['updatedAt'],
 }
 
 /* ------------------------------------------------------------------ */
@@ -504,7 +508,7 @@ function omitKeys(row: Record<string, unknown>, keys: readonly string[]): Record
 /* Scenarios                                                           */
 /* ------------------------------------------------------------------ */
 
-test('v1 database upgrades to v4 in real Chromium: bookkeeping backfill only; science and unknown field values unchanged under deep comparison', async ({
+test('v1 database upgrades to v6 in real Chromium: bookkeeping backfill only; science and unknown field values unchanged under deep comparison', async ({
   page,
 }) => {
   const config: SeedConfig = {
@@ -531,12 +535,12 @@ test('v1 database upgrades to v4 in real Chromium: bookkeeping backfill only; sc
 
   // (3) Storage-level assertions from the real browser database.
   const migrated = await rawSnapshot(page, DB_NAME)
-  // The app opened the database at its current schema: declared version 4
-  // ⇔ native 40 (Dexie ×10 — see header). Any other declared version
+  // The app opened the database at its current schema: declared version 6
+  // ⇔ native 60 (Dexie ×10 — see header). Any other declared version
   // would yield a different native number; the store set asserted next is
-  // the semantic content of schema version 4.
-  expect(migrated.version).toBe(NATIVE_V5)
-  expect(migrated.stores).toEqual(EXPECTED_V4_STORES)
+  // the semantic content of schema version 6.
+  expect(migrated.version).toBe(NATIVE_V6)
+  expect(migrated.stores).toEqual(EXPECTED_V6_STORES)
 
   // Row A: only the documented keys are added; everything else stays
   // deeply equal.
@@ -568,9 +572,11 @@ test('v1 database upgrades to v4 in real Chromium: bookkeeping backfill only; sc
   expect(migrated.rows['revisions']).toEqual([])
   // Phase 45: the additive scenarios store is equally empty after migration.
   expect(migrated.rows['scenarios']).toEqual([])
+  // Phase 47A: the additive experimentDatasets store is empty too.
+  expect(migrated.rows['experimentDatasets']).toEqual([])
 
   // (4) Reopen: a fresh page load + a fresh raw connection cause no further
-  // mutation (the upgrade is idempotent at v4).
+  // mutation (the upgrade is idempotent at v6).
   await page.goto('/library')
   await expectHydrated(page, [
     'NV23 Synthetic Legacy Alpha',
@@ -580,7 +586,7 @@ test('v1 database upgrades to v4 in real Chromium: bookkeeping backfill only; sc
   expect(await rawSnapshot(page, DB_NAME)).toEqual(migrated)
 })
 
-test('v2 database upgrades to v4 in real Chromium: stored rows unchanged under deep comparison, no spurious backfill', async ({
+test('v2 database upgrades to v6 in real Chromium: stored rows unchanged under deep comparison, no spurious backfill', async ({
   page,
 }) => {
   const config: SeedConfig = {
@@ -600,12 +606,12 @@ test('v2 database upgrades to v4 in real Chromium: stored rows unchanged under d
   await expectHydrated(page, ['NV23 Synthetic V2 Delta', 'NV23 Synthetic V2 Epsilon'])
 
   const migrated = await rawSnapshot(page, DB_NAME)
-  // The app opened the database at its current schema: declared version 4
-  // ⇔ native 40 (Dexie ×10 — see header). Any other declared version
+  // The app opened the database at its current schema: declared version 6
+  // ⇔ native 60 (Dexie ×10 — see header). Any other declared version
   // would yield a different native number; the store set asserted next is
-  // the semantic content of schema version 4.
-  expect(migrated.version).toBe(NATIVE_V5)
-  expect(migrated.stores).toEqual(EXPECTED_V4_STORES)
+  // the semantic content of schema version 6.
+  expect(migrated.version).toBe(NATIVE_V6)
+  expect(migrated.stores).toEqual(EXPECTED_V6_STORES)
 
   // The v1→v2 backfill must NOT run on an already-v2 database: every row
   // remains deeply equal — and V2_EPSILON (missing persistenceVersion and
@@ -618,13 +624,15 @@ test('v2 database upgrades to v4 in real Chromium: stored rows unchanged under d
   expect(migrated.rows['revisions']).toEqual([])
   // Phase 45: the additive scenarios store is equally empty after migration.
   expect(migrated.rows['scenarios']).toEqual([])
+  // Phase 47A: the additive experimentDatasets store is empty too.
+  expect(migrated.rows['experimentDatasets']).toEqual([])
 
   await page.goto('/library')
   await expectHydrated(page, ['NV23 Synthetic V2 Delta', 'NV23 Synthetic V2 Epsilon'])
   expect(await rawSnapshot(page, DB_NAME)).toEqual(migrated)
 })
 
-test('v3 database upgrades to v4 in real Chromium: source-data rows preserved, revisions added empty', async ({
+test('v3 database upgrades to v6 in real Chromium: source-data rows preserved, revisions added empty', async ({
   page,
 }) => {
   const config: SeedConfig = {
@@ -654,12 +662,12 @@ test('v3 database upgrades to v4 in real Chromium: source-data rows preserved, r
   await expectHydrated(page, ['NV23 Synthetic V3 Zeta'])
 
   const migrated = await rawSnapshot(page, DB_NAME)
-  // The app opened the database at its current schema: declared version 4
-  // ⇔ native 40 (Dexie ×10 — see header). Any other declared version
+  // The app opened the database at its current schema: declared version 6
+  // ⇔ native 60 (Dexie ×10 — see header). Any other declared version
   // would yield a different native number; the store set asserted next is
-  // the semantic content of schema version 4.
-  expect(migrated.version).toBe(NATIVE_V5)
-  expect(migrated.stores).toEqual(EXPECTED_V4_STORES)
+  // the semantic content of schema version 6.
+  expect(migrated.version).toBe(NATIVE_V6)
+  expect(migrated.stores).toEqual(EXPECTED_V6_STORES)
 
   // Every pre-existing store's raw snapshot remains deeply equal — no
   // drug row is rewritten merely because the revisions table was added.
@@ -672,6 +680,8 @@ test('v3 database upgrades to v4 in real Chromium: source-data rows preserved, r
   expect(migrated.rows['revisions']).toEqual([])
   // Phase 45: the additive scenarios store is equally empty after migration.
   expect(migrated.rows['scenarios']).toEqual([])
+  // Phase 47A: the additive experimentDatasets store is empty too.
+  expect(migrated.rows['experimentDatasets']).toEqual([])
 
   await page.goto('/library')
   await expectHydrated(page, ['NV23 Synthetic V3 Zeta'])

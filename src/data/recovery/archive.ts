@@ -31,9 +31,12 @@ import {
   BACKUP_FORMAT_ID,
   BACKUP_VERSION,
   MAX_ARCHIVE_BYTES,
+  MAX_COMPOUND_ROWS,
   MAX_DEPTH,
   MAX_DRUG_ROWS,
+  MAX_EXPERIMENT_DATASET_ROWS,
   MAX_META_ROWS,
+  MAX_OBSERVATION_ROWS,
   MAX_SCENARIO_ROWS,
   MAX_SPECIAL_NUMBER_ANNOTATIONS,
   checkBackupVersion,
@@ -55,8 +58,11 @@ export interface RawSnapshotRow {
 export interface BuildArchiveInput {
   readonly drugs: readonly RawSnapshotRow[]
   readonly meta: readonly RawSnapshotRow[]
-  /** Saved scenarios (phase 45). Optional so older callers keep working. */
+  /** Additive stores; callers that predate them may omit the arrays. */
+  readonly compounds?: readonly RawSnapshotRow[]
+  readonly observations?: readonly RawSnapshotRow[]
   readonly scenarios?: readonly RawSnapshotRow[]
+  readonly experimentDatasets?: readonly RawSnapshotRow[]
   readonly storage: RecoveryStorageInfo
   readonly exportedAt: string
 }
@@ -77,8 +83,13 @@ export interface ValidatedArchive {
   readonly exportedAt: string
   readonly drugs: readonly ValidatedRow[]
   readonly meta: readonly ValidatedRow[]
-  /** Saved scenarios; an empty array for archives written before phase 45. */
+  /** Additive stores; empty arrays when the archive predates them. */
+  readonly compounds: readonly ValidatedRow[]
+  readonly observations: readonly ValidatedRow[]
   readonly scenarios: readonly ValidatedRow[]
+  readonly experimentDatasets: readonly ValidatedRow[]
+  /** Stores whose envelope array was absent (older archive). */
+  readonly absentStores: readonly RecoveryStoreName[]
 }
 
 export type ParseArchiveResult =
@@ -130,21 +141,41 @@ export function buildRecoveryArchive(input: BuildArchiveInput): BuildArchiveResu
     })
   }
 
-  const scenarioInput = input.scenarios ?? []
-  if (scenarioInput.length > MAX_SCENARIO_ROWS) {
-    issues.push({
-      code: 'BACKUP_LIMIT_EXCEEDED',
-      limit: 'scenario rows',
-      message: `the scenarios store holds ${scenarioInput.length} rows, above the archive limit of ${MAX_SCENARIO_ROWS}`,
-    })
+  const addLimitIssue = (
+    label: string,
+    count: number,
+    limit: number,
+  ): void => {
+    if (count > limit) {
+      issues.push({
+        code: 'BACKUP_LIMIT_EXCEEDED',
+        limit: label,
+        message: `the ${label} store holds ${count} rows, above the archive limit of ${limit}`,
+      })
+    }
   }
+  const compoundInput = input.compounds ?? []
+  const observationInput = input.observations ?? []
+  const scenarioInput = input.scenarios ?? []
+  const experimentDatasetInput = input.experimentDatasets ?? []
+  addLimitIssue('compound rows', compoundInput.length, MAX_COMPOUND_ROWS)
+  addLimitIssue('observation rows', observationInput.length, MAX_OBSERVATION_ROWS)
+  addLimitIssue('scenario rows', scenarioInput.length, MAX_SCENARIO_ROWS)
+  addLimitIssue(
+    'experimental dataset rows',
+    experimentDatasetInput.length,
+    MAX_EXPERIMENT_DATASET_ROWS,
+  )
 
   let readableAtExport = 0
   let quarantinedAtExport = 0
   let annotationTotal = 0
   const drugEntries: RecoveryEntry[] = []
   const metaEntries: RecoveryEntry[] = []
+  const compoundEntries: RecoveryEntry[] = []
+  const observationEntries: RecoveryEntry[] = []
   const scenarioEntries: RecoveryEntry[] = []
+  const experimentDatasetEntries: RecoveryEntry[] = []
 
   const buildEntry = (
     row: RawSnapshotRow,
@@ -203,11 +234,23 @@ export function buildRecoveryArchive(input: BuildArchiveInput): BuildArchiveResu
     const entry = buildEntry(row, 'meta', index)
     if (entry !== null) metaEntries.push(entry)
   })
-  // Saved scenarios are archived verbatim: they are stored as validated JSON
+  // Additive stores are archived verbatim: they are stored as validated JSON
   // records, so the drug-oriented `fromRecord` classification does not apply.
+  compoundInput.forEach((row, index) => {
+    const entry = buildEntry(row, 'compounds', index)
+    if (entry !== null) compoundEntries.push(entry)
+  })
+  observationInput.forEach((row, index) => {
+    const entry = buildEntry(row, 'observations', index)
+    if (entry !== null) observationEntries.push(entry)
+  })
   scenarioInput.forEach((row, index) => {
     const entry = buildEntry(row, 'scenarios', index)
     if (entry !== null) scenarioEntries.push(entry)
+  })
+  experimentDatasetInput.forEach((row, index) => {
+    const entry = buildEntry(row, 'experimentDatasets', index)
+    if (entry !== null) experimentDatasetEntries.push(entry)
   })
 
   if (annotationTotal > MAX_SPECIAL_NUMBER_ANNOTATIONS) {
@@ -219,18 +262,19 @@ export function buildRecoveryArchive(input: BuildArchiveInput): BuildArchiveResu
   }
   if (issues.length > 0) return { ok: false, issues }
 
+  // Version 1.1.0 emits every supported store and its count, including empty
+  // arrays: a full snapshot must state completeness rather than rely on an
+  // omitted key to mean "no rows".
   const counts: RecoveryCounts = {
     drugRows: drugEntries.length,
     readableAtExport,
     quarantinedAtExport,
     metaRows: metaEntries.length,
-    // Only archives that actually carry scenarios declare the count, so a
-    // library without saved scenarios keeps the exact pre-phase-45 shape.
-    ...(scenarioEntries.length === 0 ? {} : { scenarioRows: scenarioEntries.length }),
+    compoundRows: compoundEntries.length,
+    observationRows: observationEntries.length,
+    scenarioRows: scenarioEntries.length,
+    experimentDatasetRows: experimentDatasetEntries.length,
   }
-  // `scenarios` is emitted only when the store has rows: an archive of a
-  // library that never saved a scenario keeps the exact seven-key v1
-  // envelope, so its bytes are unchanged from pre-phase-45 builds.
   const archive: RecoveryArchive = {
     formatId: BACKUP_FORMAT_ID,
     backupVersion: BACKUP_VERSION,
@@ -239,7 +283,10 @@ export function buildRecoveryArchive(input: BuildArchiveInput): BuildArchiveResu
     counts,
     drugs: drugEntries,
     meta: metaEntries,
-    ...(scenarioEntries.length === 0 ? {} : { scenarios: scenarioEntries }),
+    compounds: compoundEntries,
+    observations: observationEntries,
+    scenarios: scenarioEntries,
+    experimentDatasets: experimentDatasetEntries,
   }
 
   let text: string
@@ -279,6 +326,10 @@ export function buildRecoveryArchive(input: BuildArchiveInput): BuildArchiveResu
     !isPlainObject(parsedCounts) ||
     parsedCounts['drugRows'] !== drugEntries.length ||
     parsedCounts['metaRows'] !== metaEntries.length ||
+    parsedCounts['compoundRows'] !== compoundEntries.length ||
+    parsedCounts['observationRows'] !== observationEntries.length ||
+    parsedCounts['scenarioRows'] !== scenarioEntries.length ||
+    parsedCounts['experimentDatasetRows'] !== experimentDatasetEntries.length ||
     parsedCounts['readableAtExport'] !== readableAtExport ||
     parsedCounts['quarantinedAtExport'] !== quarantinedAtExport ||
     readableAtExport + quarantinedAtExport !== drugEntries.length
@@ -316,10 +367,22 @@ export function buildRecoveryArchive(input: BuildArchiveInput): BuildArchiveResu
   if (drugsFailure !== null) return verifyFailure(drugsFailure)
   const metaFailure = verifyEntries(parsedText['meta'], metaEntries, 'meta')
   if (metaFailure !== null) return verifyFailure(metaFailure)
-  if (scenarioEntries.length > 0) {
-    const scenarioFailure = verifyEntries(parsedText['scenarios'], scenarioEntries, 'scenarios')
-    if (scenarioFailure !== null) return verifyFailure(scenarioFailure)
-  }
+  const compoundFailure = verifyEntries(parsedText['compounds'], compoundEntries, 'compounds')
+  if (compoundFailure !== null) return verifyFailure(compoundFailure)
+  const observationFailure = verifyEntries(
+    parsedText['observations'],
+    observationEntries,
+    'observations',
+  )
+  if (observationFailure !== null) return verifyFailure(observationFailure)
+  const scenarioFailure = verifyEntries(parsedText['scenarios'], scenarioEntries, 'scenarios')
+  if (scenarioFailure !== null) return verifyFailure(scenarioFailure)
+  const experimentDatasetFailure = verifyEntries(
+    parsedText['experimentDatasets'],
+    experimentDatasetEntries,
+    'experimentDatasets',
+  )
+  if (experimentDatasetFailure !== null) return verifyFailure(experimentDatasetFailure)
 
   return { ok: true, text, counts }
 }
@@ -339,7 +402,36 @@ const ENVELOPE_KEYS = [
 ] as const
 
 /** Keys added after v1 that are allowed but optional (additive stores). */
-const OPTIONAL_ENVELOPE_KEYS = ['scenarios'] as const
+const OPTIONAL_ENVELOPE_KEYS = [
+  'compounds',
+  'observations',
+  'scenarios',
+  'experimentDatasets',
+] as const
+
+const COUNT_EXTENSION_KEYS = [
+  'compoundRows',
+  'observationRows',
+  'scenarioRows',
+  'experimentDatasetRows',
+] as const
+
+type AdditiveStoreName = (typeof OPTIONAL_ENVELOPE_KEYS)[number]
+
+const ADDITIVE_STORES: readonly {
+  readonly store: AdditiveStoreName
+  readonly countKey: (typeof COUNT_EXTENSION_KEYS)[number]
+  readonly limit: number
+}[] = [
+  { store: 'compounds', countKey: 'compoundRows', limit: MAX_COMPOUND_ROWS },
+  { store: 'observations', countKey: 'observationRows', limit: MAX_OBSERVATION_ROWS },
+  { store: 'scenarios', countKey: 'scenarioRows', limit: MAX_SCENARIO_ROWS },
+  {
+    store: 'experimentDatasets',
+    countKey: 'experimentDatasetRows',
+    limit: MAX_EXPERIMENT_DATASET_ROWS,
+  },
+]
 
 function fail(issues: readonly RecoveryIssue[]): ParseArchiveResult {
   return { ok: false, issues }
@@ -436,7 +528,7 @@ export function parseRecoveryArchive(text: string): ParseArchiveResult {
   if (unknownKeys.length > 0 || missingKeys.length > 0) {
     return oneIssue({
       code: 'ARCHIVE_ENVELOPE_SHAPE',
-      message: `the v1 envelope must have exactly the seven documented keys — missing: [${missingKeys.join(', ')}], unknown: [${unknownKeys.join(', ')}]`,
+      message: `the archive envelope is missing: [${missingKeys.join(', ')}], unknown: [${unknownKeys.join(', ')}]`,
     })
   }
   const exportedAt = root['exportedAt']
@@ -459,71 +551,112 @@ export function parseRecoveryArchive(text: string): ParseArchiveResult {
     })
   }
   const counts = root['counts']
-  const scenarioRowsCount = isPlainObject(counts) ? counts['scenarioRows'] : undefined
+  const coreCountKeys = ['drugRows', 'readableAtExport', 'quarantinedAtExport', 'metaRows'] as const
+  const countKeys = isPlainObject(counts) ? Object.keys(counts) : []
   if (
     !isPlainObject(counts) ||
-    Object.keys(counts).length !== (scenarioRowsCount === undefined ? 4 : 5) ||
-    !isNonNegativeSafeInteger(counts['drugRows']) ||
-    !isNonNegativeSafeInteger(counts['readableAtExport']) ||
-    !isNonNegativeSafeInteger(counts['quarantinedAtExport']) ||
-    !isNonNegativeSafeInteger(counts['metaRows']) ||
-    (scenarioRowsCount !== undefined && !isNonNegativeSafeInteger(scenarioRowsCount))
+    coreCountKeys.some((key) => !hasOwn(counts, key)) ||
+    countKeys.some(
+      (key) => !coreCountKeys.includes(key as (typeof coreCountKeys)[number]) && !COUNT_EXTENSION_KEYS.includes(key as (typeof COUNT_EXTENSION_KEYS)[number]),
+    )
   ) {
     return oneIssue({
       code: 'ARCHIVE_COUNT_MISMATCH',
       message:
-        'counts must be {drugRows, readableAtExport, quarantinedAtExport, metaRows} (optionally with scenarioRows) with non-negative integer fields',
+        'counts must contain {drugRows, readableAtExport, quarantinedAtExport, metaRows} plus only supported extension-store counts, with non-negative integer fields',
     })
   }
-  // 8. Arrays within limits.
+  for (const key of [...coreCountKeys, ...COUNT_EXTENSION_KEYS]) {
+    if (hasOwn(counts, key) && !isNonNegativeSafeInteger(counts[key])) {
+      return oneIssue({
+        code: 'ARCHIVE_COUNT_MISMATCH',
+        message: `counts.${key} must be a non-negative integer`,
+      })
+    }
+  }
+
+  // 8. Arrays within limits. Core stores are required. Additive stores are
+  // optional for pre-1.1 archives; each is paired with its counts field so an
+  // array and a count can never disagree or silently vanish.
   const drugsArray = root['drugs']
   const metaArray = root['meta']
-  // Phase 45: `scenarios` is optional; its absence means "no saved scenarios",
-  // which is exactly what pre-v5 archives contain.
-  const scenarioArray = root['scenarios'] === undefined ? [] : root['scenarios']
-  if (!Array.isArray(drugsArray) || !Array.isArray(metaArray) || !Array.isArray(scenarioArray)) {
+  if (!Array.isArray(drugsArray) || !Array.isArray(metaArray)) {
     return oneIssue({
       code: 'ARCHIVE_ENVELOPE_SHAPE',
-      message: 'drugs, meta and (optional) scenarios must be arrays of {key, value, specialNumbers?} entries',
+      message: 'drugs and meta are required arrays of {key, value, specialNumbers?} entries',
     })
   }
-  if (drugsArray.length > MAX_DRUG_ROWS || metaArray.length > MAX_META_ROWS || scenarioArray.length > MAX_SCENARIO_ROWS) {
+  if (drugsArray.length > MAX_DRUG_ROWS || metaArray.length > MAX_META_ROWS) {
     return oneIssue({
       code: 'ARCHIVE_LIMIT_EXCEEDED',
-      limit:
-        drugsArray.length > MAX_DRUG_ROWS
-          ? 'drug rows'
-          : metaArray.length > MAX_META_ROWS
-            ? 'meta rows'
-            : 'scenario rows',
-      message: `the archive declares ${drugsArray.length} drug rows, ${metaArray.length} meta rows and ${scenarioArray.length} scenario rows; limits are ${MAX_DRUG_ROWS}, ${MAX_META_ROWS} and ${MAX_SCENARIO_ROWS}`,
+      limit: drugsArray.length > MAX_DRUG_ROWS ? 'drug rows' : 'meta rows',
+      message: `the archive declares ${drugsArray.length} drug rows and ${metaArray.length} meta rows; limits are ${MAX_DRUG_ROWS} and ${MAX_META_ROWS}`,
     })
   }
+
+  const absentStores: RecoveryStoreName[] = []
+  const additiveArrays = new Map<AdditiveStoreName, readonly unknown[]>()
+  for (const spec of ADDITIVE_STORES) {
+    const array = root[spec.store]
+    const count = counts[spec.countKey]
+    if (array === undefined) {
+      absentStores.push(spec.store)
+      if (count !== undefined) {
+        return oneIssue({
+          code: 'ARCHIVE_COUNT_MISMATCH',
+          message: `counts.${spec.countKey} is present but the "${spec.store}" array is absent — the archive is ambiguous`,
+        })
+      }
+      additiveArrays.set(spec.store, [])
+      continue
+    }
+    if (!Array.isArray(array)) {
+      return oneIssue({
+        code: 'ARCHIVE_ENVELOPE_SHAPE',
+        message: `"${spec.store}" must be an array when present`,
+      })
+    }
+    if (count === undefined) {
+      return oneIssue({
+        code: 'ARCHIVE_COUNT_MISMATCH',
+        message: `the "${spec.store}" array is present but counts.${spec.countKey} is absent`,
+      })
+    }
+    if (count !== array.length) {
+      return oneIssue({
+        code: 'ARCHIVE_COUNT_MISMATCH',
+        message: `counts.${spec.countKey} declares ${count} rows, but the "${spec.store}" array holds ${array.length} entries`,
+      })
+    }
+    if (array.length > spec.limit) {
+      return oneIssue({
+        code: 'ARCHIVE_LIMIT_EXCEEDED',
+        limit: `${spec.store} rows`,
+        message: `the archive declares ${array.length} rows in "${spec.store}"; the limit is ${spec.limit}`,
+      })
+    }
+    additiveArrays.set(spec.store, array)
+  }
+
   // Counts invariants (§4.1) — structural assertions of THIS text.
   const archivedCounts: RecoveryCounts = {
-    drugRows: counts['drugRows'],
-    readableAtExport: counts['readableAtExport'],
-    quarantinedAtExport: counts['quarantinedAtExport'],
-    metaRows: counts['metaRows'],
-    // Carried through when the archive declares it (phase 45).
-    ...(scenarioRowsCount === undefined ? {} : { scenarioRows: scenarioRowsCount }),
+    drugRows: counts['drugRows'] as number,
+    readableAtExport: counts['readableAtExport'] as number,
+    quarantinedAtExport: counts['quarantinedAtExport'] as number,
+    metaRows: counts['metaRows'] as number,
+    ...(hasOwn(counts, 'compoundRows') ? { compoundRows: counts['compoundRows'] as number } : {}),
+    ...(hasOwn(counts, 'observationRows')
+      ? { observationRows: counts['observationRows'] as number }
+      : {}),
+    ...(hasOwn(counts, 'scenarioRows') ? { scenarioRows: counts['scenarioRows'] as number } : {}),
+    ...(hasOwn(counts, 'experimentDatasetRows')
+      ? { experimentDatasetRows: counts['experimentDatasetRows'] as number }
+      : {}),
   }
   if (archivedCounts.drugRows !== drugsArray.length || archivedCounts.metaRows !== metaArray.length) {
     return oneIssue({
       code: 'ARCHIVE_COUNT_MISMATCH',
       message: `counts declare ${archivedCounts.drugRows} drug rows and ${archivedCounts.metaRows} meta rows, but the arrays hold ${drugsArray.length} and ${metaArray.length} entries`,
-    })
-  }
-  // Saved scenarios: when counts carry scenarioRows it must match the array;
-  // an archive without both is a pre-phase-45 archive (no scenarios).
-  const declaredScenarioRows = archivedCounts.scenarioRows
-  if (
-    (declaredScenarioRows === undefined && scenarioArray.length > 0) ||
-    (declaredScenarioRows !== undefined && declaredScenarioRows !== scenarioArray.length)
-  ) {
-    return oneIssue({
-      code: 'ARCHIVE_COUNT_MISMATCH',
-      message: `counts declare ${String(declaredScenarioRows)} scenario rows, but the scenarios array holds ${scenarioArray.length} entries`,
     })
   }
   if (
@@ -535,6 +668,11 @@ export function parseRecoveryArchive(text: string): ParseArchiveResult {
       message: `readableAtExport (${archivedCounts.readableAtExport}) + quarantinedAtExport (${archivedCounts.quarantinedAtExport}) must equal drugRows (${archivedCounts.drugRows})`,
     })
   }
+
+  const compoundArray = additiveArrays.get('compounds') ?? []
+  const observationArray = additiveArrays.get('observations') ?? []
+  const scenarioArray = additiveArrays.get('scenarios') ?? []
+  const experimentDatasetArray = additiveArrays.get('experimentDatasets') ?? []
   // 9–10. Entries, keys and duplicates — per store.
   const issues: RecoveryIssue[] = []
   const collectEntries = (
@@ -617,14 +755,33 @@ export function parseRecoveryArchive(text: string): ParseArchiveResult {
   }
   const drugRows = collectEntries(drugsArray, 'drugs')
   const metaRows = collectEntries(metaArray, 'meta')
+  const compoundRows = collectEntries(compoundArray, 'compounds')
+  const observationRows = collectEntries(observationArray, 'observations')
   const scenarioRows = collectEntries(scenarioArray, 'scenarios')
-  if (drugRows === null || metaRows === null || scenarioRows === null) return fail(issues)
+  const experimentDatasetRows = collectEntries(experimentDatasetArray, 'experimentDatasets')
+  if (
+    drugRows === null ||
+    metaRows === null ||
+    compoundRows === null ||
+    observationRows === null ||
+    scenarioRows === null ||
+    experimentDatasetRows === null
+  ) {
+    return fail(issues)
+  }
 
   // 11. Sidecar cap, then per-entry materialization (shape, pointer
   // syntax, own-only resolution, duplicates, placeholders, unannotated
   // specials, depth — §6.3/§8.2/12).
   let annotationTotal = 0
-  for (const row of [...drugRows, ...metaRows, ...scenarioRows]) {
+  for (const row of [
+    ...drugRows,
+    ...metaRows,
+    ...compoundRows,
+    ...observationRows,
+    ...scenarioRows,
+    ...experimentDatasetRows,
+  ]) {
     if (Array.isArray(row.specialNumbers)) annotationTotal += row.specialNumbers.length
   }
   if (annotationTotal > MAX_SPECIAL_NUMBER_ANNOTATIONS) {
@@ -655,8 +812,14 @@ export function parseRecoveryArchive(text: string): ParseArchiveResult {
   }
   materializeStore(drugRows, 'drugs', drugs)
   materializeStore(metaRows, 'meta', meta)
+  const compounds: ValidatedRow[] = []
+  materializeStore(compoundRows, 'compounds', compounds)
+  const observations: ValidatedRow[] = []
+  materializeStore(observationRows, 'observations', observations)
   const scenarios: ValidatedRow[] = []
   materializeStore(scenarioRows, 'scenarios', scenarios)
+  const experimentDatasets: ValidatedRow[] = []
+  materializeStore(experimentDatasetRows, 'experimentDatasets', experimentDatasets)
   if (issues.length > 0) return fail(issues)
 
   return {
@@ -670,7 +833,11 @@ export function parseRecoveryArchive(text: string): ParseArchiveResult {
       exportedAt,
       drugs,
       meta,
+      compounds,
+      observations,
       scenarios,
+      experimentDatasets,
+      absentStores,
     },
   }
 }
@@ -721,6 +888,12 @@ export function buildRecoveryWarnings(
     warnings.push({
       code: 'ARCHIVE_META_UNREADABLE',
       message: `${unreadableMeta} of ${archive.meta.length} metadata row(s) do not validate under this build's metadata schema; they will still be restored exactly as stored.`,
+    })
+  }
+  for (const store of archive.absentStores) {
+    warnings.push({
+      code: 'ARCHIVE_STORE_ABSENT',
+      message: `the archive has no "${store}" store array (it was written before that store existed). Full replacement will leave the local "${store}" store empty; any current rows there are not preserved.`,
     })
   }
   if (archive.counts.drugRows === 0) {

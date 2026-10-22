@@ -12,7 +12,7 @@
  */
 
 export const BACKUP_FORMAT_ID = 'npsb'
-export const BACKUP_VERSION = '1.0.0'
+export const BACKUP_VERSION = '1.1.0'
 export const BACKUP_EXTENSION = '.npsb'
 export const BACKUP_MIME_TYPE = 'application/json;charset=utf-8'
 
@@ -21,16 +21,27 @@ export const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 export const MAX_DRUG_ROWS = 100_000
 export const MAX_META_ROWS = 1_000
 export const MAX_SCENARIO_ROWS = 10_000
+export const MAX_COMPOUND_ROWS = 100_000
+export const MAX_OBSERVATION_ROWS = 100_000
+export const MAX_EXPERIMENT_DATASET_ROWS = 10_000
 export const MAX_SPECIAL_NUMBER_ANNOTATIONS = 1_000_000
 export const MAX_DEPTH = 100
 
 /**
- * Stores an archive entry can belong to. `scenarios` (saved simulation
- * scenarios) is carried by the OPTIONAL `scenarios` envelope array, so
- * archives written before phase 45 — which have no such key — remain
- * restorable and are read as "no saved scenarios".
+ * Stores a full archive can carry. Every 1.1.0 archive emits all of them
+ * (empty arrays included) so completeness is explicit. `compounds`,
+ * `observations`, `scenarios` and `experimentDatasets` were added after 1.0.0;
+ * an archive without their arrays is still restorable, and their absence is
+ * reported as an explicit preview warning because full replacement empties
+ * those local stores.
  */
-export type RecoveryStoreName = 'drugs' | 'meta' | 'scenarios'
+export type RecoveryStoreName =
+  | 'drugs'
+  | 'meta'
+  | 'compounds'
+  | 'observations'
+  | 'scenarios'
+  | 'experimentDatasets'
 
 /** The four JSON-unrepresentable numeric shapes carried by the sidecar. */
 export type SpecialNumberKind = '-0' | 'NaN' | 'Infinity' | '-Infinity'
@@ -58,8 +69,11 @@ export interface RecoveryCounts {
   readonly readableAtExport: number
   readonly quarantinedAtExport: number
   readonly metaRows: number
-  /** Saved-scenario rows (phase 45). Absent in archives written before it. */
+  /** Rows in extension stores. Absent in archives written before each store. */
+  readonly compoundRows?: number
+  readonly observationRows?: number
   readonly scenarioRows?: number
+  readonly experimentDatasetRows?: number
 }
 
 /** Informational diagnostics recorded by the exporting build (§4.1). */
@@ -74,7 +88,7 @@ export interface RecoveryEntry {
   readonly specialNumbers?: readonly SpecialNumberAnnotation[]
 }
 
-/** The exact seven-key v1 envelope (§4.1). */
+/** The seven-key core envelope plus additive store arrays (v1.1.0). */
 export interface RecoveryArchive {
   readonly formatId: string
   readonly backupVersion: string
@@ -84,11 +98,14 @@ export interface RecoveryArchive {
   readonly drugs: readonly RecoveryEntry[]
   readonly meta: readonly RecoveryEntry[]
   /**
-   * Saved simulation scenarios (phase 45). OPTIONAL and additive: archives
-   * without the key restore with an empty scenario store, so the version
-   * space need not change for a purely additive store.
+   * Additive stores. v1.1.0 archives always emit these arrays (possibly
+   * empty); archives written by older builds may omit them. The parser treats
+   * an absent array as an empty store and warns before full replacement.
    */
+  readonly compounds?: readonly RecoveryEntry[]
+  readonly observations?: readonly RecoveryEntry[]
   readonly scenarios?: readonly RecoveryEntry[]
+  readonly experimentDatasets?: readonly RecoveryEntry[]
 }
 
 export type RecoveryErrorCode =
@@ -142,6 +159,7 @@ export type RecoveryWarningCode =
   | 'STORAGE_VERSION_DIFFERS'
   | 'ARCHIVE_META_UNREADABLE'
   | 'ARCHIVE_EMPTY'
+  | 'ARCHIVE_STORE_ABSENT'
 
 /** Non-blocking preview/restore warning (§8.3) — never gates a restore. */
 export interface RecoveryWarning {
