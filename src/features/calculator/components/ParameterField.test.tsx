@@ -39,7 +39,9 @@ describe('ParameterField', () => {
         error={undefined}
       />
     )
-    expect(screen.getByText('Kd')).toBeInTheDocument()
+    const field = screen.getByTestId('field-kd')
+    expect(field.querySelector('label')).toHaveTextContent('Kd')
+    expect(field.querySelector('label sub')).toHaveTextContent('d')
     expect(screen.getByText('Equilibrium dissociation constant')).toBeInTheDocument()
   })
 

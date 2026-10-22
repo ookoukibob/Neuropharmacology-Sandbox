@@ -126,6 +126,10 @@ describe('DrugDetailView — imported source data', () => {
 
     const properties = within(section).getByTestId('source-chemical-properties')
     expect(properties).toHaveTextContent('C12H14N2O')
+    const formula = within(section).getByTestId('source-field-Molecular formula')
+    expect(
+      [...formula.querySelectorAll('sub')].map((element) => element.textContent),
+    ).toEqual(['12', '14', '2'])
     expect(properties).toHaveTextContent('202.25 g/mol')
     expect(properties).toHaveTextContent('CCN(CC)C(=O)C1=CC=CC=C1NC1=CC=CC=C1')
 

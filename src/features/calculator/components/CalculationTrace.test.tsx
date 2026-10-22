@@ -50,18 +50,44 @@ describe('CalculationTrace', () => {
     expect(screen.getByText('Denominator')).toBeInTheDocument()
   })
 
-  it('renders expression', () => {
+  it('renders expressions with semantic subscripts', () => {
     render(<CalculationTrace trace={mockTrace} />)
 
-    expect(screen.getByText('Kd → nM')).toBeInTheDocument()
-    expect(screen.getByText('[D] + Kd')).toBeInTheDocument()
+    const conversion = screen.getByTestId('trace-expression-1')
+    expect(conversion).toHaveTextContent('Kd → nM')
+    expect(conversion.querySelector('sub')).toHaveTextContent('d')
+
+    const denominator = screen.getByTestId('trace-expression-2')
+    expect(denominator).toHaveTextContent('[D] + Kd')
+    expect(denominator.querySelector('sub')).toHaveTextContent('d')
+  })
+
+  it('keeps exponents distinct from subscripts in trace expressions', () => {
+    render(
+      <CalculationTrace
+        trace={[
+          {
+            index: 1,
+            label: 'Fractional response',
+            expression: 'f = [D]^n / (EC50^n + [D]^n)',
+            substituted: '10^1 / (10^1 + 10^1)',
+            result: { value: 0.5, unit: '1' },
+          },
+        ]}
+      />,
+    )
+
+    const expression = screen.getByTestId('trace-expression-1')
+    expect(expression).toHaveTextContent('f = [D]n / (EC50n + [D]n)')
+    expect(expression.querySelectorAll('sup')).toHaveLength(3)
+    expect(expression.querySelector('sub')).toHaveTextContent('50')
   })
 
   it('renders substituted values', () => {
     render(<CalculationTrace trace={mockTrace} />)
 
-    expect(screen.getByText('4.7 nM')).toBeInTheDocument()
-    expect(screen.getByText((content) => content.includes('12.4 nM') && content.includes('+ 4.7 nM'))).toBeInTheDocument()
+    expect(screen.getByTestId('trace-substituted-1')).toHaveTextContent('= 4.7 nM')
+    expect(screen.getByTestId('trace-substituted-2')).toHaveTextContent('= 12.4 nM + 4.7 nM')
   })
 
   it('renders result value with unit', () => {

@@ -247,6 +247,11 @@ describe('DataSourcesView — startup and search', () => {
     expect(screen.getByTestId('compound-results')).toHaveTextContent('Synthetic Fixture Compound')
     // Identity facts are shown, not invented.
     expect(screen.getByTestId('compound-results')).toHaveTextContent('C12H14N2O')
+    expect(
+      [...screen.getByTestId('compound-results').querySelectorAll('sub')].map(
+        (element) => element.textContent,
+      ),
+    ).toEqual(['12', '14', '2'])
     expect(screen.getByTestId('compound-results')).toHaveTextContent('SFC-1')
 
     // Nothing is written by searching or selecting.
@@ -265,6 +270,10 @@ describe('DataSourcesView — startup and search', () => {
     // The stored panel now lists it — from the real repository.
     const stored = await screen.findByTestId('stored-compounds')
     expect(within(stored).getByText('Synthetic Fixture Compound')).toBeTruthy()
+    const storedRow = within(stored).getByTestId('stored-compound-row')
+    expect(
+      [...storedRow.querySelectorAll('sub')].map((element) => element.textContent),
+    ).toEqual(['12', '14', '2'])
     const records = (await sourceDataRepository.listCompounds()).records
     expect(records.map((record) => record.id)).toEqual(['pubchem:90000001'])
     expect(records[0]?.provenance.url).toContain('pubchem.ncbi.nlm.nih.gov')

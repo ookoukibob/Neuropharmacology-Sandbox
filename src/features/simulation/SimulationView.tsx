@@ -15,6 +15,7 @@
  */
 import { AlertCircle, Info, Play, RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ScientificText } from '@/components/scientific/ScientificText'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -125,7 +126,9 @@ export function SimulationView({ scenarioRepository }: { readonly scenarioReposi
         <Info className="size-4" aria-hidden="true" />
         <AlertTitle>Synthetic example scenario — editable</AlertTitle>
         <AlertDescription>
-          <p>{SYNTHETIC_DISCLAIMER}</p>
+          <p>
+            <ScientificText value={SYNTHETIC_DISCLAIMER} />
+          </p>
           <p className="mt-1">
             Model output is mathematics on the parameters below; it is not a clinical prediction and
             never observed data.

@@ -422,7 +422,7 @@ export function occupancyChart(result: SimulationResult): SimulationChart | null
     traces: [
       {
         id: 'simulation.occupancy',
-        name: 'Occupancy Ce/(Ce + Kd)',
+        name: 'Occupancy (binding ratio)',
         x: series.map((point) => point.time),
         y: series.map((point) => point.occupancy),
         samples,

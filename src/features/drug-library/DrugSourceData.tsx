@@ -17,17 +17,33 @@
  * - **Honest empty states.** A compound with no stored measurements says
  *   so instead of showing an empty table.
  */
+import { ScientificText } from '@/components/scientific/ScientificText'
+import type { NotationMode } from '@/components/scientific/notation'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { DrugSourceRecord, ImportedObservation } from '../../domain/drug/source-data'
 
 /** A labelled value, or an explicit "not reported" marker. */
-function Field({ label, value }: { readonly label: string; readonly value: string | undefined }) {
+function Field({
+  label,
+  value,
+  notation,
+}: {
+  readonly label: string
+  readonly value: string | undefined
+  readonly notation?: NotationMode
+}) {
   return (
     <div className="grid gap-0.5">
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="break-words text-sm" data-testid={`source-field-${label}`}>
-        {value ?? <span className="text-muted-foreground">not reported</span>}
+        {value === undefined ? (
+          <span className="text-muted-foreground">not reported</span>
+        ) : notation === undefined ? (
+          value
+        ) : (
+          <ScientificText value={value} mode={notation} />
+        )}
       </dd>
     </div>
   )
@@ -146,7 +162,11 @@ function SourceRecordSection({ record }: { readonly record: DrugSourceRecord }) 
           Chemical properties
         </h4>
         <dl className="grid gap-2 sm:grid-cols-2" data-testid="source-chemical-properties">
-          <Field label="Molecular formula" value={identifiers.molecularFormula} />
+          <Field
+            label="Molecular formula"
+            value={identifiers.molecularFormula}
+            notation="chemical"
+          />
           <Field
             label="Molecular weight"
             value={

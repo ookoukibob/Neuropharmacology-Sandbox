@@ -4,6 +4,7 @@
  * values, and the result. No equations are recreated here; the engine
  * supplies the structured data.
  */
+import { ScientificText } from '@/components/scientific/ScientificText'
 import type { TraceStep } from '@/engine/types'
 
 function formatValue(value: TraceStep['result']): string {
@@ -32,9 +33,14 @@ export function CalculationTrace({ trace }: { trace: readonly TraceStep[] }) {
               </span>
               <span className="font-medium">{step.label}</span>
             </div>
-            <p className="mt-1 font-mono text-sm">{step.expression}</p>
-            <p className="mt-1 text-sm text-muted-foreground font-mono">
-              = {step.substituted}
+            <p className="mt-1 font-mono text-sm" data-testid={`trace-expression-${step.index}`}>
+              <ScientificText value={step.expression} />
+            </p>
+            <p
+              className="mt-1 text-sm text-muted-foreground font-mono"
+              data-testid={`trace-substituted-${step.index}`}
+            >
+              = <ScientificText value={step.substituted} />
             </p>
             <p className="mt-1 text-sm">
               →{' '}

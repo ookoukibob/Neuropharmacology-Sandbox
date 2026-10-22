@@ -17,6 +17,7 @@
  *   can never describe data fetched under another filter.
  */
 import { useEffect, useMemo, useState } from 'react'
+import { ScientificText } from '@/components/scientific/ScientificText'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -306,54 +307,61 @@ function SearchResultsCard() {
 
         {search.status === 'results' && search.compounds.length > 0 && (
           <ul className="space-y-2" data-testid="compound-results">
-            {search.compounds.map((compound) => (
-              <li
-                key={compound.id}
-                className="flex items-start gap-3 rounded-md border p-3 text-sm"
-                data-testid="compound-result"
-              >
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  aria-label={`Select compound ${compound.name ?? compound.sourceId}`}
-                  data-testid={`compound-select-${compound.id}`}
-                  checked={state.selectedCompoundIds.includes(compound.id)}
-                  onChange={() => toggleCompound(compound.id)}
-                />
-                <div className="min-w-0 flex-1 space-y-1">
-                  <p className="font-medium">
-                    {compound.name ?? compound.sourceId}
-                    <span className="ml-2 font-normal text-muted-foreground">
-                      {compound.source} record {compound.sourceId}
-                    </span>
-                  </p>
-                  <p className="break-words text-xs text-muted-foreground">
-                    {[
-                      compound.identifiers.molecularFormula !== undefined
-                        ? `formula ${compound.identifiers.molecularFormula}`
-                        : null,
-                      compound.identifiers.molecularWeight !== undefined
-                        ? `MW ${compound.identifiers.molecularWeight} g/mol`
-                        : null,
-                      compound.identifiers.casNumber !== undefined
-                        ? `CAS ${compound.identifiers.casNumber}`
-                        : null,
-                      compound.identifiers.inchiKey !== undefined
-                        ? `InChIKey ${compound.identifiers.inchiKey}`
-                        : null,
-                    ]
-                      .filter((part): part is string => part !== null)
-                      .join(' · ')}
-                  </p>
-                  {compound.synonyms.length > 0 && (
-                    <p className="break-words text-xs text-muted-foreground">
-                      Synonyms: {compound.synonyms.slice(0, 4).join(', ')}
-                      {compound.synonyms.length > 4 ? ` (+${compound.synonyms.length - 4} more)` : ''}
+            {search.compounds.map((compound) => {
+              const formula = compound.identifiers.molecularFormula
+              const otherIdentifiers = [
+                compound.identifiers.molecularWeight !== undefined
+                  ? `MW ${compound.identifiers.molecularWeight} g/mol`
+                  : null,
+                compound.identifiers.casNumber !== undefined
+                  ? `CAS ${compound.identifiers.casNumber}`
+                  : null,
+                compound.identifiers.inchiKey !== undefined
+                  ? `InChIKey ${compound.identifiers.inchiKey}`
+                  : null,
+              ].filter((part): part is string => part !== null)
+              return (
+                <li
+                  key={compound.id}
+                  className="flex items-start gap-3 rounded-md border p-3 text-sm"
+                  data-testid="compound-result"
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    aria-label={`Select compound ${compound.name ?? compound.sourceId}`}
+                    data-testid={`compound-select-${compound.id}`}
+                    checked={state.selectedCompoundIds.includes(compound.id)}
+                    onChange={() => toggleCompound(compound.id)}
+                  />
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="font-medium">
+                      {compound.name ?? compound.sourceId}
+                      <span className="ml-2 font-normal text-muted-foreground">
+                        {compound.source} record {compound.sourceId}
+                      </span>
                     </p>
-                  )}
-                </div>
-              </li>
-            ))}
+                    <p className="break-words text-xs text-muted-foreground">
+                      {formula === undefined ? null : (
+                        <>
+                          formula <ScientificText value={formula} mode="chemical" />
+                          {otherIdentifiers.length > 0 ? ' · ' : null}
+                        </>
+                      )}
+                      {otherIdentifiers.join(' · ')}
+                    </p>
+                    {compound.synonyms.length > 0 && (
+                      <p className="break-words text-xs text-muted-foreground">
+                        Synonyms: {compound.synonyms.slice(0, 4).join(', ')}
+                        {compound.synonyms.length > 4
+                          ? ` (+${compound.synonyms.length - 4} more)`
+                          : ''}
+                      </p>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         )}
 
