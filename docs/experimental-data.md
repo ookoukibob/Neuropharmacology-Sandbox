@@ -1,9 +1,10 @@
 # Experimental concentration–time datasets
 
-**Status: Phase 47A — implemented.** This document is the contract for
-measured-dataset import, validation, local storage, inspection and
-`.npex` interchange. Phase 47B/47C fitting, parameter estimation and
-diagnostics are **not implemented** and are out of scope here.
+**Status: Phase 47A and Phase 47B — implemented.** This document is the
+contract for measured-dataset import, validation, local storage, inspection and
+`.npex` interchange, plus the optional one-compartment mono-exponential decay
+fit (§10). Phase 47C residual diagnostics, parameter uncertainty and model
+comparison are **not implemented** and are out of scope here.
 
 All examples below are synthetic test data, not pharmacological information.
 
@@ -25,7 +26,7 @@ Phase 47A adds a first-class record for **measured concentration–time data**:
 
 **Non-goals.**
 
-- No curve fitting, regression, parameter estimation, half-life estimation,
+- Beyond the Phase 47B mono-exponential fit (§10): no further regression,
   AUC/Cmax derivation, interpolation, smoothing or diagnostics.
 - No automatic conversion between time or concentration units.
 - No merging of this store into the drug library, NPSL documents or the
@@ -423,9 +424,12 @@ stored row, including duplicate times and exact replicates, in array order.
 The chart is presentation-only:
 
 - one marker trace, one marker per stored measurement, in source order;
-- no line, fitted curve, interpolation, smoothing or derived value;
 - axis titles use the declared time and concentration units;
-- no scientific calculation occurs in React or in the Plotly adapter.
+- no scientific calculation occurs in React or in the Plotly adapter;
+- a fitted curve (§10) is drawn only after the user runs the fit, and only as a
+  **separate line trace** beside the markers — it is never merged into the
+  observed trace, and the measurement table remains the authority for measured
+  values. The curve is a model visualization, not measured data.
 
 The chart is lazy-loaded. UI tests stub it; the E2E suite exercises the real
 Plotly rendering in Chromium. Both the measurement table and the controls are
@@ -489,7 +493,9 @@ browser-local state, use `.npsb`.
   re-import does not invent a new scientific source.
 - **No hidden write.** Import previews are read-only; writes occur only after
   explicit confirmation, through the repository, in validated transactions.
-- **No fitting yet.** Phase 47B/47C are deliberately absent; adding them will
+- **Phase 47B fitting is available; 47C is not.** A one-compartment
+  mono-exponential decay fit exists (§10). Residual diagnostics, uncertainty
+  estimates and model comparison are deliberately absent; adding them will
   require their own contracts and must not change the stored observations or
   the `.npex` fidelity rules retroactively.
 
@@ -510,3 +516,70 @@ browser-local state, use `.npsb`.
 
 The full matrix and gate commands are maintained in
 [`docs/testing.md`](testing.md).
+
+## 10. One-compartment mono-exponential fit (phase 47B)
+
+The datasets page can fit a constrained decay model to the **selected**
+dataset:
+
+    C(t) = C_ref · exp(−k · (t − t_ref)),   t_ref = min(t_i),  k ≥ 0
+
+- **Reference time.** `t_ref` is the earliest observed time, so a dataset need
+  not contain a measurement at zero. `C_ref` is the fitted concentration *at*
+  `t_ref`, in the dataset's declared concentration unit — never an observed
+  value and never a claimed initial concentration unless `t_ref = 0`.
+- **Rate and half-life.** `k` is in the reciprocal of the dataset's declared
+  time unit; the half-life is `ln(2)/k` when `k > 0`, and is reported as absent
+  at the zero-rate boundary.
+- **Objective.** Unweighted least squares on the ORIGINAL concentration scale.
+  There is no log transform, so zero concentrations are valid observations.
+  Every row contributes independently: repeated timestamps and exact
+  replicates are never averaged, deduplicated, sorted or dropped.
+- **Optimizer.** Variable projection over normalized time
+  `u = (t − t_ref)/T` with `T = max(t) − min(t)`, optimising the
+  dimensionless rate `q = k·T`. For each trial `q` the amplitude has the closed
+  form `C_ref(q) = max(0, ΣC_i g_i / Σg_i²)` with `g_i = exp(−q·u_i)`; the
+  search is a deterministic coarse scan over `q ∈ [0, 50]` followed by
+  golden-section refinement, with both endpoints checked explicitly.
+  Concentrations are scaled by their maximum before the normal equations and
+  rescaled afterwards, so extreme magnitudes cannot overflow.
+- **Algorithm constant.** `q = 50` is a named numerical bound, not a
+  scientific assumption. An optimum at that bound is reported with an explicit
+  warning that the rate is unresolved beyond it.
+
+### Eligibility and boundary behaviour
+
+| Case | Outcome |
+| --- | --- |
+| Empty input, non-finite or negative values | structured failure |
+| One distinct time value | failure: the rate is not identifiable |
+| All concentrations zero | failure: the rate is not identifiable |
+| Optimum at `k = 0` (constant or increasing data) | success with a
+  zero-rate-boundary warning and no finite half-life |
+| Optimum at the upper numerical bound | success with an unresolved-rate
+  warning |
+
+Failures carry a typed code and an explanatory message, never a placeholder
+rate or half-life. No `Infinity` or `NaN` is ever rendered as a fitted value.
+
+### What the chart shows
+
+The fitted curve is drawn as a **separate line trace** beside the observed
+markers, sampled only inside the observed time range — there is no
+extrapolation. It is a visualization of the fitted equation, not additional
+measurements and not an interpolation of the stored rows. The measurement
+table remains the accessible source of the observed values.
+
+### Boundaries
+
+A fit is a **derived, ephemeral result**: it is never written to the dataset,
+its measurements, IndexedDB, `.npex` or `.npsb`, and running a fit performs no
+repository write. Switching datasets (or any change to the dataset's
+`updatedAt`) discards the previous fit so a stale result cannot be read against
+different data. Re-fitting an unchanged dataset is deterministic.
+
+A converged optimization is a numerical result, not evidence that a
+mono-exponential decay describes the data. The model cannot represent a rising
+curve, an absorption phase, a baseline offset or multiple kinetic phases.
+Residual diagnostics, parameter uncertainty, confidence intervals, R² and
+model comparison remain Phase 47C scope and are deliberately absent.

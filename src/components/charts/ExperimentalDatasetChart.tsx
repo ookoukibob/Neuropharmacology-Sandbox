@@ -8,7 +8,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import Plot from 'react-plotly.js'
 import type { ExperimentalDataset } from '@/domain/experiments/experimental-dataset'
-import { buildExperimentalDatasetChart } from './experimentalDatasetAdapter'
+import {
+  buildExperimentalDatasetChart,
+  type ExperimentalDatasetFitOverlay,
+} from './experimentalDatasetAdapter'
 
 export const DATASET_CHART_HEIGHT_PX = 320
 export const DATASET_CHART_COMPACT_HEIGHT_PX = 260
@@ -17,6 +20,8 @@ const DATASET_CHART_COMPACT_WIDTH_PX = 640
 interface ExperimentalDatasetChartProps {
   readonly dataset: ExperimentalDataset
   readonly graphId: string
+  /** Optional fitted curve to draw as a separate line trace (phase 47B). */
+  readonly fitOverlay?: ExperimentalDatasetFitOverlay
 }
 
 interface Size {
@@ -24,10 +29,17 @@ interface Size {
   readonly height: number
 }
 
-export function ExperimentalDatasetChart({ dataset, graphId }: ExperimentalDatasetChartProps) {
+export function ExperimentalDatasetChart({
+  dataset,
+  graphId,
+  fitOverlay,
+}: ExperimentalDatasetChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState<Size | null>(null)
-  const chart = useMemo(() => buildExperimentalDatasetChart(dataset), [dataset])
+  const chart = useMemo(
+    () => buildExperimentalDatasetChart(dataset, fitOverlay),
+    [dataset, fitOverlay],
+  )
 
   const measure = useCallback(() => {
     const element = containerRef.current

@@ -30,7 +30,16 @@ function escapeHover(value: string): string {
  * Observed points only — exactly one marker per stored measurement, in source
  * order. Duplicate timestamps remain duplicate points.
  */
-export function buildExperimentalDatasetChart(dataset: ExperimentalDataset): ExperimentalDatasetChart {
+/** A fitted model curve to overlay, already computed by the fit module. */
+export interface ExperimentalDatasetFitOverlay {
+  readonly points: readonly { readonly time: number; readonly concentration: number }[]
+  readonly label: string
+}
+
+export function buildExperimentalDatasetChart(
+  dataset: ExperimentalDataset,
+  fitOverlay?: ExperimentalDatasetFitOverlay,
+): ExperimentalDatasetChart {
   const x = dataset.measurements.map((measurement) => measurement.time)
   const y = dataset.measurements.map((measurement) => measurement.concentration)
   const customdata = dataset.measurements.map((measurement) => {
@@ -46,6 +55,22 @@ export function buildExperimentalDatasetChart(dataset: ExperimentalDataset): Exp
   const timeUnit = escapeHover(dataset.timeUnit)
   const concentrationUnit = escapeHover(dataset.concentrationUnit)
 
+  // The fitted curve is a SEPARATE line trace drawn after the observed markers:
+  // it visualizes the fitted equation and never replaces or interpolates the
+  // measured rows. Absent when no fit was requested or the fit failed.
+  const fitTrace =
+    fitOverlay === undefined || fitOverlay.points.length === 0
+      ? null
+      : {
+          type: 'scatter',
+          mode: 'lines',
+          name: fitOverlay.label,
+          x: fitOverlay.points.map((point) => point.time),
+          y: fitOverlay.points.map((point) => point.concentration),
+          line: { width: 2, dash: 'solid' },
+          hovertemplate: `Fitted curve — time: %{x} ${timeUnit}<br>Concentration: %{y} ${concentrationUnit}<extra></extra>`,
+        }
+
   return {
     traces: [
       {
@@ -59,6 +84,7 @@ export function buildExperimentalDatasetChart(dataset: ExperimentalDataset): Exp
         hovertemplate:
           `Time: %{x} ${timeUnit}<br>Concentration: %{y} ${concentrationUnit}<br>%{customdata}<extra></extra>`,
       },
+      ...(fitTrace === null ? [] : [fitTrace]),
     ],
     layout: {
       xaxis: {
@@ -72,9 +98,14 @@ export function buildExperimentalDatasetChart(dataset: ExperimentalDataset): Exp
         zeroline: false,
       },
       margin: { l: 64, r: 16, t: 16, b: 52 },
-      showlegend: false,
+      // A legend is needed only when the fitted curve is present, so the two
+      // series stay distinguishable.
+      showlegend: fitTrace !== null,
       hovermode: 'closest',
     },
-    ariaLabel: `Observed concentration–time measurements from ${dataset.name}: ${dataset.measurements.length} points. Time in ${dataset.timeUnit}, concentration in ${dataset.concentrationUnit}. No fitted curve or interpolation is shown; the measurement table contains the same values.`,
+    ariaLabel:
+      fitTrace === null
+        ? `Observed concentration–time measurements from ${dataset.name}: ${dataset.measurements.length} points. Time in ${dataset.timeUnit}, concentration in ${dataset.concentrationUnit}. No fitted curve or interpolation is shown; the measurement table contains the same values.`
+        : `Observed concentration–time measurements from ${dataset.name}: ${dataset.measurements.length} points, plus the fitted mono-exponential curve. Time in ${dataset.timeUnit}, concentration in ${dataset.concentrationUnit}. The curve is a model visualization, not additional measurements; the measurement table contains the observed values.`,
   }
 }

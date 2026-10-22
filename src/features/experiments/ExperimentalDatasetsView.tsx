@@ -1,5 +1,5 @@
 /**
- * Experimental datasets page (phase 47A).
+ * Experimental datasets page (phases 47A and 47B).
  *
  * Owns layout and user intent only: the repository-backed hook performs every
  * read/write, CSV/`.npex` import cards produce validated previews, and this
@@ -7,7 +7,13 @@
  * presentation-only; the ordered measurement table is the accessible source
  * of every stored value.
  */
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  fitCurvePoints,
+  fitMonoExponentialDecay,
+  type MonoExponentialFitResult,
+} from '@/domain/experiments/mono-exponential-fit'
+import { formatNumber } from '@/engine/numeric/decimal'
 import {
   AlertTriangle,
   Database,
@@ -15,6 +21,7 @@ import {
   Pencil,
   RefreshCw,
   Trash2,
+  TrendingDown,
   X,
 } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -65,13 +72,15 @@ export function ExperimentalDatasetsView({ repository }: ExperimentalDatasetsVie
         <div className="flex flex-wrap items-center gap-3">
           <Database aria-hidden="true" className="size-6 text-muted-foreground" />
           <h1 className="text-2xl font-semibold">Experimental Datasets</h1>
-          <Badge variant="secondary">Phase 47A · measured data only</Badge>
+          <Badge variant="secondary">Phase 47A–47B · measured data + optional decay fit</Badge>
         </div>
         <p className="max-w-4xl text-sm text-muted-foreground">
           Import, validate, store and export measured concentration–time datasets. Values are kept in
           source order exactly as measured — duplicates and replicates are never averaged,
-          deduplicated or interpolated. No fitting, parameter estimation or diagnostics are
-          performed on this page.
+          deduplicated or interpolated. A one-compartment mono-exponential decay fit can be run on
+          the selected dataset; the fit is a temporary derived result that never modifies or saves
+          the measurements. Phase 47C residual diagnostics, uncertainty estimates and model
+          comparison are not available.
         </p>
       </header>
 
@@ -227,6 +236,22 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
   const [deleting, setDeleting] = useState(false)
   const [acknowledged, setAcknowledged] = useState(false)
   const [exportStatus, setExportStatus] = useState<string | null>(null)
+  // A fit is DERIVED and ephemeral: never persisted, and cleared whenever the
+  // selected dataset or its updatedAt changes so a stale result can never be
+  // shown against different data.
+  // A fit is stored TOGETHER with the dataset version it was computed from, so
+  // staleness is derived during render: if the dataset (or its updatedAt)
+  // changes, the stored fit simply no longer matches and is not shown. This
+  // avoids resetting state from an effect.
+  const fitKey = `${dataset.id}:${dataset.updatedAt}`
+  const [storedFit, setStoredFit] = useState<{
+    readonly key: string
+    readonly result: MonoExponentialFitResult
+  } | null>(null)
+  const fit = storedFit !== null && storedFit.key === fitKey ? storedFit.result : null
+  const runFit = (): void => {
+    setStoredFit({ key: fitKey, result: fitMonoExponentialDecay(dataset.measurements) })
+  }
   const [exportError, setExportError] = useState<string | null>(null)
   const deleteTriggerRef = useRef<HTMLButtonElement>(null)
   const cancelDeleteRef = useRef<HTMLButtonElement>(null)
@@ -274,6 +299,21 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
       setExportError(`The .npex file could not be generated: ${messageOf(error)}`)
     }
   }
+
+  const minTime = dataset.measurements.reduce(
+    (min, measurement) => (measurement.time < min ? measurement.time : min),
+    Number.POSITIVE_INFINITY,
+  )
+  const maxTime = dataset.measurements.reduce(
+    (max, measurement) => (measurement.time > max ? measurement.time : max),
+    Number.NEGATIVE_INFINITY,
+  )
+  const fitOverlay = useMemo(() => {
+    if (fit === null || !fit.ok) return undefined
+    const points = fitCurvePoints(fit, minTime, maxTime)
+    if (points.length === 0) return undefined
+    return { points, label: 'Fitted mono-exponential curve' }
+  }, [fit, minTime, maxTime])
 
   return (
     <div className="space-y-4">
@@ -469,11 +509,81 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
         <CardHeader>
           <CardTitle headingLevel={3}>Observed measurements</CardTitle>
           <p className="text-xs text-muted-foreground">
-            Markers only. No fitted curve, interpolation, averaging or unit conversion is shown.
-            The table below is the accessible source of the same values.
+            Measured observations are drawn as markers; no interpolation, averaging or unit
+            conversion is applied. A mono-exponential fit, when you run one, appears as a separate
+            model curve and never replaces the measured points. The table below remains the
+            accessible source of the measured values.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
+          <section aria-labelledby="fit-heading" className="space-y-3" data-testid="fit-section">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h3 id="fit-heading" className="text-sm font-medium">
+                  One-compartment mono-exponential decay fit
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  C(t) = C_ref · exp(−k · (t − t_ref)), fitted by unweighted least squares on the
+                  original concentration scale. This is a derived result — it is not saved and does
+                  not change the measurements.
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={runFit}
+                disabled={busy}
+                data-testid="dataset-fit"
+              >
+                <TrendingDown aria-hidden="true" /> Fit mono-exponential decay
+              </Button>
+            </div>
+
+            {fit === null ? null : fit.ok ? (
+              <div className="rounded-md border p-3 text-sm" data-testid="fit-results">
+                <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1">
+                  <dt className="text-muted-foreground">Reference time t_ref</dt>
+                  <dd className="font-mono text-xs" data-testid="fit-tref">
+                    {formatNumber(fit.tRef)} {dataset.timeUnit}
+                  </dd>
+                  <dt className="text-muted-foreground">C_ref at t_ref</dt>
+                  <dd className="font-mono text-xs" data-testid="fit-cref">
+                    {formatNumber(fit.cRef)} {dataset.concentrationUnit}
+                  </dd>
+                  <dt className="text-muted-foreground">Decay rate k</dt>
+                  <dd className="font-mono text-xs" data-testid="fit-k">
+                    {formatNumber(fit.k)} {dataset.timeUnit}⁻¹
+                  </dd>
+                  <dt className="text-muted-foreground">Half-life t½ = ln(2)/k</dt>
+                  <dd className="font-mono text-xs" data-testid="fit-half-life">
+                    {fit.halfLife === undefined
+                      ? `no finite half-life (k = 0)`
+                      : `${formatNumber(fit.halfLife)} ${dataset.timeUnit}`}
+                  </dd>
+                  <dt className="text-muted-foreground">Observations used</dt>
+                  <dd className="font-mono text-xs">{fit.measurementCount}</dd>
+                </dl>
+                {fit.warnings.length === 0 ? null : (
+                  <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-600" role="status" data-testid="fit-warnings">
+                    {fit.warnings.map((warning) => (
+                      <li key={warning.code}>{warning.message}</li>
+                    ))}
+                  </ul>
+                )}
+                <p className="mt-2 text-xs text-muted-foreground">
+                  A converged fit is a numerical result, not evidence that this decay model suits
+                  the data. Residual diagnostics, parameter uncertainty and model comparison are not
+                  part of this phase.
+                </p>
+              </div>
+            ) : (
+              <p role="alert" className="text-sm text-destructive" data-testid="fit-error">
+                {fit.message}
+              </p>
+            )}
+          </section>
+
           <figure className="min-w-0">
             <Suspense
               fallback={
@@ -482,12 +592,18 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
                 </p>
               }
             >
-              <ExperimentalDatasetChart dataset={dataset} graphId={`experimental-dataset-${dataset.id}`} />
+              <ExperimentalDatasetChart
+                dataset={dataset}
+                graphId={`experimental-dataset-${dataset.id}`}
+                {...(fitOverlay === undefined ? {} : { fitOverlay })}
+              />
             </Suspense>
             <figcaption className="mt-2 text-xs text-muted-foreground">
-              Observed points only. Time axis in {dataset.timeUnit}; concentration axis in{' '}
-              {dataset.concentrationUnit}. Hover shows the source row, sample id and note when
-              present.
+              {fitOverlay === undefined
+                ? 'Observed measurements (markers). Run the fit above to overlay the fitted model curve as a separate line.'
+                : 'Observed points (markers) with the fitted mono-exponential curve (line). The curve is a model visualization, not additional measurements.'}{' '}
+              Time axis in {dataset.timeUnit}; concentration axis in {dataset.concentrationUnit}.
+              Hover shows the source row, sample id and note when present.
             </figcaption>
           </figure>
 
