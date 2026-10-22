@@ -1,7 +1,7 @@
 /**
  * Single versioned IndexedDB module (ADR-14).
  *
- * One Dexie database, three declared schema versions — there is exactly one
+ * One Dexie database, six declared schema versions — there is exactly one
  * place that knows the storage schema:
  *
  * - v1 (initial): `drugs` keyed by `id`, `meta` keyed by `id`.
@@ -20,13 +20,18 @@
  *   bookkeeping field is touched, and opening an existing database never
  *   fetches anything — these tables are only written by an explicit,
  *   confirmed import.
- * - v4 (current): adds the `revisions` table (phase 20, audit GAP-4) —
+ * - v4: adds the `revisions` table (phase 20, audit GAP-4) —
  *   one monotonic per-record revision number per drug id, the optimistic
  *   concurrency token compared *inside* the same read-write transaction
  *   as the record write (ADR-21). Purely additive like v3: drug rows are
  *   untouched and the revision deliberately lives OUTSIDE the record, so
  *   every row-level contract (byte-identical restore, unknown-field
  *   preservation, `.npsb` archives, NPSL interchange) is unaffected.
+ * - v5: adds the `scenarios` table (phase 45), no upgrade hook — an
+ *   existing database opens with an empty scenarios store.
+ * - v6 (current): adds the `experimentDatasets` table (phase 47A), no
+ *   upgrade hook. Purely additive; `.npsb` backup version 1.1.0 snapshots it
+ *   while older archives restore it empty with an explicit preview warning.
  *
  * React, the engine and domain modules never import this file; only the
  * repository implementations do.
@@ -35,6 +40,7 @@ import Dexie, { type EntityTable } from 'dexie'
 import type { LibraryMetadata } from '../../domain/library/library'
 import type { Compound } from '../../domain/sources/compound'
 import type { SavedScenario } from '../../domain/simulation/saved-scenario'
+import type { ExperimentalDataset } from '../../domain/experiments/experimental-dataset'
 import type { ExperimentalObservation } from '../../domain/sources/observation'
 import { PERSISTENCE_VERSION, type DrugRecord, type DrugRevision } from '../mappers/records'
 
@@ -61,6 +67,11 @@ export class SandboxDatabase extends Dexie {
    * optional array so pre-v5 archives stay restorable.
    */
   scenarios!: EntityTable<SavedScenario, 'id'>
+  /**
+   * Experimental concentration–time datasets (phase 47A), keyed by a generated
+   * local id. Distinct from the source-data `observations` table.
+   */
+  experimentDatasets!: EntityTable<ExperimentalDataset, 'id'>
 
   constructor(name: string = DATABASE_NAME) {
     super(name)
@@ -130,6 +141,18 @@ export class SandboxDatabase extends Dexie {
       observations: 'id, compoundId',
       revisions: 'id',
       scenarios: 'id, updatedAt',
+    })
+
+    // Additive v6 (phase 47A): experimental concentration–time datasets, no
+    // upgrade hook. Existing stores and rows are untouched.
+    this.version(6).stores({
+      drugs: 'id, origin, updatedAt',
+      meta: 'id',
+      compounds: 'id',
+      observations: 'id, compoundId',
+      revisions: 'id',
+      scenarios: 'id, updatedAt',
+      experimentDatasets: 'id, updatedAt',
     })
   }
 }

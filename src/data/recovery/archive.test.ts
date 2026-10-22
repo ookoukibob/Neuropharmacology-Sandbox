@@ -95,28 +95,39 @@ describe('buildRecoveryArchive (export)', () => {
       ],
     })
     if (!result.ok) throw new Error('unreachable')
-    // Phase 45: an input without scenarios archives the exact pre-phase-45
-    // counts — neither the `scenarios` array nor `scenarioRows` is invented,
-    // so an unchanged library still produces the v1 seven-key envelope.
+    // Version 1.1.0 emits every supported store and count, even when empty:
+    // completeness is explicit rather than implied by an omitted key.
     expect(result.counts).toEqual({
       drugRows: 2,
       readableAtExport: 1,
       quarantinedAtExport: 1,
       metaRows: 1,
+      compoundRows: 0,
+      observationRows: 0,
+      scenarioRows: 0,
+      experimentDatasetRows: 0,
     })
 
     const doc = JSON.parse(result.text) as Record<string, unknown>
     expect(Object.keys(doc).sort()).toEqual([
       'backupVersion',
+      'compounds',
       'counts',
       'drugs',
+      'experimentDatasets',
       'exportedAt',
       'formatId',
       'meta',
+      'observations',
+      'scenarios',
       'storage',
     ])
     expect(doc['formatId']).toBe('npsb')
-    expect(doc['backupVersion']).toBe('1.0.0')
+    expect(doc['backupVersion']).toBe('1.1.0')
+    expect(doc['compounds']).toEqual([])
+    expect(doc['observations']).toEqual([])
+    expect(doc['scenarios']).toEqual([])
+    expect(doc['experimentDatasets']).toEqual([])
     expect(doc['exportedAt']).toBe(EXPORTED_AT)
     expect(doc['storage']).toEqual(STORAGE)
     expect(doc['counts']).toEqual(result.counts)
@@ -151,6 +162,48 @@ describe('buildRecoveryArchive (export)', () => {
     expect(Number.isNaN(restored?.['nan'] as number)).toBe(true)
     expect(Object.is(restored?.['negZero'], -0)).toBe(true)
     expect(restored?.['posInf']).toBe(Infinity)
+  })
+
+  it('carries every additive scientific store verbatim with paired counts', () => {
+    const rows = {
+      compounds: [{ key: 'compound-1', value: { id: 'compound-1', name: 'Synthetic compound' } }],
+      observations: [
+        { key: 'observation-1', value: { id: 'observation-1', compoundId: 'compound-1' } },
+      ],
+      scenarios: [{ key: 'scenario-1', value: { id: 'scenario-1', name: 'Synthetic scenario' } }],
+      experimentDatasets: [
+        {
+          key: 'dataset-1',
+          value: {
+            id: 'dataset-1',
+            name: 'Synthetic measured dataset',
+            timeUnit: 'h',
+            concentrationUnit: 'mg/L',
+            measurements: [],
+            provenance: { source: 'csv', importedAt: EXPORTED_AT },
+            createdAt: EXPORTED_AT,
+            updatedAt: EXPORTED_AT,
+          },
+        },
+      ],
+    }
+    const result = buildOk(rows)
+    expect(result.counts).toMatchObject({
+      compoundRows: 1,
+      observationRows: 1,
+      scenarioRows: 1,
+      experimentDatasetRows: 1,
+    })
+    const doc = JSON.parse(result.text) as Record<string, unknown>
+    expect(doc['compounds']).toEqual(rows.compounds)
+    expect(doc['observations']).toEqual(rows.observations)
+    expect(doc['scenarios']).toEqual(rows.scenarios)
+    expect(doc['experimentDatasets']).toEqual(rows.experimentDatasets)
+
+    const parsed = parseRecoveryArchive(result.text)
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.issues))
+    expect(parsed.archive.absentStores).toEqual([])
+    expect(parsed.archive.experimentDatasets[0]?.value['name']).toBe('Synthetic measured dataset')
   })
 
   it('fails the whole export with diagnostics for any unsupported value', () => {
@@ -278,6 +331,62 @@ describe('parseRecoveryArchive (restore validation battery)', () => {
     expect(parsed.archive.counts).toEqual(result.counts)
   })
 
+  it('accepts a current 1.1.0 archive with every additive store explicit, including empty ones', () => {
+    const result = buildOk({
+      compounds: [],
+      observations: [],
+      scenarios: [],
+      experimentDatasets: [],
+    })
+    if (!result.ok) throw new Error('unreachable')
+    const doc = JSON.parse(result.text) as Record<string, unknown>
+    expect(doc['backupVersion']).toBe('1.1.0')
+    expect(doc['compounds']).toEqual([])
+    expect(doc['observations']).toEqual([])
+    expect(doc['scenarios']).toEqual([])
+    expect(doc['experimentDatasets']).toEqual([])
+    expect(doc['counts']).toMatchObject({
+      compoundRows: 0,
+      observationRows: 0,
+      scenarioRows: 0,
+      experimentDatasetRows: 0,
+    })
+
+    const parsed = parseRecoveryArchive(result.text)
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.issues))
+    expect(parsed.archive.absentStores).toEqual([])
+    expect(parsed.archive.experimentDatasets).toEqual([])
+    expect(parsed.archive.counts).toEqual(result.counts)
+  })
+
+  it('rejects a current 1.1.0 archive that omits an additive array and its count', () => {
+    const missingBoth = mutateDoc((doc) => {
+      delete doc['experimentDatasets']
+      delete (doc['counts'] as Record<string, unknown>)['experimentDatasetRows']
+    })
+    const issue = rejection(parseRecoveryArchive(missingBoth), 'ARCHIVE_ENVELOPE_SHAPE')
+    expect(issue.message).toContain('1.1.0')
+    expect(issue.message).toContain('experimentDatasets')
+    expect(issue.message).toContain('experimentDatasetRows')
+    expect(issue.message).toContain('Only a genuine pre-1.1.0 archive')
+
+    // Historical compatibility is keyed by the declared version only; the
+    // same missing pair is accepted when the archive genuinely declares 1.0.0.
+    const doc = JSON.parse(missingBoth) as Record<string, unknown>
+    doc['backupVersion'] = '1.0.0'
+    const parsed = parseRecoveryArchive(JSON.stringify(doc))
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.issues))
+    expect(parsed.archive.absentStores).toContain('experimentDatasets')
+  })
+
+  it('rejects a current 1.1.0 archive whose additive array and count disagree', () => {
+    const mismatch = mutateDoc((doc) => {
+      ;(doc['counts'] as Record<string, number>)['compoundRows'] = 1
+    })
+    const issue = rejection(parseRecoveryArchive(mismatch), 'ARCHIVE_COUNT_MISMATCH')
+    expect(issue.message).toContain('compoundRows')
+  })
+
   it('rejects oversized text before parsing (ARCHIVE_TOO_LARGE)', () => {
     const oversized = 'a'.repeat(MAX_ARCHIVE_BYTES + 1)
     const parsed = parseRecoveryArchive(oversized)
@@ -310,7 +419,7 @@ describe('parseRecoveryArchive (restore validation battery)', () => {
     expect(rejection(parseRecoveryArchive('not json'), 'ARCHIVE_PARSE')).toBeDefined()
   })
 
-  it('requires the seven v1 keys, allowing only the additive scenarios key', () => {
+  it('requires the core v1 keys, allowing only documented additive store keys', () => {
     expect(rejection(parseRecoveryArchive('[]'), 'ARCHIVE_ENVELOPE_SHAPE').message).toContain(
       'root must be a JSON object',
     )
@@ -373,7 +482,7 @@ describe('parseRecoveryArchive (restore validation battery)', () => {
 
     for (const [version, needle] of [
       ['2.0.0', 'Major version 2'],
-      ['1.1.0', 'Minor version'],
+      ['1.2.0', 'Minor version'],
       ['1.0.x', 'not a valid semantic version'],
       ['garbage', 'not a valid semantic version'],
     ] as const) {
@@ -386,9 +495,11 @@ describe('parseRecoveryArchive (restore validation battery)', () => {
     // The rule itself: same major, file minor <= reader minor; patch free.
     expect(checkBackupVersion('1.0.0').ok).toBe(true)
     expect(checkBackupVersion('1.0.99').ok).toBe(true)
+    expect(checkBackupVersion('1.1.0').ok).toBe(true)
+    expect(checkBackupVersion('1.1.99').ok).toBe(true)
     expect(checkBackupVersion('0.9.9').ok).toBe(false)
     expect(checkBackupVersion('2.0.0').ok).toBe(false)
-    expect(checkBackupVersion('1.1.0').ok).toBe(false)
+    expect(checkBackupVersion('1.2.0').ok).toBe(false)
     expect(checkBackupVersion('1.0').ok).toBe(false)
     expect(checkBackupVersion('1.0.x').ok).toBe(false)
   })
@@ -569,6 +680,74 @@ describe('classifyArchiveDrugs and buildRecoveryWarnings (§8.3)', () => {
     const current = classifyArchiveDrugs(parsed.archive.drugs)
     expect(current).toEqual({ readable: 1, quarantined: 0 })
     expect(buildRecoveryWarnings(parsed.archive, STORAGE, current)).toEqual([])
+  })
+
+  it('accepts a genuine 1.0.0 archive with absent additive stores, warns once per store and pairs counts with arrays', () => {
+    const row = (key: string): RawSnapshotRow => ({ key, value: { id: key } })
+    const complete = buildOk({
+      compounds: [row('compound-1')],
+      observations: [row('observation-1')],
+      scenarios: [row('scenario-1')],
+      experimentDatasets: [row('dataset-1')],
+    })
+    const doc = JSON.parse(complete.text) as Record<string, unknown>
+    // The 1.0.0 contract predates all four stores, so a genuine historical
+    // archive declares that version and omits every additive pair.
+    doc['backupVersion'] = '1.0.0'
+    const counts = doc['counts'] as Record<string, unknown>
+    for (const store of ['compounds', 'observations', 'scenarios', 'experimentDatasets']) {
+      delete doc[store]
+    }
+    for (const count of [
+      'compoundRows',
+      'observationRows',
+      'scenarioRows',
+      'experimentDatasetRows',
+    ]) {
+      delete counts[count]
+    }
+    const legacy = JSON.stringify(doc)
+    const parsed = parseRecoveryArchive(legacy)
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.issues))
+    expect(parsed.archive.absentStores).toEqual([
+      'compounds',
+      'observations',
+      'scenarios',
+      'experimentDatasets',
+    ])
+    expect(parsed.archive.compounds).toEqual([])
+    expect(parsed.archive.observations).toEqual([])
+    expect(parsed.archive.scenarios).toEqual([])
+    expect(parsed.archive.experimentDatasets).toEqual([])
+
+    const warnings = buildRecoveryWarnings(
+      parsed.archive,
+      STORAGE,
+      classifyArchiveDrugs(parsed.archive.drugs),
+    )
+    const absent = warnings.filter((warning) => warning.code === 'ARCHIVE_STORE_ABSENT')
+    expect(absent).toHaveLength(4)
+    for (const warning of absent) {
+      expect(warning.message).toContain('Full replacement will leave the local')
+      expect(warning.message).toContain('not preserved')
+    }
+
+    // An absent array with a leftover count is ambiguous, and vice versa.
+    const countWithoutArray = JSON.parse(legacy) as {
+      counts: Record<string, number>
+      experimentDatasets?: unknown
+    }
+    countWithoutArray.counts['experimentDatasetRows'] = 0
+    rejection(
+      parseRecoveryArchive(JSON.stringify(countWithoutArray)),
+      'ARCHIVE_COUNT_MISMATCH',
+    )
+    const legacyDoc = JSON.parse(legacy) as {
+      counts: Record<string, number>
+      experimentDatasets?: unknown
+    }
+    legacyDoc.experimentDatasets = []
+    rejection(parseRecoveryArchive(JSON.stringify(legacyDoc)), 'ARCHIVE_COUNT_MISMATCH')
   })
 
   it('warns when the archive counts no longer match this build (RECLASSIFICATION_DIFFERS)', () => {

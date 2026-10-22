@@ -73,11 +73,45 @@ class LegacyDatabaseV3 extends Dexie {
   }
 }
 
+/** The phase-45 build's schema: revisions and scenarios, no datasets. */
+class LegacyDatabaseV5 extends Dexie {
+  drugs!: EntityTable<Record<string, unknown>, 'id'>
+  meta!: EntityTable<Record<string, unknown>, 'id'>
+  scenarios!: EntityTable<Record<string, unknown>, 'id'>
+
+  constructor(name: string) {
+    super(name)
+    this.version(1).stores({ drugs: 'id', meta: 'id' })
+    this.version(2).stores({ drugs: 'id, origin, updatedAt', meta: 'id' })
+    this.version(3).stores({
+      drugs: 'id, origin, updatedAt',
+      meta: 'id',
+      compounds: 'id',
+      observations: 'id, compoundId',
+    })
+    this.version(4).stores({
+      drugs: 'id, origin, updatedAt',
+      meta: 'id',
+      compounds: 'id',
+      observations: 'id, compoundId',
+      revisions: 'id',
+    })
+    this.version(5).stores({
+      drugs: 'id, origin, updatedAt',
+      meta: 'id',
+      compounds: 'id',
+      observations: 'id, compoundId',
+      revisions: 'id',
+      scenarios: 'id, updatedAt',
+    })
+  }
+}
+
 describe('SandboxDatabase — fresh database', () => {
   it('opens empty at the current schema version, with empty source tables', async () => {
     const db = new SandboxDatabase(freshName())
     try {
-      expect(db.verno).toBe(5)
+      expect(db.verno).toBe(6)
       expect(await db.drugs.count()).toBe(0)
       expect(await db.meta.count()).toBe(0)
       // The on-demand source tables exist but are never seeded at startup.
@@ -86,8 +120,10 @@ describe('SandboxDatabase — fresh database', () => {
       // Phase 20: the revisions table is equally empty on a fresh run —
       // tokens only ever come from writes through the repository.
       expect(await db.revisions.count()).toBe(0)
-    // Phase 45: the saved-scenario table is additive and opens empty too.
-    expect(await db.scenarios.count()).toBe(0)
+      // Phase 45: the saved-scenario table is additive and opens empty too.
+      expect(await db.scenarios.count()).toBe(0)
+      // Phase 47A: imported datasets are user-created only, never seeded.
+      expect(await db.experimentDatasets.count()).toBe(0)
     } finally {
       await db.delete()
     }
@@ -128,7 +164,7 @@ describe('SandboxDatabase — v1 → v2 → v3 → v4 migration', () => {
     //    version(3) and version(4) upgrades.
     const db = new SandboxDatabase(name)
     try {
-      expect(db.verno).toBe(5)
+      expect(db.verno).toBe(6)
 
       // Bookkeeping was backfilled…
       const plain = await db.drugs.get('fixture-drug-1')
@@ -208,7 +244,7 @@ describe('SandboxDatabase — v2 → v3 → v4 migration', () => {
 
     const db = new SandboxDatabase(name)
     try {
-      expect(db.verno).toBe(5)
+      expect(db.verno).toBe(6)
 
       // Existing data is untouched — record shape, bookkeeping and the
       // unknown future field all survive byte-for-byte.
@@ -227,8 +263,10 @@ describe('SandboxDatabase — v2 → v3 → v4 migration', () => {
       // invents no tokens, so every pre-existing record reads as the
       // documented "never revised" revision 0 until its first edit.
       expect(await db.revisions.count()).toBe(0)
-    // Phase 45: the saved-scenario table is additive and opens empty too.
-    expect(await db.scenarios.count()).toBe(0)
+      // Phase 45: the saved-scenario table is additive and opens empty too.
+      expect(await db.scenarios.count()).toBe(0)
+      // Phase 47A: the experimental-dataset table opens empty as well.
+      expect(await db.experimentDatasets.count()).toBe(0)
 
       // …and they are immediately usable (id + compoundId indexes live).
       const compound = {
@@ -292,7 +330,7 @@ describe('SandboxDatabase — v3 → v4 migration (phase 20)', () => {
 
     const db = new SandboxDatabase(name)
     try {
-      expect(db.verno).toBe(5)
+      expect(db.verno).toBe(6)
 
       // Drug rows and metadata survive byte-for-byte — the v4 upgrade is
       // purely additive and rewrites nothing.
@@ -303,8 +341,8 @@ describe('SandboxDatabase — v3 → v4 migration (phase 20)', () => {
       // upgrade, so existing records simply read as revision 0 until the
       // repository writes them.
       expect(await db.revisions.count()).toBe(0)
-    // Phase 45: the saved-scenario table is additive and opens empty too.
-    expect(await db.scenarios.count()).toBe(0)
+      // Phase 45: the saved-scenario table is additive and opens empty too.
+      expect(await db.scenarios.count()).toBe(0)
 
       // …and the table is immediately usable with its `id` key.
       await db.revisions.put({ id: 'fixture-drug-1', revision: 1 })
@@ -312,6 +350,50 @@ describe('SandboxDatabase — v3 → v4 migration (phase 20)', () => {
         id: 'fixture-drug-1',
         revision: 1,
       })
+    } finally {
+      await db.delete()
+    }
+  })
+})
+
+describe('SandboxDatabase — v5 → v6 migration (phase 47A)', () => {
+  it('adds the empty experimental-dataset table without touching saved scenarios', async () => {
+    const name = freshName()
+
+    // A phase-45 database with one saved scenario and one drug row.
+    const legacy = new LegacyDatabaseV5(name)
+    const legacyDrug = { ...toRecord(syntheticDrug()), futureField: { keep: 'me' } }
+    const scenario = {
+      id: 'fixture-scenario-1',
+      name: 'Synthetic saved scenario',
+      draft: { compoundId: 'fixture-drug-1' },
+      createdAt: FIXTURE_TIMESTAMP,
+      updatedAt: FIXTURE_TIMESTAMP,
+    }
+    await legacy.drugs.put(legacyDrug)
+    await legacy.scenarios.put(scenario)
+    legacy.close()
+
+    const db = new SandboxDatabase(name)
+    try {
+      expect(db.verno).toBe(6)
+      // v6 is purely additive: the scenario row and the drug row survive
+      // byte-for-byte and no dataset or migration backfill is invented.
+      expect(await db.scenarios.get('fixture-scenario-1')).toEqual(scenario)
+      expect(await db.drugs.get('fixture-drug-1')).toEqual(legacyDrug)
+      expect(await db.experimentDatasets.count()).toBe(0)
+
+      await db.experimentDatasets.put({
+        id: 'fixture-dataset-1',
+        name: 'Synthetic dataset',
+        createdAt: FIXTURE_TIMESTAMP,
+        updatedAt: FIXTURE_TIMESTAMP,
+        timeUnit: 'h',
+        concentrationUnit: 'mg/L',
+        measurements: [],
+        provenance: { source: 'csv', importedAt: FIXTURE_TIMESTAMP },
+      })
+      expect(await db.experimentDatasets.get('fixture-dataset-1')).toBeDefined()
     } finally {
       await db.delete()
     }

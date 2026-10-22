@@ -16,6 +16,7 @@ import { libraryRepository, useLibraryStore } from '@/app/libraryStore'
 import { SandboxDatabase } from '@/data/db/database'
 import { MAX_ARCHIVE_BYTES } from '@/data/recovery/format'
 import { toRecord } from '@/data/mappers/records'
+import { DexieExperimentalDatasetRepository } from '@/data/repositories/dexieExperimentalDatasetRepository'
 import {
   syntheticDrug,
   syntheticDrugB,
@@ -93,6 +94,10 @@ describe('RecoveryPanel — export', () => {
     expect(status).toHaveTextContent('.npsb')
     expect(status).toHaveTextContent('2 stored rows (1 readable, 1 quarantined at export)')
     expect(status).toHaveTextContent('1 metadata row')
+    expect(status).toHaveTextContent('0 compound rows')
+    expect(status).toHaveTextContent('0 observation rows')
+    expect(status).toHaveTextContent('0 saved scenarios')
+    expect(status).toHaveTextContent('0 experimental datasets')
     expect(status).toHaveTextContent('no checksum or signature')
 
     expect(captured).toHaveLength(1)
@@ -107,6 +112,10 @@ describe('RecoveryPanel — export', () => {
       readableAtExport: 1,
       quarantinedAtExport: 1,
       metaRows: 1,
+      compoundRows: 0,
+      observationRows: 0,
+      scenarioRows: 0,
+      experimentDatasetRows: 0,
     })
     expect(doc.drugs.map((entry) => entry.key)).toContain('quarantined-1')
   })
@@ -165,8 +174,16 @@ describe('RecoveryPanel — restore preview', () => {
     expect(screen.getByTestId('recovery-preview-counts')).toHaveTextContent(
       'This build classifies the archive rows as: 1 readable, 1 quarantined',
     )
+    expect(screen.getByTestId('recovery-store-counts')).toHaveTextContent(
+      'Experimental datasets: 0 rows',
+    )
+    expect(screen.getByTestId('recovery-store-counts')).toHaveTextContent('Compounds: 0 rows')
+    expect(screen.getByTestId('recovery-store-counts')).toHaveTextContent('Observations: 0 rows')
+    expect(screen.getByTestId('recovery-store-counts')).toHaveTextContent(
+      'Saved scenarios: 0 rows',
+    )
     expect(screen.getByTestId('recovery-preview-counts')).toHaveTextContent(
-      'Current library that will be replaced: 1 record and 1 quarantined row.',
+      'Current drug library that will be replaced: 1 record and 1 quarantined row.',
     )
 
     // Confirmation is gated behind the explicit acknowledgement, and the
@@ -177,7 +194,7 @@ describe('RecoveryPanel — restore preview', () => {
     fireEvent.click(ack)
     expect(confirm).not.toBeDisabled()
     expect(ack.closest('label')).toHaveTextContent(
-      'I understand this will permanently replace my current library',
+      'I understand this will permanently replace my current data',
     )
     expect(ack.closest('label')).toHaveTextContent('2 rows')
     // Selecting a file never writes anything.
@@ -196,7 +213,7 @@ describe('RecoveryPanel — restore preview', () => {
     })
     const rejected = await screen.findByTestId('recovery-rejected')
     expect(rejected).toHaveAttribute('role', 'alert')
-    expect(rejected).toHaveTextContent('the current library was not modified')
+    expect(rejected).toHaveTextContent('the current data was not modified')
     expect(screen.getByTestId('recovery-issues')).toHaveTextContent(
       'ARCHIVE_DUPLICATE_JSON_KEY',
     )
@@ -219,6 +236,54 @@ describe('RecoveryPanel — restore preview', () => {
     expect(rejected).toHaveTextContent(String(MAX_ARCHIVE_BYTES))
     expect(screen.queryByTestId('recovery-read-error')).not.toBeInTheDocument()
     expect(screen.queryByTestId('recovery-preview')).not.toBeInTheDocument()
+  })
+
+  it('warns about an absent experimental-dataset store and empties it on restore', async () => {
+    await seedLibraryWithQuarantine()
+    const datasets = new DexieExperimentalDatasetRepository(new SandboxDatabase())
+    const created = await datasets.create({
+      name: 'Synthetic UI dataset',
+      timeUnit: 'h',
+      concentrationUnit: 'mg/L',
+      provenance: { source: 'csv', fileName: 'ui.csv', importedAt: '2026-01-01T00:00:00.000Z' },
+      measurements: [{ sourceRow: 1, time: 0, concentration: 0 }],
+    })
+    if (!created.ok) throw new Error(created.message)
+
+    const archive = await exportText()
+    const doc = JSON.parse(archive) as Record<string, unknown>
+    doc['backupVersion'] = '1.0.0'
+    const counts = doc['counts'] as Record<string, unknown>
+    for (const store of ['compounds', 'observations', 'scenarios', 'experimentDatasets']) {
+      delete doc[store]
+    }
+    for (const count of [
+      'compoundRows',
+      'observationRows',
+      'scenarioRows',
+      'experimentDatasetRows',
+    ]) {
+      delete counts[count]
+    }
+    const legacy = JSON.stringify(doc)
+
+    render(<ImportExportView />)
+    activateTab('tab-recovery')
+    fireEvent.change(screen.getByTestId('recovery-restore-file'), {
+      target: { files: [file(legacy, 'older.npsb', 'application/json')] },
+    })
+    await screen.findByTestId('recovery-preview')
+    expect(screen.getByTestId('recovery-store-counts')).toHaveTextContent(
+      'Experimental datasets: absent (the archive predates this store; full replacement empties it)',
+    )
+    const warnings = screen.getByTestId('recovery-warnings')
+    expect(warnings).toHaveTextContent('ARCHIVE_STORE_ABSENT')
+    expect(warnings).toHaveTextContent('experimentDatasets')
+
+    fireEvent.click(screen.getByTestId('recovery-acknowledge'))
+    fireEvent.click(screen.getByTestId('recovery-restore-confirm'))
+    await screen.findByTestId('recovery-restore-report')
+    expect(await new SandboxDatabase().experimentDatasets.count()).toBe(0)
   })
 
   it('cancelling the preview clears it and leaves the library untouched', async () => {
@@ -274,6 +339,8 @@ describe('RecoveryPanel — restore outcomes', () => {
     expect(report).toHaveTextContent('2 stored rows and 1 metadata row were restored verbatim')
     expect(report).toHaveTextContent('1 readable and 1 quarantined')
     expect(report).toHaveTextContent('quarantined rows remain stored')
+    expect(report).toHaveTextContent('Extension stores restored: 0 compound rows')
+    expect(report).toHaveTextContent('0 experimental datasets')
 
     // Committed outcome: preview cleared, session refreshed from storage.
     expect(screen.queryByTestId('recovery-preview')).not.toBeInTheDocument()

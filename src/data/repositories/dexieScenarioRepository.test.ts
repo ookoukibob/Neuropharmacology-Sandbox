@@ -225,16 +225,28 @@ describe('backup integration', () => {
     expect(after.scenario.name).toBe('Backed up')
   })
 
-  it('restores a pre-phase-45 archive (no scenarios key) as an empty scenario store', async () => {
+  it('restores a genuine 1.0.0 archive predating all additive stores as empty stores', async () => {
     const drugs = new DexieDrugRepository(db)
     const kept = await repo.create('Will be cleared', demoDraft())
     if (!kept.ok) throw new Error('setup')
     const exported = await drugs.exportRecoveryArchive()
     if (!exported.ok) throw new Error('export failed')
-    // Simulate a legacy archive: drop the additive key and its count.
+    // A genuine 1.0.0 archive predates every additive store: set the declared
+    // version and remove all four array/count pairs.
     const doc = JSON.parse(exported.text) as Record<string, unknown>
-    delete doc['scenarios']
-    delete (doc['counts'] as Record<string, unknown>)['scenarioRows']
+    doc['backupVersion'] = '1.0.0'
+    const counts = doc['counts'] as Record<string, unknown>
+    for (const store of ['compounds', 'observations', 'scenarios', 'experimentDatasets']) {
+      delete doc[store]
+    }
+    for (const count of [
+      'compoundRows',
+      'observationRows',
+      'scenarioRows',
+      'experimentDatasetRows',
+    ]) {
+      delete counts[count]
+    }
     const legacy = JSON.stringify(doc)
     const preview = await drugs.previewRecoveryArchive(legacy)
     expect(preview.ok).toBe(true)
@@ -243,21 +255,32 @@ describe('backup integration', () => {
     expect((await repo.list()).scenarios).toHaveLength(0)
   })
 
-  it('does not invent a scenarios key when the store is empty', async () => {
+  it('emits every additive store and count even when the stores are empty', async () => {
     const drugs = new DexieDrugRepository(db)
     const exported = await drugs.exportRecoveryArchive()
     if (!exported.ok) throw new Error('export failed')
     const doc = JSON.parse(exported.text) as Record<string, unknown>
     expect(Object.keys(doc).sort()).toEqual([
       'backupVersion',
+      'compounds',
       'counts',
       'drugs',
+      'experimentDatasets',
       'exportedAt',
       'formatId',
       'meta',
+      'observations',
+      'scenarios',
       'storage',
     ])
-    expect((doc['counts'] as Record<string, unknown>)['scenarioRows']).toBeUndefined()
+    expect(doc['scenarios']).toEqual([])
+    expect(doc['experimentDatasets']).toEqual([])
+    expect(doc['counts']).toMatchObject({
+      compoundRows: 0,
+      observationRows: 0,
+      scenarioRows: 0,
+      experimentDatasetRows: 0,
+    })
   })
 })
 describe('effect-site draft persistence (phase 46)', () => {
@@ -474,13 +497,24 @@ describe('.npsb archive compatibility for effect-site drafts (phase 46)', () => 
     const exported = await drugs.exportRecoveryArchive()
     if (!exported.ok) throw new Error('export failed')
 
-    // The documented pre-phase-45 envelope: exactly the seven v1 keys, with
-    // no scenarios array and no scenarioRows count. This is the historical
-    // format contract, not an arbitrary deletion from a modern archive.
+    // The documented pre-phase-45 envelope: backupVersion 1.0.0 and exactly
+    // the seven v1 keys, with none of the additive store arrays or counts.
+    // This is the historical format contract, not an arbitrary deletion from
+    // a modern archive.
     const doc = JSON.parse(exported.text) as Record<string, unknown>
+    doc['backupVersion'] = '1.0.0'
     const counts = doc['counts'] as Record<string, unknown>
-    delete doc['scenarios']
-    delete counts['scenarioRows']
+    for (const store of ['compounds', 'observations', 'scenarios', 'experimentDatasets']) {
+      delete doc[store]
+    }
+    for (const count of [
+      'compoundRows',
+      'observationRows',
+      'scenarioRows',
+      'experimentDatasetRows',
+    ]) {
+      delete counts[count]
+    }
     expect(Object.keys(doc).sort()).toEqual([
       'backupVersion',
       'counts',

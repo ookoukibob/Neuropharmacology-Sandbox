@@ -5,6 +5,7 @@ import { DataSourcesPage } from './pages/DataSourcesPage'
 import { DrugDetailPage } from './pages/DrugDetailPage'
 import { DrugLibraryPage } from './pages/DrugLibraryPage'
 import { DrugNewPage } from './pages/DrugNewPage'
+import { ExperimentalDatasetsPage } from './pages/ExperimentalDatasetsPage'
 import { ImportExportPage } from './pages/ImportExportPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -26,6 +27,7 @@ export const routes: RouteObject[] = [
       { path: 'library/:drugId', element: <DrugDetailPage /> },
       { path: 'calculator', element: <CalculatorPage /> },
       { path: 'simulation', element: <SimulationPage /> },
+      { path: 'experiments', element: <ExperimentalDatasetsPage /> },
       { path: 'data-sources', element: <DataSourcesPage /> },
       { path: 'import-export', element: <ImportExportPage /> },
       { path: 'settings', element: <SettingsPage /> },

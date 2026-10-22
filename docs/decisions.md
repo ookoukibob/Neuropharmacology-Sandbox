@@ -845,6 +845,88 @@ integration can reuse `compileScenario` unchanged.
 
 ---
 
+## ADR-28 · Experimental datasets are a separate measured-data model and `.npex` format
+
+**Context.** Phase 47A adds imported concentration–time measurements. The
+application already has several similar-sounding data concepts: Layer B
+`ExperimentalObservation` source records (reported potency/affinity values
+at a target, retrieved from PubChem/ChEMBL), NPSL drug records with
+pharmacokinetic parameters, CSV as a convenience import/export projection,
+and `.npsb` as a raw all-store recovery snapshot. None of them represents an
+ordered series of measured time/concentration pairs. Reusing any of them
+would make provenance ambiguous (a measured study is not a retrieved
+activity record), force unrelated schema/version changes, or expose raw
+database identity as scientific data.
+
+**Decision.**
+
+- **Distinct types.** `ExperimentalDataset` and `ExperimentalMeasurement`
+  live in `src/domain/experiments/` and are never aliased to
+  `ExperimentalObservation` or to drug/source-data records. A dataset owns
+  its declared units, ordered measurements, provenance and local identity.
+- **Explicit units.** Time and concentration units must resolve from the
+  existing unit catalog with the correct dimensions. Import never infers a
+  unit from a header, filename, magnitude or neighbouring value. Molar and
+  mass concentration remain distinct.
+- **Measured values stay measured.** Validation accepts finite non-negative
+  numbers (zero included) and rejects qualifiers, markers, non-finite and
+  negative values with row-specific errors. Source order, duplicate
+  timestamps, exact replicates and sample ids are preserved; no averaging,
+  deduplication, sorting, interpolation or unit conversion occurs.
+- **CSV is mapping-first.** The existing RFC 4180 parser is reused, but the
+  user must explicitly map time and concentration columns and select both
+  units. A preview is read-only and all-row success is required before the
+  repository can be called.
+- **One dataset per `.npex`.** `.npex` is a new JSON envelope with
+  `formatId: "npex"`, its own independent semantic version (`1.0.0`), strict
+  objects, size/depth/row limits, duplicate-key rejection and an exact
+  scientific round trip. It stores the original import provenance but no
+  local database ids or timestamps; re-import always assigns new local
+  identity. Rule: same major, file minor ≤ reader minor, patch free.
+- **Additive persistence.** Dexie v6 adds an `experimentDatasets` store; the
+  repository validates reads and writes, reports corrupt rows without
+  deleting them, writes transactionally and uses `updatedAt` as an
+  in-transaction optimistic-concurrency token. Units, measurements and
+  provenance are immutable after creation; only name and notes are mutable.
+- **Backup completeness is mandatory.** `.npsb` advances to 1.1.0 and
+  carries all six persistent scientific stores. Current exports emit every
+  array and count, including empty stores. Older supported archives remain
+  restorable with one explicit absent-store warning per missing additive
+  store; full replacement clears an absent store. Restore remains one
+  atomic transaction over all stores plus revisions.
+- **No fitting.** Phase 47A stores and plots observations only. Fitting,
+  parameter estimation and diagnostics require later phases and their own
+  contracts; they must not mutate the stored observations or retroactively
+  change `.npex` fidelity.
+
+**Rejected alternatives.** *Reuse `ExperimentalObservation`* — a reported
+target activity and an ordered concentration time course have different
+identity, provenance, units and lifecycle; overloading one type would make
+both impossible to validate honestly. *Store datasets inside a Drug or the
+source-data store* — measured studies are not drug parameters, and a Drug
+edit must never rewrite observations. *Extend NPSL with an optional
+dataset array* — NPSL is a drug-library interchange format with its own
+versioning and quarantine semantics; adding a second scientific object would
+make unrelated imports carry dataset shape risk. *Use `.npsb` as the
+dataset interchange* — it is a raw all-store backup with local ids,
+timestamps, quarantine and destructive full replacement, not a portable
+single-dataset file. *Infer units from headers* — a wrong unit is a silent
+scientific error; explicit selection is the only defensible boundary.
+*Deduplicate or average replicates on import* — that destroys the measured
+evidence before the user has chosen an analysis. *Fit while importing* —
+fitting is a separate scientific operation with its own assumptions and
+diagnostics, not a property of storage.
+
+**Consequences.** There is a second additive store and a second versioned
+file format, both with independent tests and docs. The UI owns a local
+repository-backed workflow rather than a global store. `.npsb` must be
+updated whenever a future persistent scientific store is added, or backups
+would silently become incomplete. Phase 47B/47C can now build on stable,
+immutable observations and a fidelity-tested interchange boundary without
+changing how those observations are stored or displayed.
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

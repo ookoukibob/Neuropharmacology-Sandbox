@@ -58,6 +58,10 @@ describe('DexieDrugRepository — recovery export', () => {
         readableAtExport: 1,
         quarantinedAtExport: 1,
         metaRows: 1,
+        compoundRows: 0,
+        observationRows: 0,
+        scenarioRows: 0,
+        experimentDatasetRows: 0,
       })
 
       const doc = JSON.parse(exported.text) as {

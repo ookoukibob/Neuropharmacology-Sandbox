@@ -54,6 +54,16 @@ and unverified data. It never invents pharmacological parameters.
   warning) — or to a lossy-but-convenient CSV that always warns it is
   not a backup format (its text cells are guarded against spreadsheet
   formula injection).
+- Experimental concentration–time datasets: a separate page imports
+  explicitly mapped CSV files or versioned `.npex` files, requiring both
+  time and concentration units from the existing catalog. Every row is
+  validated before anything is written — qualifiers such as `<0.1`/`BLQ`,
+  non-finite and negative values are rejected; zero, duplicate timestamps
+  and exact replicates are preserved. Saved datasets show their declared
+  units, provenance and ordered measurement table, plot only observed
+  markers (no fitted curve, interpolation or scientific calculation), and
+  export/re-import losslessly as one `.npex` dataset (see
+  [docs/experimental-data.md](docs/experimental-data.md)).
 - On-demand data sources (PubChem, ChEMBL): a dedicated page searches
   an external database only when you ask, shows every record with its
   source link, retrieval date and license before anything is written,
@@ -68,15 +78,18 @@ and unverified data. It never invents pharmacological parameters.
   provenance link back to the source record. Nothing is downloaded at
   startup, in the background or in bulk — the app bundles no default
   database (see [docs/data-sources.md](docs/data-sources.md)).
-- Recovery backup (`.npsb`, separate from interchange): the Recovery tab
-  exports a complete snapshot of both object stores — quarantined and
-  unknown-field rows included — with exact counts and a stated
-  fidelity boundary (no checksum, not authenticated), and restores it
-  verbatim as one acknowledged, all-or-nothing replacement that
-  reports committed vs. rejected vs. failed honestly and never
-  re-runs itself; each format rejects the other's files (`.npsb` in
-  ordinary import fails, `.npsl` in restore fails with import
-  guidance).
+- Recovery backup (`.npsb` 1.1.0, separate from interchange): the Recovery
+  tab exports a complete snapshot of all six persistent scientific
+  stores — drugs and metadata, source-data compounds and observations,
+  saved scenarios and experimental datasets, including quarantined and
+  unknown-field rows — with exact counts and a stated fidelity boundary
+  (no checksum, not authenticated), and restores it verbatim as one
+  acknowledged, all-or-nothing replacement that reports committed vs.
+  rejected vs. failed honestly and never re-runs itself. Older supported
+  archives remain restorable; any additive store they omit is reported
+  explicitly and cleared by the full replacement. Each format rejects the
+  other's files (`.npsb` in ordinary import fails, `.npsl` in restore
+  fails with import guidance).
 - Settings that are real preferences: a persistent theme (system /
   light / dark, applied before the first paint and following the OS in
   system mode) and per-model curve display defaults the calculator
@@ -180,7 +193,7 @@ deployed site:
 ## Current status
 
 Development proceeds in numbered review phases. The full phase record
-(**Phases 1–46**) lives in
+(**Phases 1–47**) lives in
 [docs/development-history.md](docs/development-history.md); the
 dependency-ordered roadmap lives in [docs/architecture.md](docs/architecture.md)
 §6. Milestones at a glance:
@@ -195,6 +208,7 @@ dependency-ordered roadmap lives in [docs/architecture.md](docs/architecture.md)
 | Phase 33 — protected `main` and four required CI checks | done |
 | Phases 34–35.1 — first public preview and release-notes consistency | `v0.1.0-alpha.1` published 2026-10-13 |
 | Phases 36–46 — further integrity and numerical audits, two-compartment IV PK simulation, editable and saved scenarios, and optional effect-site/occupancy analysis | done |
+| Phase 47A — experimental measured-data foundation: explicit CSV and `.npex` import, validated local dataset storage, ordered table and marker-only chart, rename/delete, `.npex` round-trip, all-store `.npsb` 1.1.0 recovery | done |
 
 The only remaining audit verification gap is **NV-2**: no authentic historical
 user database has been available for migration testing. Synthetic legacy
@@ -247,13 +261,14 @@ assets when you need a reproducible version. See
 | [docs/npsl-format.md](docs/npsl-format.md) | `.npsl` file format, fields, versioning policy |
 | [docs/validation.md](docs/validation.md) | Layered validation and the import pipeline |
 | [docs/data-sources.md](docs/data-sources.md) | On-demand PubChem/ChEMBL retrieval: three-layer model, provenance/licensing, explicit selection and import rules |
+| [docs/experimental-data.md](docs/experimental-data.md) | Measured concentration–time datasets: domain, explicit CSV mapping, `.npex` 1.0.0, storage, UI and recovery |
 | [docs/testing.md](docs/testing.md) | Test strategy, required test matrix, round-trip testing |
 | [docs/releasing.md](docs/releasing.md) | Stable and prerelease procedures for tagged static builds, checks, ZIP + SHA-256 verification |
 | [CHANGELOG.md](CHANGELOG.md) | Versioned release notes and known limitations |
 | [docs/decisions.md](docs/decisions.md) | Architecture decision records (ADR) with rationale |
 | [docs/spec-review.md](docs/spec-review.md) | Weaknesses in the specification and proposed corrections |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, scientific contribution principles and verification checklist |
-| [docs/development-history.md](docs/development-history.md) | The numbered phase record (Phases 1–46), preserved in full |
+| [docs/development-history.md](docs/development-history.md) | The numbered phase record (Phases 1–47), preserved in full |
 
 ## Scientific boundary
 

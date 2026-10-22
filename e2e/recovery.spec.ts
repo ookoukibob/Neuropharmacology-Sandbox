@@ -169,9 +169,17 @@ interface ArchiveEnvelope {
     readonly readableAtExport: number
     readonly quarantinedAtExport: number
     readonly metaRows: number
+    readonly compoundRows: number
+    readonly observationRows: number
+    readonly scenarioRows: number
+    readonly experimentDatasetRows: number
   }
   readonly drugs: readonly { readonly key: string }[]
   readonly meta: readonly { readonly key: string; readonly value: Record<string, unknown> }[]
+  readonly compounds: readonly { readonly key: string }[]
+  readonly observations: readonly { readonly key: string }[]
+  readonly scenarios: readonly { readonly key: string }[]
+  readonly experimentDatasets: readonly { readonly key: string }[]
 }
 
 test('recovery: export → replace → restore round trip preserves quarantined rows verbatim', async ({
@@ -208,17 +216,26 @@ test('recovery: export → replace → restore round trip preserves quarantined 
 
   const archive = JSON.parse(readFileSync(archivePath, 'utf8')) as ArchiveEnvelope
   expect(archive.formatId).toBe('npsb')
-  expect(archive.backupVersion).toBe('1.0.0')
+  expect(archive.backupVersion).toBe('1.1.0')
   expect(archive.counts).toEqual({
     drugRows: 2,
     readableAtExport: 1,
     quarantinedAtExport: 1,
     metaRows: 1,
+    compoundRows: 0,
+    observationRows: 0,
+    scenarioRows: 0,
+    experimentDatasetRows: 0,
   })
   expect(archive.drugs.map((entry) => entry.key).sort()).toEqual([
     'e2e-drug-a',
     'e2e-quarantined-1',
   ])
+  // Current exports always carry every store, including empty ones.
+  expect(archive.compounds).toEqual([])
+  expect(archive.observations).toEqual([])
+  expect(archive.scenarios).toEqual([])
+  expect(archive.experimentDatasets).toEqual([])
   // Merge imports never touch library metadata (ADR contract), so the
   // archive carries the canonical default metadata row — key AND value
   // verbatim.
@@ -264,7 +281,7 @@ test('recovery: export → replace → restore round trip preserves quarantined 
   )
   await expect(page.getByTestId('recovery-preview-counts')).toContainText('1 metadata row')
   await expect(page.getByTestId('recovery-preview-counts')).toContainText(
-    'Current library that will be replaced: 1 record and 0 quarantined rows.',
+    'Current drug library that will be replaced: 1 record and 0 quarantined rows.',
   )
   // Same build, same storage versions: no spurious warnings.
   await expect(page.getByTestId('recovery-warnings')).toHaveCount(0)
@@ -323,7 +340,7 @@ test('recovery: a malformed archive is rejected visibly and the library is uncha
   const rejected = page.getByTestId('recovery-rejected')
   await expect(rejected).toBeVisible()
   await expect(rejected).toContainText('ARCHIVE_PARSE')
-  await expect(rejected).toContainText('the current library was not modified')
+  await expect(rejected).toContainText('the current data was not modified')
   // No preview, therefore no confirm control.
   await expect(page.getByTestId('recovery-preview')).toHaveCount(0)
   await expect(page.getByTestId('recovery-restore-confirm')).toHaveCount(0)

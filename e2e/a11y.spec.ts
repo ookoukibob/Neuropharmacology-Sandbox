@@ -254,6 +254,56 @@ test('a11y: import mapping, import preview and the export view pass the axe scan
   await scan(page, 'export view')
 })
 
+test('a11y: the experimental dataset import, detail and destructive states pass the axe scan', async ({
+  page,
+}) => {
+  await page.goto('/experiments')
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Experimental Datasets' }),
+  ).toBeVisible()
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+  await scan(page, 'experimental datasets (empty)')
+
+  // Explicit mapping preview.
+  await page.getByTestId('csv-dataset-file').setInputFiles({
+    name: 'synthetic-a11y-47a.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('time,conc\n0,0\n0,0\n2,1.5\n', 'utf8'),
+  })
+  await expect(page.getByTestId('csv-dataset-mapping')).toBeVisible()
+  await scan(page, 'experimental datasets (CSV mapping)')
+
+  await page.getByTestId('csv-dataset-name').fill('Synthetic A11y Dataset')
+  await page.getByTestId('csv-dataset-time-column').selectOption('0')
+  await page.getByTestId('csv-dataset-time-unit').selectOption('h')
+  await page.getByTestId('csv-dataset-concentration-column').selectOption('1')
+  await page.getByTestId('csv-dataset-concentration-unit').selectOption('mg/L')
+  await page.getByTestId('csv-dataset-preview').click()
+  await expect(page.getByTestId('csv-dataset-preview-result')).toBeVisible()
+  await scan(page, 'experimental datasets (validated import preview)')
+
+  await page.getByTestId('csv-dataset-confirm').click()
+  await expect(
+    page.getByRole('heading', { level: 2, name: 'Synthetic A11y Dataset' }),
+  ).toBeVisible()
+  await expect(page.getByTestId('experimental-dataset-chart').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+  await scan(page, 'experimental datasets (saved detail, chart and table)')
+
+  await page.getByTestId('dataset-rename').click()
+  await expect(page.getByTestId('dataset-rename-name')).toBeVisible()
+  await scan(page, 'experimental datasets (rename form)')
+  await page.getByTestId('dataset-rename').click()
+
+  await page.getByTestId('dataset-delete').click()
+  await expect(page.getByTestId('dataset-delete-confirm')).toBeDisabled()
+  await scan(page, 'experimental datasets (delete confirmation)')
+  await page.getByTestId('dataset-delete-ack').check()
+  await expect(page.getByTestId('dataset-delete-confirm')).toBeEnabled()
+  await scan(page, 'experimental datasets (delete acknowledged)')
+})
+
 test('a11y: the recovery backup states pass the axe scan', async ({ page }) => {
   await page.goto('/import-export')
   await expect(page.getByTestId('library-record-count')).toBeVisible()
