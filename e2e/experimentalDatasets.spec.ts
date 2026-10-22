@@ -545,3 +545,63 @@ test('shows residual structure for both fitted models and keeps duplicates separ
   await expect(page.getByTestId('fit-residual-chart').locator('.scatterlayer .points path')).toHaveCount(6)
   await expect(page.getByTestId('residual-fitted-chart-m0').locator('.scatterlayer .points path')).toHaveCount(6)
 })
+
+test('offers a second error model only after its own declaration', async ({ page }) => {
+  await page.goto('/experiments')
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+
+  await importTwoColumnCsv(page, {
+    fileName: 'synthetic-proportional-variance.csv',
+    csv:
+      'time,concentration\n' +
+      '0,100\n0.5,83.61\n1,70.32\n2,50.44\n3,37.13\n5,22.24\n7,14.92\n9,11.12\n',
+    name: 'Synthetic proportional variance',
+  })
+
+  // The section does not exist before a fit.
+  await expect(page.getByTestId('proportional-comparison')).toHaveCount(0)
+  await page.getByTestId('dataset-fit').click()
+  await expect(page.getByTestId('fit-results')).toBeVisible()
+
+  const card = page.getByTestId('proportional-comparison')
+  await expect(card).toBeVisible()
+  const assumption = page.getByTestId('proportional-assumption')
+  await expect(assumption).not.toBeChecked()
+
+  // Nothing is computed or shown before the analyst declares the assumption.
+  await expect(page.getByTestId('proportional-table')).toHaveCount(0)
+  await expect(page.getByTestId('proportional-gate')).toContainText(
+    /stays unavailable until the assumption is declared/i,
+  )
+
+  // The existing common-variance comparison keeps its own values.
+  await expect(page.getByTestId('comparison-table')).toBeVisible()
+  await expect(page.getByTestId('comparison-m0-aicc')).toHaveText('unavailable')
+
+  await assumption.check()
+
+  const table = page.getByTestId('proportional-table')
+  await expect(table).toBeVisible()
+  await expect(table).toContainText(/Maximum-likelihood comparison/i)
+  await expect(table).toContainText(/not comparable with the common-variance criterion/i)
+  await expect(page.getByTestId('proportional-m0-dispersion')).toContainText('mg/L')
+  await expect(page.getByTestId('proportional-m1-baseline')).toContainText('mg/L')
+
+  // Both criteria are available for this eight-row dataset.
+  const m0 = Number(await page.getByTestId('proportional-m0-aicc').textContent())
+  const m1 = Number(await page.getByTestId('proportional-m1-aicc').textContent())
+  expect(Number.isFinite(m0)).toBe(true)
+  expect(Number.isFinite(m1)).toBe(true)
+  await expect(table).not.toContainText('NaN')
+  await expect(page.getByTestId('proportional-difference-value')).toBeVisible()
+
+  // The common-variance criterion is untouched by this declaration.
+  await expect(page.getByTestId('comparison-m0-aicc')).toHaveText('unavailable')
+
+  // Withdrawing the declaration removes the alternative analysis again.
+  await assumption.uncheck()
+  await expect(page.getByTestId('proportional-table')).toHaveCount(0)
+
+  // Measured rows are unchanged throughout.
+  await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(8)
+})

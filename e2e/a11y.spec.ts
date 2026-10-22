@@ -346,6 +346,14 @@ test('a11y: the experimental dataset import, detail and destructive states pass 
   await expect(page.getByTestId('comparison-table')).not.toContainText('NaN')
   await scan(page, 'experimental datasets (model comparison with declared assumption)')
 
+  // The alternative error model has its own declaration and its own table.
+  // Its criteria may be unavailable for this small sample; that is a rendered
+  // state and must be accessible too.
+  await page.getByTestId('proportional-assumption').check()
+  await expect(page.getByTestId('proportional-table')).toBeVisible()
+  await expect(page.getByTestId('proportional-table')).not.toContainText('NaN')
+  await scan(page, 'experimental datasets (proportional-variance comparison)')
+
   await page.getByTestId('dataset-rename').click()
   await expect(page.getByTestId('dataset-rename-name')).toBeVisible()
   await scan(page, 'experimental datasets (rename form)')

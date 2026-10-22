@@ -6,6 +6,45 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Added — a second, explicitly declared error model (phase 47)
+
+- **Variance proportional to the fitted concentration.** An opt-in alternative
+  to the common-variance assumption: independent Gaussian errors with
+  `Var(Y_i) = φ·μ_i` and one positive dispersion `φ` in concentration units.
+  The mean models are unchanged; the error model is not.
+- **Both candidates are genuinely re-fitted.** The existing least-squares
+  estimates are never reused as maximum-likelihood estimates. The objective is
+  the profile likelihood `−2lnL̂ = n·ln(2π) + n·ln(φ̂) + Σln μ_i + n`, not a
+  weighted sum of squares: the `Σln μ_i` log-variance term depends on the mean
+  parameters and changes both the estimate and its likelihood.
+- **Exact closed forms plus a bounded search.** `A = Σy/Σg` at a trial rate for
+  M0; with `μ = m·h` and `h = (1−λ) + λg`, `m = Σy/Σh`, leaving a
+  one-dimensional profile in λ. A global 2-D coarse scan, capped coordinate
+  golden-section refinement and a final conditional λ solve produce the
+  published estimate; endpoints are always evaluated and a grid value is never
+  published.
+- **An honest domain.** Exact zero observations are rejected: with this
+  variance function the likelihood grows without bound as the prediction
+  approaches zero, so no maximum-likelihood estimate exists. A numerically zero
+  dispersion is a structured failure too. No variance floor, epsilon or clamped
+  prediction is ever substituted.
+- **Conditional AICc on the same terms as before.** `AIC = −2lnL̂ + 2K`,
+  `AICc = AIC + 2K(K+1)/(n−K−1)`, with `K = 3` for M0 and `4` for M1 (the
+  dispersion is counted). Unavailable with a structured reason when the
+  assumption is undeclared, a fit failed, the likelihood is not finite, the
+  dispersion is zero, or `n − K − 1 ≤ 0`. The two error models' criteria are
+  never compared with each other.
+- **Its own interface, never preselected.** The section computes nothing until
+  the analyst declares the assumption, reports parameters with units, the
+  dispersion, the maximised log-likelihood, `K` and AICc, shows per-model
+  unavailability reasons, and resets its declaration when the dataset changes.
+  No persistence.
+- Added domain tests for the likelihood arithmetic against independently
+  computed values, likelihood-versus-weighted-SSE separation, parameter
+  recovery, unit scaling, zero-observation rejection, degenerate dispersion,
+  boundary labels and every AICc gate; view, real-browser and axe coverage of
+  the declaration flow.
+
 ### Fixed — scientific notation is rendered through one convention, and the convention is enforced
 
 - **The same defect stopped being fixed per component.** Notation used to exist

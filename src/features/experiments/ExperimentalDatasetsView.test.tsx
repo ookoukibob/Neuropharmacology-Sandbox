@@ -1028,3 +1028,200 @@ describe('residual structure diagnostics (phase 47C)', () => {
     expect(repository.deleteCalls).toHaveLength(0)
   })
 })
+
+describe('proportional-variance error model (phase 47)', () => {
+  const row = (id: string, sourceRow: number, time: number, concentration: number) => ({
+    id,
+    sourceRow,
+    time,
+    concentration,
+  })
+
+  /** Decay with a baseline and alternating scatter; both fits are non-degenerate. */
+  const baselineStudy = (): ExperimentalDataset => {
+    const times = [0, 0.5, 1, 2, 3, 5, 7, 9]
+    const signs = [1, -1, 1, -1, 1, -1, 1, -1]
+    return storedDataset({
+      id: 'pv-baseline',
+      name: 'Proportional variance study',
+      measurements: times.map((time, index) =>
+        row(
+          `pv${String(index + 1)}`,
+          index + 1,
+          time,
+          Math.round(10 + 90 * Math.exp(-0.4 * time) * (1 + 0.08 * (signs[index] ?? 1)) * 100) / 100,
+        ),
+      ),
+    })
+  }
+
+  const select = async (dataset: ExperimentalDataset): Promise<void> => {
+    repository.rows.set(dataset.id, dataset)
+    renderView()
+    const list = await screen.findByRole('list', { name: 'Saved experimental datasets' })
+    fireEvent.click(within(list).getByRole('button', { name: new RegExp(dataset.name) }))
+    await screen.findByRole('heading', { level: 2, name: dataset.name })
+  }
+
+  it('is absent before a fit and does not compute anything before its declaration', async () => {
+    await select(baselineStudy())
+    expect(screen.queryByTestId('proportional-comparison')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('proportional-comparison')
+
+    const assumption = within(card).getByTestId('proportional-assumption')
+    expect(assumption).not.toBeChecked()
+    expect(within(card).queryByTestId('proportional-table')).not.toBeInTheDocument()
+    expect(within(card).getByTestId('proportional-gate')).toHaveTextContent(
+      /stays unavailable until the assumption is declared/i,
+    )
+    expect(within(card).getByTestId('proportional-caveat')).toHaveTextContent(
+      /assumption, not evidence/i,
+    )
+    // The common-variance comparison remains on the page and is unaffected.
+    expect(screen.getByTestId('fit-model-comparison')).toBeInTheDocument()
+  })
+
+  it('re-fits both models and reports likelihood quantities after the declaration', async () => {
+    await select(baselineStudy())
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('proportional-comparison')
+
+    fireEvent.click(within(card).getByTestId('proportional-assumption'))
+
+    const table = await within(card).findByTestId('proportional-table')
+    expect(table).toHaveTextContent(/Maximum-likelihood comparison/)
+    expect(table).toHaveTextContent(/not comparable with the common-variance criterion/i)
+
+    // Parameters carry the dataset's declared units.
+    expect(within(card).getByTestId('proportional-m0-amplitude')).toHaveTextContent(/mg\/L/)
+    expect(within(card).getByTestId('proportional-m1-baseline')).toHaveTextContent(/mg\/L/)
+    expect(within(card).getByTestId('proportional-m0-dispersion')).toHaveTextContent(/mg\/L/)
+
+    // The log-likelihood is reported, not a weighted sum of squares.
+    const logLikelihood = Number(
+      within(card).getByTestId('proportional-m0-loglikelihood').textContent,
+    )
+    expect(Number.isFinite(logLikelihood)).toBe(true)
+
+    // Total parameter counts include the dispersion: 3 for M0, 4 for M1.
+    const totalRow = within(table).getByRole('row', { name: /Total parameters K/ })
+    expect(totalRow).toHaveTextContent(/3/)
+    expect(totalRow).toHaveTextContent(/4/)
+
+    const m0 = Number(within(card).getByTestId('proportional-m0-aicc').textContent)
+    const m1 = Number(within(card).getByTestId('proportional-m1-aicc').textContent)
+    expect(Number.isFinite(m0)).toBe(true)
+    expect(Number.isFinite(m1)).toBe(true)
+    const difference = Number(
+      within(card).getByTestId('proportional-difference-value').textContent,
+    )
+    expect(difference).toBeCloseTo(m1 - m0, 3)
+    expect(card).not.toHaveTextContent('NaN')
+
+    // Withdrawing the declaration removes the analysis again.
+    fireEvent.click(within(card).getByTestId('proportional-assumption'))
+    expect(within(card).queryByTestId('proportional-table')).not.toBeInTheDocument()
+  })
+
+  it('reports unavailable criteria with their reasons when a fit degenerates', async () => {
+    await select(
+      storedDataset({
+        id: 'pv-constant',
+        name: 'Constant proportional study',
+        measurements: [0, 1, 2, 3, 4, 5].map((time, index) =>
+          row(`pc${String(index + 1)}`, index + 1, time, 40),
+        ),
+      }),
+    )
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('proportional-comparison')
+    fireEvent.click(within(card).getByTestId('proportional-assumption'))
+
+    expect(within(card).getByTestId('proportional-m0-aicc')).toHaveTextContent(/unavailable/i)
+    expect(within(card).getByTestId('proportional-m1-aicc')).toHaveTextContent(/unavailable/i)
+    const reasons = within(card).getByTestId('proportional-aicc-reasons')
+    expect(reasons).toHaveTextContent(/M0/)
+    expect(reasons).toHaveTextContent(/M1/)
+    expect(reasons).toHaveTextContent(/no finite maximum/i)
+    expect(within(card).getByTestId('proportional-warnings')).toHaveTextContent(
+      /fit unavailable|reproduces every observation/i,
+    )
+    // Nothing is fabricated in place of the failed estimates.
+    expect(within(card).queryByTestId('proportional-difference')).not.toBeInTheDocument()
+  })
+
+  it('reports the small-sample gate per model', async () => {
+    await select(
+      storedDataset({
+        id: 'pv-five',
+        name: 'Five point proportional study',
+        measurements: [
+          row('p1', 1, 0, 100),
+          row('p2', 2, 0.5, 83),
+          row('p3', 3, 1, 70),
+          row('p4', 4, 2, 51),
+          row('p5', 5, 3, 39),
+        ],
+      }),
+    )
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('proportional-comparison')
+    fireEvent.click(within(card).getByTestId('proportional-assumption'))
+
+    expect(within(card).getByTestId('proportional-m0-aicc')).not.toHaveTextContent(/unavailable/i)
+    expect(within(card).getByTestId('proportional-m1-aicc')).toHaveTextContent(/unavailable/i)
+    expect(within(card).getByTestId('proportional-aicc-reasons')).toHaveTextContent(
+      /n − K − 1 must be positive/i,
+    )
+  })
+
+  it('resets the declaration when the dataset changes', async () => {
+    const first = baselineStudy()
+    const second = storedDataset({
+      id: 'pv-second',
+      name: 'Second proportional study',
+      measurements: [
+        row('q1', 1, 0, 80),
+        row('q2', 2, 1, 50),
+        row('q3', 3, 2, 31),
+        row('q4', 4, 4, 12),
+        row('q5', 5, 6, 5),
+      ],
+    })
+    repository.rows.set(first.id, first)
+    repository.rows.set(second.id, second)
+    renderView()
+
+    const list = await screen.findByRole('list', { name: 'Saved experimental datasets' })
+    fireEvent.click(within(list).getByRole('button', { name: new RegExp(first.name) }))
+    await screen.findByRole('heading', { level: 2, name: first.name })
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('proportional-comparison')
+    fireEvent.click(within(card).getByTestId('proportional-assumption'))
+    await within(card).findByTestId('proportional-table')
+
+    fireEvent.click(within(list).getByRole('button', { name: /Second proportional study/ }))
+    await screen.findByRole('heading', { level: 2, name: second.name })
+
+    // Selecting a dataset discards the derived fit, so the section is absent.
+    expect(screen.queryByTestId('proportional-comparison')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const fresh = await screen.findByTestId('proportional-comparison')
+    expect(within(fresh).getByTestId('proportional-assumption')).not.toBeChecked()
+    expect(within(fresh).queryByTestId('proportional-table')).not.toBeInTheDocument()
+  })
+
+  it('never writes derived values to the repository', async () => {
+    await select(baselineStudy())
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('proportional-comparison')
+    fireEvent.click(within(card).getByTestId('proportional-assumption'))
+    await within(card).findByTestId('proportional-table')
+
+    expect(repository.createCalls).toHaveLength(0)
+    expect(repository.updateCalls).toHaveLength(0)
+    expect(repository.deleteCalls).toHaveLength(0)
+  })
+})
