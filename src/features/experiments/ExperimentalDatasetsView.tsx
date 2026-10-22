@@ -13,6 +13,7 @@ import {
   fitMonoExponentialDecay,
   type MonoExponentialFitResult,
 } from '@/domain/experiments/mono-exponential-fit'
+import { diagnoseMonoExponentialFit } from '@/domain/experiments/mono-exponential-fit-diagnostics'
 import { formatNumber } from '@/engine/numeric/decimal'
 import {
   AlertTriangle,
@@ -55,6 +56,11 @@ const ExperimentalDatasetChart = lazy(async () => {
   return { default: module.ExperimentalDatasetChart }
 })
 
+const ExperimentalFitResidualChart = lazy(async () => {
+  const module = await import('@/components/charts/ExperimentalFitResidualChart')
+  return { default: module.ExperimentalFitResidualChart }
+})
+
 export interface ExperimentalDatasetsViewProps {
   readonly repository: ExperimentalDatasetRepository
 }
@@ -72,15 +78,15 @@ export function ExperimentalDatasetsView({ repository }: ExperimentalDatasetsVie
         <div className="flex flex-wrap items-center gap-3">
           <Database aria-hidden="true" className="size-6 text-muted-foreground" />
           <h1 className="text-2xl font-semibold">Experimental Datasets</h1>
-          <Badge variant="secondary">Phase 47A–47B · measured data + optional decay fit</Badge>
+          <Badge variant="secondary">Phase 47A–47C · measured data + fit diagnostics</Badge>
         </div>
         <p className="max-w-4xl text-sm text-muted-foreground">
           Import, validate, store and export measured concentration–time datasets. Values are kept in
           source order exactly as measured — duplicates and replicates are never averaged,
           deduplicated or interpolated. A one-compartment mono-exponential decay fit can be run on
           the selected dataset; the fit is a temporary derived result that never modifies or saves
-          the measurements. Phase 47C residual diagnostics, uncertainty estimates and model
-          comparison are not available.
+          the measurements. Residuals and RMSE are descriptive diagnostics; formal uncertainty
+          estimates and model-selection metrics are not provided.
         </p>
       </header>
 
@@ -249,6 +255,10 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
     readonly result: MonoExponentialFitResult
   } | null>(null)
   const fit = storedFit !== null && storedFit.key === fitKey ? storedFit.result : null
+  const fitDiagnostics = useMemo(
+    () => (fit === null || !fit.ok ? null : diagnoseMonoExponentialFit(dataset.measurements, fit)),
+    [dataset.measurements, fit],
+  )
   const runFit = (): void => {
     setStoredFit({ key: fitKey, result: fitMonoExponentialDecay(dataset.measurements) })
   }
@@ -573,8 +583,8 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
                 )}
                 <p className="mt-2 text-xs text-muted-foreground">
                   A converged fit is a numerical result, not evidence that this decay model suits
-                  the data. Residual diagnostics, parameter uncertainty and model comparison are not
-                  part of this phase.
+                  the data. RMSE and raw residuals are shown below without a pass/fail threshold;
+                  parameter uncertainty and model-selection metrics are not inferred.
                 </p>
               </div>
             ) : (
@@ -606,6 +616,69 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
               Hover shows the source row, sample id and note when present.
             </figcaption>
           </figure>
+
+          {fitDiagnostics !== null && (
+            <Card data-testid="fit-diagnostics">
+              <CardHeader>
+                <CardTitle headingLevel={3}>Residual diagnostics</CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Residual = observed concentration − fitted concentration, in the dataset’s original
+                  concentration unit. The horizontal zero line represents a perfect prediction. These
+                  are raw residuals from the same unweighted least-squares fit, not standardized
+                  residuals; no universal pass/fail cutoff is applied.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {fitDiagnostics.ok ? (
+                  <>
+                    <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-3" data-testid="fit-diagnostic-summary">
+                      <div>
+                        <dt className="text-xs text-muted-foreground">RMSE</dt>
+                        <dd className="font-mono text-sm" data-testid="fit-rmse">
+                          {formatNumber(fitDiagnostics.rmse)} {dataset.concentrationUnit}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-muted-foreground">Residual degrees of freedom (n − 2)</dt>
+                        <dd className="font-mono text-sm" data-testid="fit-residual-df">
+                          {fitDiagnostics.residualDegreesOfFreedom}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-muted-foreground">Distinct time points</dt>
+                        <dd className="font-mono text-sm" data-testid="fit-distinct-times">
+                          {fitDiagnostics.distinctTimeCount}
+                        </dd>
+                      </div>
+                    </dl>
+                    <Suspense fallback={<p role="status" className="py-6 text-sm text-muted-foreground">Loading residual plot…</p>}>
+                      <ExperimentalFitResidualChart
+                        residuals={fitDiagnostics.residuals}
+                        timeUnit={dataset.timeUnit}
+                        concentrationUnit={dataset.concentrationUnit}
+                        datasetName={dataset.name}
+                      />
+                    </Suspense>
+                    <div className="space-y-2 rounded-md border p-3 text-sm" role="note" data-testid="fit-identifiability-screen">
+                      <h4 className="font-medium">Preliminary data-support screen</h4>
+                      <p className="text-xs text-muted-foreground">
+                        This screen flags boundary estimates and very sparse time coverage. It is not
+                        a formal structural or practical identifiability test and does not estimate
+                        parameter uncertainty.
+                      </p>
+                      <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                        {fitDiagnostics.dataSupportNotes.map((note) => <li key={note}>{note}</li>)}
+                      </ul>
+                    </div>
+                  </>
+                ) : (
+                  <p role="alert" className="text-sm text-destructive" data-testid="fit-diagnostics-error">
+                    {fitDiagnostics.message}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           <div className="max-h-[36rem] overflow-auto rounded-md border">
             <Table data-testid="dataset-measurements">

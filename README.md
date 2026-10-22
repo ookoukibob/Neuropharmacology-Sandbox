@@ -60,10 +60,12 @@ and unverified data. It never invents pharmacological parameters.
   validated before anything is written — qualifiers such as `<0.1`/`BLQ`,
   non-finite and negative values are rejected; zero, duplicate timestamps
   and exact replicates are preserved. Saved datasets show their declared
-  units, provenance and ordered measurement table, plot only observed
-  markers (no fitted curve, interpolation or scientific calculation), and
-  export/re-import losslessly as one `.npex` dataset (see
-  [docs/experimental-data.md](docs/experimental-data.md)).
+  units, provenance and ordered measurement table, and plot observed markers.
+  A user-requested one-compartment fit is shown as a separate temporary curve;
+  raw residuals, RMSE and a preliminary boundary/sparse-time screen are
+  provided without changing stored data. Model comparison, confidence
+  intervals and AICc are not inferred. Datasets export/re-import losslessly
+  as one `.npex` file (see [docs/experimental-data.md](docs/experimental-data.md)).
 - On-demand data sources (PubChem, ChEMBL): a dedicated page searches
   an external database only when you ask, shows every record with its
   source link, retrieval date and license before anything is written,
@@ -208,7 +210,9 @@ dependency-ordered roadmap lives in [docs/architecture.md](docs/architecture.md)
 | Phase 33 — protected `main` and four required CI checks | done |
 | Phases 34–35.1 — first public preview and release-notes consistency | `v0.1.0-alpha.1` published 2026-10-13 |
 | Phases 36–46 — further integrity and numerical audits, two-compartment IV PK simulation, editable and saved scenarios, and optional effect-site/occupancy analysis | done |
-| Phase 47A — experimental measured-data foundation: explicit CSV and `.npex` import, validated local dataset storage, ordered table and marker-only chart, rename/delete, `.npex` round-trip, all-store `.npsb` 1.1.0 recovery | done |
+| Phase 47A — experimental measured-data foundation: explicit CSV and `.npex` import, validated local dataset storage, ordered table, rename/delete, `.npex` round-trip and all-store `.npsb` 1.1.0 recovery | done |
+| Phase 47B — constrained mono-exponential fit of selected measured data with bounded optimizer, structured failures and temporary fitted curve | done |
+| Phase 47C initial slice — raw residual plot, RMSE, residual degrees of freedom and explicit data-support screening | implemented; formal uncertainty and model comparison remain deferred |
 
 The only remaining audit verification gap is **NV-2**: no authentic historical
 user database has been available for migration testing. Synthetic legacy

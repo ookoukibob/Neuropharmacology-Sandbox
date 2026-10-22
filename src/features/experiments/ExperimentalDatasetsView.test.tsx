@@ -22,6 +22,12 @@ vi.mock('@/components/charts/ExperimentalDatasetChart', () => ({
   ),
 }))
 
+vi.mock('@/components/charts/ExperimentalFitResidualChart', () => ({
+  ExperimentalFitResidualChart: ({ residuals }: { residuals: readonly { sourceRow: number }[] }) => (
+    <div data-testid="stub-fit-residual-chart">{residuals.length} residual points</div>
+  ),
+}))
+
 const BASE_TIME = Date.parse('2026-03-01T00:00:00.000Z')
 
 function storedDataset(overrides: Partial<ExperimentalDataset> = {}): ExperimentalDataset {
@@ -357,6 +363,7 @@ describe('one-compartment mono-exponential fit (phase 47B)', () => {
     await select(decayDataset())
     expect(screen.getByTestId('dataset-fit')).toBeInTheDocument()
     expect(screen.queryByTestId('fit-results')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('fit-diagnostics')).not.toBeInTheDocument()
   })
 
   it('reports the fitted parameters with the dataset units', async () => {
@@ -369,6 +376,11 @@ describe('one-compartment mono-exponential fit (phase 47B)', () => {
     expect(within(results).getByTestId('fit-half-life')).toHaveTextContent(/h/)
     expect(screen.getByTestId('fit-section')).toHaveTextContent(/unweighted least squares/i)
     expect(screen.getByTestId('fit-section')).toHaveTextContent(/not evidence that this decay model suits/i)
+    const diagnostics = await screen.findByTestId('fit-diagnostics')
+    expect(within(diagnostics).getByTestId('fit-rmse')).toHaveTextContent('mg/L')
+    expect(within(diagnostics).getByTestId('fit-residual-df')).toHaveTextContent('2')
+    expect(await screen.findByTestId('stub-fit-residual-chart')).toHaveTextContent('4 residual points')
+    expect(within(diagnostics).getByTestId('fit-identifiability-screen')).toHaveTextContent(/not a formal .*identifiability test/i)
   })
 
   it('overlays the fitted curve on the chart without persisting anything', async () => {

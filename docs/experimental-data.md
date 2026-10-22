@@ -1,10 +1,10 @@
 # Experimental concentration–time datasets
 
-**Status: Phase 47A and Phase 47B — implemented.** This document is the
+**Status: Phases 47A and 47B plus the initial Phase 47C diagnostics slice — implemented.** This document is the
 contract for measured-dataset import, validation, local storage, inspection and
-`.npex` interchange, plus the optional one-compartment mono-exponential decay
-fit (§10). Phase 47C residual diagnostics, parameter uncertainty and model
-comparison are **not implemented** and are out of scope here.
+`.npex` interchange, the optional one-compartment mono-exponential decay fit
+(§10), and raw-residual/RMSE diagnostics (§11). Formal uncertainty estimation,
+model comparison and AICc are not implemented.
 
 All examples below are synthetic test data, not pharmacological information.
 
@@ -26,8 +26,10 @@ Phase 47A adds a first-class record for **measured concentration–time data**:
 
 **Non-goals.**
 
-- Beyond the Phase 47B mono-exponential fit (§10): no further regression,
-  AUC/Cmax derivation, interpolation, smoothing or diagnostics.
+- No AUC/Cmax derivation, interpolation, smoothing, automated terminal-phase
+  selection or alternative-model regression. Phase 47C adds descriptive raw
+  residuals, RMSE and a clearly limited data-support screen; formal uncertainty
+  and model selection remain deferred.
 - No automatic conversion between time or concentration units.
 - No merging of this store into the drug library, NPSL documents or the
   source-data Layer B `ExperimentalObservation` records.
@@ -493,11 +495,12 @@ browser-local state, use `.npsb`.
   re-import does not invent a new scientific source.
 - **No hidden write.** Import previews are read-only; writes occur only after
   explicit confirmation, through the repository, in validated transactions.
-- **Phase 47B fitting is available; 47C is not.** A one-compartment
-  mono-exponential decay fit exists (§10). Residual diagnostics, uncertainty
-  estimates and model comparison are deliberately absent; adding them will
-  require their own contracts and must not change the stored observations or
-  the `.npex` fidelity rules retroactively.
+- **Derived analysis never rewrites evidence.** Phase 47B fitting (§10) and
+  the initial Phase 47C residual/RMSE diagnostics (§11) are temporary derived
+  views; imports, stored observations, and `.npex` round trips are unchanged.
+  RMSE is descriptive and has no universal pass/fail threshold. Formal
+  identifiability tests, uncertainty estimates and model comparison need
+  additional contracts and assumptions.
 
 ---
 
@@ -505,14 +508,14 @@ browser-local state, use `.npsb`.
 
 | Layer | Representative files | Coverage |
 | --- | --- | --- |
-| Domain | `src/domain/experiments/experimental-dataset.test.ts` | unit dimensions, normalization, names/notes, summary mapping |
+| Domain | `src/domain/experiments/experimental-dataset.test.ts`, `src/domain/experiments/mono-exponential-fit.test.ts`, `src/domain/experiments/mono-exponential-fit-diagnostics.test.ts` | dataset contract, bounded fit/failures, raw residuals/RMSE, row fidelity and limited data-support notes |
 | Schemas | `src/data/schemas/experimentalDatasets.test.ts` | input/record/`.npex` shapes, limits, negative/non-finite rejection, units, duplicate measurement ids |
 | CSV | `src/features/experiments/csvDataset.test.ts` | explicit mapping, RFC 4180 reuse, row-specific errors, qualifiers, duplicates/order, all-or-nothing |
 | `.npex` | `src/data/npex/npex.test.ts` | envelope/version rules, strict shape, duplicate keys, depth/size, round trip, local identity absent |
 | Repository | `src/data/repositories/dexieExperimentalDatasetRepository.test.ts` | CRUD, validation on read/write, corruption reporting, atomicity, optimistic tokens, immutable science, strict timestamp ordering |
 | Database/recovery | `src/data/db/database.test.ts`, `experimentalDatasetRecovery.test.ts`, `archive.test.ts` | v5→v6 preservation, all-store snapshot/restore, legacy absent-store warnings/clearing, rollback |
-| UI | `src/features/experiments/*.test.tsx`, `experimentalDatasetAdapter.test.ts` | import/preview/confirm, table, chart adapter, rename/delete/export/error states |
-| Browser | `e2e/experimentalDatasets.spec.ts`, `e2e/a11y.spec.ts` | real Chromium CSV→chart→`.npex`→re-import, persistence, recovery, narrow layout, axe scans |
+| UI | `src/features/experiments/*.test.tsx`, `src/components/charts/experimentalDatasetAdapter.test.ts`, `src/components/charts/ExperimentalFitResidualChart.test.tsx` | import/preview/confirm, table, observed/fitted chart, residual plot, RMSE and screening states, rename/delete/export/error states |
+| Browser | `e2e/experimentalDatasets.spec.ts`, `e2e/a11y.spec.ts` | real Chromium CSV→chart→`.npex`→re-import, persistence, recovery, fit overlay, residual plot/RMSE/data-support screen, narrow layout and axe scans |
 
 The full matrix and gate commands are maintained in
 [`docs/testing.md`](testing.md).
@@ -581,5 +584,48 @@ different data. Re-fitting an unchanged dataset is deterministic.
 A converged optimization is a numerical result, not evidence that a
 mono-exponential decay describes the data. The model cannot represent a rising
 curve, an absorption phase, a baseline offset or multiple kinetic phases.
-Residual diagnostics, parameter uncertainty, confidence intervals, R² and
-model comparison remain Phase 47C scope and are deliberately absent.
+Raw residuals, RMSE and an explicitly preliminary data-support screen are now
+available in §11. Parameter uncertainty, confidence intervals, R², formal
+identifiability analysis and model comparison remain unimplemented.
+
+
+## 11. Fit quality diagnostics (initial Phase 47C slice)
+
+When a successful fit is available, the page derives one residual for every
+stored measurement:
+
+    residual_i = observed_i − fitted_i
+    RMSE = sqrt(Σ residual_i² / n)
+
+- **Original scale and units.** Residuals and RMSE use the declared concentration
+  unit and the same unweighted least-squares fit on the original concentration
+  scale. Residuals are not log-transformed or standardized.
+- **Row fidelity.** The residual plot contains one marker per measurement,
+  preserves source-row order and duplicate timestamps, and identifies the
+  source row on hover. The horizontal zero line represents a zero residual.
+  The original measurement table remains the record of observed data; neither
+  residuals nor fitted values are written to IndexedDB, .npex or .npsb.
+- **No universal cutoff.** RMSE is a descriptive error magnitude, not a
+  goodness-of-fit verdict. Its interpretation depends on the measurement scale,
+  error process and intended use. The UI intentionally does not color it as
+  pass/fail or infer that a model is scientifically suitable.
+- **Residual degrees of freedom.** The page reports n − 2 for this model's
+  two fitted parameters (reference concentration and decay rate). When the
+  count is zero, it states that there is no residual degree of freedom and
+  does not estimate residual variance.
+- **Preliminary data-support screen.** Boundary estimates (k = 0 or the
+  optimizer's numerical upper bound), fewer than three distinct time points,
+  and zero residual degrees of freedom are called out. This is a transparent
+  screening aid only; three or more time points do not prove practical
+  identifiability, and this screen is not a formal identifiability test.
+- **Still deliberately absent.** No standardized residuals, R², standard
+  errors, confidence intervals, likelihood, alternative-model ranking, AIC or
+  AICc are generated. Model comparison requires multiple candidate models fit
+  to the same observations and a declared error/likelihood model. AICc must not
+  be reported until those assumptions, parameter counts, sample-size limits
+  and failure behaviour are implemented and tested.
+
+Tests use synthetic values only. The diagnostics function is pure and only
+accepts a successful fit; a mismatch between the current measurements and the
+fit's observation count produces a structured failure rather than displaying
+stale or misaligned residuals.
