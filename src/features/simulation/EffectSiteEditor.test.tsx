@@ -107,6 +107,7 @@ describe('effect-site editor', () => {
   it('keeps blank and malformed text editable', async () => {
     const user = userEvent.setup()
     renderView()
+    await fillBaseScenario(user)
     await enableEffectSite(user)
     await user.type(screen.getByTestId('effect-site-ke0'), 'abc')
     await user.click(runButton())
