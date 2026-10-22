@@ -116,6 +116,12 @@ flowchart TD
 6. **Serialization** (NPSL/CSV/`.npex`/`.npsb`) lives in `src/data`, never
    inside components or the engine. Import/export can change without
    touching either.
+7. **Scientific notation is rendered, never typed into copy.** User-facing
+   symbols go through `ScientificText` / `ParameterLabel`, labels come from the
+   shared field metadata, and validation returns identifiers rather than
+   display strings. `notation/no-raw-scientific-notation` (oxlint) enforces
+   this in `npm run lint`. See
+   [docs/scientific-notation.md](scientific-notation.md).
 
 ### Why the data layer is independent
 

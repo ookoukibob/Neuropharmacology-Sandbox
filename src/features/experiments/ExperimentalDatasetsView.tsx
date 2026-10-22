@@ -42,6 +42,7 @@ import {
 } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
+import { ScientificText } from '@/components/scientific/ScientificText'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -571,9 +572,13 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
                   One-compartment mono-exponential decay fit
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  C(t) = C_ref · exp(−k · (t − t_ref)), fitted by unweighted least squares on the
-                  original concentration scale. This is a derived result — it is not saved and does
-                  not change the measurements.
+                  <ScientificText
+                    value={
+                      'C(t) = C_ref · exp(−k · (t − t_ref)), fitted by unweighted least squares ' +
+                      'on the original concentration scale. This is a derived result — it is not ' +
+                      'saved and does not change the measurements.'
+                    }
+                  />
                 </p>
               </div>
               <Button
@@ -591,11 +596,15 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
             {fit === null ? null : fit.ok ? (
               <div className="rounded-md border p-3 text-sm" data-testid="fit-results">
                 <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1">
-                  <dt className="text-muted-foreground">Reference time t_ref</dt>
+                  <dt className="text-muted-foreground">
+                    <ScientificText value="Reference time t_ref" />
+                  </dt>
                   <dd className="font-mono text-xs" data-testid="fit-tref">
                     {formatNumber(fit.tRef)} {dataset.timeUnit}
                   </dd>
-                  <dt className="text-muted-foreground">C_ref at t_ref</dt>
+                  <dt className="text-muted-foreground">
+                    <ScientificText value="C_ref at t_ref" />
+                  </dt>
                   <dd className="font-mono text-xs" data-testid="fit-cref">
                     {formatNumber(fit.cRef)} {dataset.concentrationUnit}
                   </dd>
@@ -1051,8 +1060,12 @@ function ModelComparisonCard({
                 </TableRow>
                 <TableRow>
                   <TableHead scope="row">Equation</TableHead>
-                  <TableCell className="font-mono text-xs">{comparison.models[0].formula}</TableCell>
-                  <TableCell className="font-mono text-xs">{comparison.models[1].formula}</TableCell>
+                  <TableCell className="font-mono text-xs">
+                    <ScientificText value={comparison.models[0].formula} />
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    <ScientificText value={comparison.models[1].formula} />
+                  </TableCell>
                 </TableRow>
                 <TableRow>
                   <TableHead scope="row">A (amplitude)</TableHead>

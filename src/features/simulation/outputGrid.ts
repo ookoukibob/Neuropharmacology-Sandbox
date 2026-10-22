@@ -114,22 +114,25 @@ export function buildOutputGrid(
   interval: number,
   maxSamples: number = MAX_OUTPUT_SAMPLES,
 ): OutputGridResult {
-  const check = (field: OutputGridField, value: number, label: string) => {
+  // Messages deliberately do NOT name the field: the form's error summary
+  // renders the field label (with its notation symbol) from the shared metadata
+  // and then this sentence, so repeating the name here would read twice.
+  const check = (field: OutputGridField, value: number) => {
     if (!Number.isFinite(value)) {
       return {
         ok: false as const,
         code: 'NOT_A_NUMBER' as const,
         field,
-        message: `${label} must be a finite number.`,
+        message: 'Must be a finite number.',
       }
     }
     return null
   }
-  const startError = check('startTime', startTime, 'Start time')
+  const startError = check('startTime', startTime)
   if (startError) return startError
-  const endError = check('endTime', endTime, 'End time')
+  const endError = check('endTime', endTime)
   if (endError) return endError
-  const intervalError = check('outputInterval', interval, 'Output interval')
+  const intervalError = check('outputInterval', interval)
   if (intervalError) return intervalError
 
   if (!(endTime > startTime)) {
@@ -137,7 +140,7 @@ export function buildOutputGrid(
       ok: false,
       code: 'HORIZON_INVALID',
       field: 'endTime',
-      message: `End time (${endTime} h) must be greater than start time (${startTime} h).`,
+      message: `Must be later than the start time (start ${startTime} h, end ${endTime} h).`,
     }
   }
   if (!(interval > 0)) {
@@ -145,7 +148,7 @@ export function buildOutputGrid(
       ok: false,
       code: 'INTERVAL_INVALID',
       field: 'outputInterval',
-      message: `Output interval must be greater than 0 h (got ${interval} h).`,
+      message: `Must be greater than 0 h (got ${interval} h).`,
     }
   }
 

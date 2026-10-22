@@ -167,29 +167,29 @@ export function emptyDraft(): SimulationDraft {
 // Draft errors
 // ---------------------------------------------------------------------------
 
-export type DraftErrorField =
-  | 'startTime'
-  | 'endTime'
-  | 'outputInterval'
-  | 'centralVolume'
-  | 'peripheralVolume'
-  | 'clearance'
-  | 'intercompartmentalClearance'
-  | 'initialCentralAmount'
-  | 'initialPeripheralAmount'
-  | 'solver.absoluteTolerance'
-  | 'solver.relativeTolerance'
-  | 'solver.initialStep'
-  | 'solver.minStep'
-  | 'solver.maxStep'
-  | 'solver.maxSteps'
-
+/**
+ * Draft errors identify a field by path. Static paths reuse the shared
+ * identifiers from `parameterFields` (`SimulationFieldId`), so a control and
+ * its error can never disagree about which field they mean; dosing rows are
+ * dynamic (`events.<key>.<part>`) because row keys are created as the user
+ * adds rows.
+ */
 export interface DraftError {
   readonly code: 'REQUIRED' | 'NOT_A_NUMBER' | 'OUT_OF_RANGE'
-  /** Dotted field path, matching the control's data-field-path. */
+  /**
+   * Dotted field path, matching the control's data-field-path.
+   *
+   * The error carries an IDENTIFIER, never a label: turning it into readable
+   * text (notation symbol included) is the presentation layer's job, via
+   * `fieldSubject` / `<ParameterLabel>`. This keeps validation free of JSX and
+   * leaves exactly one place where a parameter's name is written down.
+   */
   readonly field: string
-  /** Human label used by the error summary. */
-  readonly label: string
+  /**
+   * One sentence about the problem, with no parameter name in it: the summary
+   * already renders the label, so repeating it here would read
+   * "Central volume V_c: Central volume V_c is required."
+   */
   readonly message: string
 }
 
@@ -341,14 +341,13 @@ interface QuantityResult {
 function readQuantity(
   errors: DraftError[],
   field: string,
-  label: string,
   draft: QuantityDraft,
   unitFallback: string,
 ): QuantityResult {
   const unit = draft.unit.trim() === '' ? unitFallback : draft.unit
   const text = draft.value.trim()
   if (text === '') {
-    errors.push({ code: 'REQUIRED', field, label, message: `${label} is required.` })
+    errors.push({ code: 'REQUIRED', field, message: 'A value is required.' })
     return { unit }
   }
   const value = parseNumericText(text)
@@ -356,8 +355,7 @@ function readQuantity(
     errors.push({
       code: 'NOT_A_NUMBER',
       field,
-      label,
-      message: `${label} must be a finite number (got "${draft.value}").`,
+      message: `Must be a finite number (got "${draft.value}").`,
     })
     return { unit }
   }
@@ -367,21 +365,24 @@ function readQuantity(
 function readNumber(
   errors: DraftError[],
   field: string,
-  label: string,
   text: string,
   options: { readonly integer?: boolean } = {},
 ): number | undefined {
   if (text.trim() === '') {
-    errors.push({ code: 'REQUIRED', field, label, message: `${label} is required.` })
+    errors.push({ code: 'REQUIRED', field, message: 'A value is required.' })
     return undefined
   }
   const value = parseNumericText(text)
   if (value === null) {
-    errors.push({ code: 'NOT_A_NUMBER', field, label, message: `${label} must be a finite number (got "${text}").` })
+    errors.push({
+      code: 'NOT_A_NUMBER',
+      field,
+      message: `Must be a finite number (got "${text}").`,
+    })
     return undefined
   }
   if (options.integer === true && !Number.isInteger(value)) {
-    errors.push({ code: 'OUT_OF_RANGE', field, label, message: `${label} must be a whole number (got ${text}).` })
+    errors.push({ code: 'OUT_OF_RANGE', field, message: `Must be a whole number (got ${text}).` })
     return undefined
   }
   return value
@@ -398,7 +399,6 @@ function checkInfusionOrder(errors: DraftError[], row: InfusionRow, start: numbe
     errors.push({
       code: 'OUT_OF_RANGE',
       field: `events.${row.key}.stopTime`,
-      label: `Infusion at row ${row.key}: stop time`,
       message: `An infusion stop time must be later than its start time (start ${start} h, stop ${stop} h).`,
     })
     return false
@@ -411,14 +411,14 @@ function compileEvents(errors: DraftError[], rows: readonly EventRow[]): DosingE
   const events: DosingEvent[] = []
   for (const row of rows) {
     if (row.kind === 'bolus') {
-      const time = readNumber(errors, `events.${row.key}.time`, `Bolus at row ${row.key}: time`, row.time)
-      const amount = readQuantity(errors, `events.${row.key}.amount.value`, `Bolus at row ${row.key}: amount`, row.amount, 'mg')
+      const time = readNumber(errors, `events.${row.key}.time`, row.time)
+      const amount = readQuantity(errors, `events.${row.key}.amount.value`, row.amount, 'mg')
       if (time === undefined || amount.value === undefined) continue
       events.push({ type: 'iv-bolus', eventId: bolusEventId(row.key), time, amount: { value: amount.value, unit: amount.unit } })
     } else {
-      const start = readNumber(errors, `events.${row.key}.startTime`, `Infusion at row ${row.key}: start time`, row.startTime)
-      const stop = readNumber(errors, `events.${row.key}.stopTime`, `Infusion at row ${row.key}: stop time`, row.stopTime)
-      const rate = readQuantity(errors, `events.${row.key}.rate.value`, `Infusion at row ${row.key}: rate`, row.rate, 'mg/h')
+      const start = readNumber(errors, `events.${row.key}.startTime`, row.startTime)
+      const stop = readNumber(errors, `events.${row.key}.stopTime`, row.stopTime)
+      const rate = readQuantity(errors, `events.${row.key}.rate.value`, row.rate, 'mg/h')
       if (start === undefined || stop === undefined || rate.value === undefined) continue
       if (!checkInfusionOrder(errors, row, start, stop)) continue
       const infusionId = infusionIdOf(row.key)
@@ -461,9 +461,9 @@ function compileEffectSiteDraft(
   errors: DraftError[],
 ): EffectSiteInput | undefined {
   const before = errors.length
-  const unboundFraction = readNumber(errors, 'effectSite.unboundFraction', 'Unbound fraction f_u', section.unboundFraction)
-  const ke0 = readNumber(errors, 'effectSite.ke0', 'Equilibration rate k_e0', section.ke0)
-  const kd = readQuantity(errors, 'effectSite.kd', 'Equilibrium dissociation constant K_d', section.kd, 'mg/L')
+  const unboundFraction = readNumber(errors, 'effectSite.unboundFraction', section.unboundFraction)
+  const ke0 = readNumber(errors, 'effectSite.ke0', section.ke0)
+  const kd = readQuantity(errors, 'effectSite.kd', section.kd, 'mg/L')
   // The molecular weight is OPTIONAL in draft terms: the engine requires it
   // only when Kd is declared in a molar unit. Blank stays absent — never 0.
   const molecularWeightText = section.molecularWeight.trim()
@@ -474,8 +474,7 @@ function compileEffectSiteDraft(
       errors.push({
         code: 'NOT_A_NUMBER',
         field: 'effectSite.molecularWeight',
-        label: 'Molecular weight',
-        message: `Molecular weight must be a finite number (got "${section.molecularWeight}").`,
+        message: `Must be a finite number (got "${section.molecularWeight}").`,
       })
     } else {
       molecularWeight = { value: parsed, unit: 'g/mol' }
@@ -496,35 +495,33 @@ function compileEffectSiteDraft(
 export function compileScenario(draft: SimulationDraft): CompileResult {
   const errors: DraftError[] = []
 
-  const centralVolume = readQuantity(errors, 'centralVolume', 'Central volume V_c', draft.centralVolume, 'L')
-  const peripheralVolume = readQuantity(errors, 'peripheralVolume', 'Peripheral volume V_p', draft.peripheralVolume, 'L')
-  const clearance = readQuantity(errors, 'clearance', 'Systemic clearance CL', draft.clearance, 'L/h')
+  const centralVolume = readQuantity(errors, 'centralVolume', draft.centralVolume, 'L')
+  const peripheralVolume = readQuantity(errors, 'peripheralVolume', draft.peripheralVolume, 'L')
+  const clearance = readQuantity(errors, 'clearance', draft.clearance, 'L/h')
   const intercompartmentalClearance = readQuantity(
     errors,
     'intercompartmentalClearance',
-    'Intercompartmental clearance Q',
     draft.intercompartmentalClearance,
     'L/h',
   )
-  const initialCentral = readNumber(errors, 'initialCentralAmount', 'Initial central amount A_c(0)', draft.initialCentralAmount)
-  const initialPeripheral = readNumber(errors, 'initialPeripheralAmount', 'Initial peripheral amount A_p(0)', draft.initialPeripheralAmount)
-  const startTime = readNumber(errors, 'startTime', 'Start time', draft.startTime)
-  const endTime = readNumber(errors, 'endTime', 'End time', draft.endTime)
+  const initialCentral = readNumber(errors, 'initialCentralAmount', draft.initialCentralAmount)
+  const initialPeripheral = readNumber(errors, 'initialPeripheralAmount', draft.initialPeripheralAmount)
+  const startTime = readNumber(errors, 'startTime', draft.startTime)
+  const endTime = readNumber(errors, 'endTime', draft.endTime)
 
   // Output grid: only meaningful once start/end are numbers. The interval is
   // read through the same grid error channel so its message stays specific.
   let grid: OutputGridResult | undefined
   if (startTime !== undefined && endTime !== undefined) {
     if (draft.outputInterval.trim() === '') {
-      errors.push({ code: 'REQUIRED', field: 'outputInterval', label: 'Output interval', message: 'Output interval is required.' })
+      errors.push({ code: 'REQUIRED', field: 'outputInterval', message: 'A value is required.' })
     } else {
       const parsed = parseNumericText(draft.outputInterval)
       if (parsed === null) {
         errors.push({
           code: 'NOT_A_NUMBER',
           field: 'outputInterval',
-          label: 'Output interval',
-          message: `Output interval must be a finite number (got "${draft.outputInterval}").`,
+          message: `Must be a finite number (got "${draft.outputInterval}").`,
         })
       } else {
         grid = buildOutputGrid(startTime, endTime, parsed)
@@ -532,7 +529,6 @@ export function compileScenario(draft: SimulationDraft): CompileResult {
           errors.push({
             code: grid.code === 'NOT_A_NUMBER' ? 'NOT_A_NUMBER' : 'OUT_OF_RANGE',
             field: grid.field,
-            label: grid.field === 'outputInterval' ? 'Output interval' : grid.field === 'endTime' ? 'End time' : 'Start time',
             message: grid.message,
           })
         }
@@ -540,12 +536,12 @@ export function compileScenario(draft: SimulationDraft): CompileResult {
     }
   }
 
-  const maxSteps = readNumber(errors, 'solver.maxSteps', 'Maximum step attempts', draft.solver.maxSteps, { integer: true })
-  const absoluteTolerance = readNumber(errors, 'solver.absoluteTolerance', 'Absolute tolerance', draft.solver.absoluteTolerance)
-  const relativeTolerance = readNumber(errors, 'solver.relativeTolerance', 'Relative tolerance', draft.solver.relativeTolerance)
-  const initialStep = readNumber(errors, 'solver.initialStep', 'Initial step', draft.solver.initialStep)
-  const minStep = readNumber(errors, 'solver.minStep', 'Minimum step', draft.solver.minStep)
-  const maxStep = readNumber(errors, 'solver.maxStep', 'Maximum step', draft.solver.maxStep)
+  const maxSteps = readNumber(errors, 'solver.maxSteps', draft.solver.maxSteps, { integer: true })
+  const absoluteTolerance = readNumber(errors, 'solver.absoluteTolerance', draft.solver.absoluteTolerance)
+  const relativeTolerance = readNumber(errors, 'solver.relativeTolerance', draft.solver.relativeTolerance)
+  const initialStep = readNumber(errors, 'solver.initialStep', draft.solver.initialStep)
+  const minStep = readNumber(errors, 'solver.minStep', draft.solver.minStep)
+  const maxStep = readNumber(errors, 'solver.maxStep', draft.solver.maxStep)
 
   const events = compileEvents(errors, draft.events)
 

@@ -291,13 +291,16 @@ function validateScenario(scenario: SimulationScenario, errors: SimulationError[
   }
 
   const p = scenario.parameters
+  // `label` is PROSE ONLY. It is interpolated into engine error messages,
+  // which are rendered as plain text, so any notation here would leak to the
+  // screen as a literal "V_c". The UI adds the symbol from its own metadata.
   const definitions: readonly ValidatedParameter[] = [
-    { symbol: 'Vc', label: 'Central volume V_c', kind: 'volume', requirement: 'positive', quantity: p?.centralVolume },
-    { symbol: 'Vp', label: 'Peripheral volume V_p', kind: 'volume', requirement: 'positive', quantity: p?.peripheralVolume },
-    { symbol: 'CL', label: 'Systemic clearance CL', kind: 'clearance', requirement: 'non-negative', quantity: p?.clearance },
+    { symbol: 'Vc', label: 'Central volume', kind: 'volume', requirement: 'positive', quantity: p?.centralVolume },
+    { symbol: 'Vp', label: 'Peripheral volume', kind: 'volume', requirement: 'positive', quantity: p?.peripheralVolume },
+    { symbol: 'CL', label: 'Systemic clearance', kind: 'clearance', requirement: 'non-negative', quantity: p?.clearance },
     {
       symbol: 'Q',
-      label: 'Intercompartmental clearance Q',
+      label: 'Intercompartmental clearance',
       kind: 'clearance',
       requirement: 'non-negative',
       quantity: p?.intercompartmentalClearance,

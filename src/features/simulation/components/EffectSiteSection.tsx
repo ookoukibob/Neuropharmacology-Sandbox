@@ -13,6 +13,7 @@ import { ScientificText } from '@/components/scientific/ScientificText'
 import { Label } from '@/components/ui/label'
 import type { EffectSiteDraft } from '../draft'
 import type { DraftError } from '../draft'
+import { SIMULATION_FIELDS } from '../parameterFields'
 import { NumberField, QuantityField } from './fields'
 
 export interface EffectSiteSectionProps {
@@ -58,8 +59,8 @@ export function EffectSiteSection({ draft, errors, onChange }: EffectSiteSection
           <div className="grid gap-3 sm:grid-cols-2">
             <NumberField
               id="effect-site-fu"
-              label="Unbound fraction"
-              symbol="f_u"
+              label={SIMULATION_FIELDS['effectSite.unboundFraction'].label}
+              symbol={SIMULATION_FIELDS['effectSite.unboundFraction'].symbol}
               help="Dimensionless, greater than 0 and at most 1. Never defaulted."
               value={draft.unboundFraction}
               error={errorFor(errors, 'effectSite.unboundFraction')}
@@ -69,8 +70,8 @@ export function EffectSiteSection({ draft, errors, onChange }: EffectSiteSection
             />
             <NumberField
               id="effect-site-ke0"
-              label="Equilibration rate"
-              symbol="k_e0"
+              label={SIMULATION_FIELDS['effectSite.ke0'].label}
+              symbol={SIMULATION_FIELDS['effectSite.ke0'].symbol}
               help="Inverse hours (h⁻¹), the simulation's canonical time unit."
               value={draft.ke0}
               error={errorFor(errors, 'effectSite.ke0')}
@@ -81,8 +82,8 @@ export function EffectSiteSection({ draft, errors, onChange }: EffectSiteSection
           </div>
           <QuantityField
             id="effect-site-kd"
-            label="Equilibrium dissociation constant"
-            symbol="K_d"
+            label={SIMULATION_FIELDS['effectSite.kd'].label}
+            symbol={SIMULATION_FIELDS['effectSite.kd'].symbol}
             value={draft.kd.value}
             unit={draft.kd.unit}
             error={errorFor(errors, 'effectSite.kd')}
@@ -96,7 +97,7 @@ export function EffectSiteSection({ draft, errors, onChange }: EffectSiteSection
           <div className="grid gap-3 sm:grid-cols-2">
             <NumberField
               id="effect-site-mw"
-              label="Molecular weight"
+              label={SIMULATION_FIELDS['effectSite.molecularWeight'].label}
               help="g/mol. Required only when Kd is declared in a molar unit; blank means absent."
               value={draft.molecularWeight}
               error={errorFor(errors, 'effectSite.molecularWeight')}
@@ -106,7 +107,7 @@ export function EffectSiteSection({ draft, errors, onChange }: EffectSiteSection
             />
             <NumberField
               id="effect-site-mw-provenance"
-              label="Molecular-weight provenance"
+              label={SIMULATION_FIELDS['effectSite.molecularWeightProvenance'].label}
               help="Where the value came from. Required with a molar Kd."
               value={draft.molecularWeightProvenance}
               error={errorFor(errors, 'effectSite.molecularWeightProvenance')}

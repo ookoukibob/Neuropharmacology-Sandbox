@@ -1,3 +1,4 @@
+import { ParameterLabel } from '@/components/scientific/ParameterLabel'
 import { ScientificText } from '@/components/scientific/ScientificText'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,7 +15,8 @@ import { editorUnitOptions } from './editorUnits'
 export interface FieldProps {
   readonly id: string
   readonly label: string
-  readonly symbol?: string
+  /** Notation source for the label; `undefined` keeps the label plain. */
+  readonly symbol?: string | undefined
   readonly help?: string
   readonly value: string
   /** `undefined` means "no error"; required so callers must decide explicitly. */
@@ -40,10 +42,7 @@ export function NumberField({
   return (
     <div className="grid gap-1.5" data-field-path={fieldPath}>
       <Label htmlFor={id} className="text-sm">
-        {symbol === undefined ? null : (
-          <ScientificText value={symbol} className="font-mono" />
-        )}{' '}
-        {label}
+        <ParameterLabel label={label} symbol={symbol} />
       </Label>
       {help === undefined ? null : (
         <p className="text-xs text-muted-foreground">
@@ -97,10 +96,7 @@ export function QuantityField({
   return (
     <div className="grid gap-1.5" data-field-path={fieldPath}>
       <Label htmlFor={id} className="text-sm">
-        {symbol === undefined ? null : (
-          <ScientificText value={symbol} className="font-mono" />
-        )}{' '}
-        {label}
+        <ParameterLabel label={label} symbol={symbol} />
       </Label>
       <div className="flex flex-wrap items-start gap-2">
         <Input

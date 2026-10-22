@@ -251,6 +251,25 @@ sections and list indicator, honest "not reported" markers, disagreeing
 measurements kept separate, and an edit → reload cycle that keeps every
 imported field).
 
+### 3a. Scientific-notation guard
+
+Notation is covered three ways, because each one catches a different mistake:
+
+- **Parser tests** (`src/components/scientific/notation.test.ts`) pin what
+  counts as subscript or exponent and prove malformed input fails safe.
+- **DOM tests** (`ParameterLabel.test.tsx`, `ScenarioSections.test.tsx`) assert
+  real `<sub>` elements, that `A_c(0)` keeps `(0)` on the baseline, and that a
+  form label and its validation-summary entry render the same markup.
+- **Static guard tests** (`scripts/notation-lint/*.test.mjs`) run the real
+  oxlint binary with the real plugin config: a fixture of raw notation must
+  produce findings, and a fixture of identifiers, code samples and approved
+  channels must produce none. `parity.test.mjs` keeps the lint allowlist and
+  the parser allowlist identical.
+
+The rule itself runs in `npm run lint`, so `npm test` alone is not the gate:
+CI's "Quality gates" job enforces both. See
+[scientific-notation.md](scientific-notation.md).
+
 ---
 
 ## 4. End-to-end tests (Playwright)

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useRef, useState } from 'react'
+import { ParameterLabel } from '@/components/scientific/ParameterLabel'
 import { ScientificText } from '@/components/scientific/ScientificText'
 import {
   describeSimulationEvent,
@@ -26,6 +27,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { SimulationResult } from '@/engine/simulation/types'
+import { simulationFieldForEngineSymbol } from '../parameterFields'
 
 const LazySimulationChart = lazy(() =>
   import('@/components/charts/SimulationChart').then((mod) => ({ default: mod.SimulationChart })),
@@ -276,6 +278,24 @@ function labelOf(type: SimulationEventMarker['type']): string {
   }
 }
 
+/**
+ * The engine reports a symbol plus a prose label (never notation, because its
+ * label is also interpolated into plain-text error messages). The notation to
+ * display comes from the shared field metadata, so this table and the editor
+ * show the same `V` + <sub>c</sub> markup for the same parameter.
+ */
+function EngineParameterLabel({
+  symbol,
+  label,
+}: {
+  readonly symbol: string
+  readonly label: string
+}) {
+  const definition = simulationFieldForEngineSymbol(symbol)
+  if (definition === undefined) return <>{label}</>
+  return <ParameterLabel label={definition.label} symbol={definition.symbol} />
+}
+
 function Diagnostics({ result }: { readonly result: SimulationResult }) {
   const { solver, massBalance, warnings } = result
   return (
@@ -327,7 +347,7 @@ function Diagnostics({ result }: { readonly result: SimulationResult }) {
             {result.parameters.map((parameter) => (
               <div key={parameter.symbol} className="contents">
                 <dt className="text-muted-foreground">
-                  <ScientificText value={parameter.label} />
+                  <EngineParameterLabel symbol={parameter.symbol} label={parameter.label} />
                 </dt>
                 <dd className="text-right font-mono text-xs">
                   {formatNumber(parameter.canonicalValue)} {parameter.canonicalUnit}

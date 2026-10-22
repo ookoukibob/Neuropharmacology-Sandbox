@@ -268,6 +268,7 @@ assets when you need a reproducible version. See
 | [docs/validation.md](docs/validation.md) | Layered validation and the import pipeline |
 | [docs/data-sources.md](docs/data-sources.md) | On-demand PubChem/ChEMBL retrieval: three-layer model, provenance/licensing, explicit selection and import rules |
 | [docs/experimental-data.md](docs/experimental-data.md) | Measured concentration–time datasets: domain, explicit CSV mapping, `.npex` 1.0.0, storage, UI and recovery |
+| [docs/scientific-notation.md](docs/scientific-notation.md) | One notation renderer, centralized parameter metadata, and the lint rule that keeps raw `V_c` out of the UI |
 | [docs/testing.md](docs/testing.md) | Test strategy, required test matrix, round-trip testing |
 | [docs/releasing.md](docs/releasing.md) | Stable and prerelease procedures for tagged static builds, checks, ZIP + SHA-256 verification |
 | [CHANGELOG.md](CHANGELOG.md) | Versioned release notes and known limitations |

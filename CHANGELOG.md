@@ -6,6 +6,35 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Fixed — scientific notation is rendered through one convention, and the convention is enforced
+
+- **The same defect stopped being fixed per component.** Notation used to exist
+  in two places at once: a form control passed `symbol="V_c"` through the
+  renderer, while the validation layer carried its own hand-written copy of
+  "Central volume V_c" and the error summary printed it verbatim. Both now read
+  one field definition, so a label and the error that points at it cannot
+  disagree.
+- **Labels have a single source of truth.** `src/features/simulation/parameterFields.ts`
+  separates the stable field identifier, the prose name and the notation source.
+  Validation errors carry a field id and a sentence that no longer repeats the
+  parameter name; the UI resolves the label (`<ParameterLabel>`).
+- **`ParameterLabel` is the only place a parameter label is built**, and it
+  exposes a spoken form ("V subscript c") for assistive technologies while the
+  visible markup stays `V<sub>c</sub>`.
+- **Notation left the non-rendering layers.** Engine parameter labels and
+  domain display strings are prose again, so plain-text messages can no longer
+  emit `V_c`. The model-comparison formulas and the mono-exponential fit
+  results (`t_ref`, `C_ref`) are rendered through `ScientificText`.
+- **New lint rule `notation/no-raw-scientific-notation`** (oxlint JS plugin,
+  `scripts/notation-lint/`) rejects raw notation in JSX text, display
+  attributes, display object properties and string children across `src/`, while
+  accepting identifiers (`snake_case`, `PK_KEYS`, `mw_freebase`), code samples
+  (`<code>`/`<pre>`) and the approved `symbol` channel. It runs inside
+  `npm run lint`, which CI already executes.
+- Covered by parser, DOM, metadata, lint-rule and Chromium tests, including
+  fixtures proving a raw `V_c` is rejected and that identifiers are accepted.
+  See [docs/scientific-notation.md](docs/scientific-notation.md).
+
 ### Added — practical identifiability screening for the mono-exponential fit (phase 47C)
 
 - **The fit's own objective is profiled over a documented rate grid.** After a
