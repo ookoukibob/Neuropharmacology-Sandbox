@@ -135,7 +135,7 @@ describe('experimental datasets in .npsb recovery', () => {
     }
   })
 
-  it('warns about an absent experimental-dataset store and empties it on full replacement', async () => {
+  it('restores a genuine 1.0.0 archive with every additive store absent and empties all four', async () => {
     const db = freshDb()
     try {
       await seedAllStores(db)
@@ -143,30 +143,102 @@ describe('experimental datasets in .npsb recovery', () => {
       const exported = await repo.exportRecoveryArchive()
       if (!exported.ok) throw new Error(JSON.stringify(exported.issues))
 
-      // A supported archive written before phase 47A: the array and its
-      // count are both omitted (an array without its count is rejected).
+      // A genuine historical archive declares 1.0.0 and predates all four
+      // additive stores. Removing fields from a 1.1.0 document would not be a
+      // historical archive and is rejected separately below.
       const doc = JSON.parse(exported.text) as Record<string, unknown>
-      delete doc['experimentDatasets']
-      delete (doc['counts'] as Record<string, unknown>)['experimentDatasetRows']
+      doc['backupVersion'] = '1.0.0'
+      const counts = doc['counts'] as Record<string, unknown>
+      for (const store of ['compounds', 'observations', 'scenarios', 'experimentDatasets']) {
+        delete doc[store]
+      }
+      for (const count of [
+        'compoundRows',
+        'observationRows',
+        'scenarioRows',
+        'experimentDatasetRows',
+      ]) {
+        delete counts[count]
+      }
       const legacy = JSON.stringify(doc)
 
       const preview = await repo.previewRecoveryArchive(legacy)
       if (!preview.ok) throw new Error(JSON.stringify(preview.issues))
-      const warning = preview.report.warnings.find(
-        (entry) =>
-          entry.code === 'ARCHIVE_STORE_ABSENT' && entry.message.includes('experimentDatasets'),
+      const absentWarnings = preview.report.warnings.filter(
+        (entry) => entry.code === 'ARCHIVE_STORE_ABSENT',
       )
-      expect(warning).toBeDefined()
-      expect(warning?.message).toContain('Full replacement will leave the local')
+      expect(absentWarnings).toHaveLength(4)
+      expect(absentWarnings.map((entry) => entry.message).join('\n')).toContain(
+        'experimentDatasets',
+      )
+      for (const warning of absentWarnings) {
+        expect(warning.message).toContain('Full replacement will leave the local')
+      }
+      expect(preview.report.counts.compoundRows).toBeUndefined()
+      expect(preview.report.counts.observationRows).toBeUndefined()
+      expect(preview.report.counts.scenarioRows).toBeUndefined()
       expect(preview.report.counts.experimentDatasetRows).toBeUndefined()
 
       const restored = await repo.restoreRecoveryArchive(legacy)
       if (!restored.ok) throw new Error(JSON.stringify(restored.issues))
+      // Full replacement leaves all four absent stores empty.
+      expect(await db.compounds.count()).toBe(0)
+      expect(await db.observations.count()).toBe(0)
+      expect(await db.scenarios.count()).toBe(0)
       expect(await db.experimentDatasets.count()).toBe(0)
       // The stores the archive did carry are still restored.
-      expect(await db.compounds.count()).toBe(1)
-      expect(await db.observations.count()).toBe(1)
-      expect(await db.scenarios.count()).toBe(1)
+      expect(await db.drugs.count()).toBe(1)
+      expect(await db.meta.count()).toBe(1)
+    } finally {
+      await db.delete()
+    }
+  })
+
+  it('rejects malformed current archives before writing and changes no store', async () => {
+    const db = freshDb()
+    try {
+      await seedAllStores(db)
+      const repo = new DexieDrugRepository(db)
+      const exported = await repo.exportRecoveryArchive()
+      if (!exported.ok) throw new Error(JSON.stringify(exported.issues))
+      const original = JSON.parse(exported.text) as Record<string, unknown>
+
+      const missingPair = JSON.parse(JSON.stringify(original)) as Record<string, unknown>
+      delete missingPair['experimentDatasets']
+      delete (missingPair['counts'] as Record<string, unknown>)['experimentDatasetRows']
+
+      const mismatchedPair = JSON.parse(JSON.stringify(original)) as Record<string, unknown>
+      ;(mismatchedPair['counts'] as Record<string, number>)['compoundRows'] = 2
+
+      const cases = [
+        {
+          label: 'missing experimentDatasets pair at 1.1.0',
+          text: JSON.stringify(missingPair),
+          code: 'ARCHIVE_ENVELOPE_SHAPE',
+        },
+        {
+          label: 'compounds array/count mismatch at 1.1.0',
+          text: JSON.stringify(mismatchedPair),
+          code: 'ARCHIVE_COUNT_MISMATCH',
+        },
+      ] as const
+
+      for (const invalid of cases) {
+        const before = await allRows(db)
+        const preview = await repo.previewRecoveryArchive(invalid.text)
+        expect(preview.ok, invalid.label).toBe(false)
+        if (!preview.ok) {
+          expect(preview.issues.map((entry) => entry.code)).toContain(invalid.code)
+        }
+        expect(await allRows(db), `${invalid.label}: preview wrote data`).toEqual(before)
+
+        const restored = await repo.restoreRecoveryArchive(invalid.text)
+        expect(restored.ok, invalid.label).toBe(false)
+        if (!restored.ok) {
+          expect(restored.issues.map((entry) => entry.code)).toContain(invalid.code)
+        }
+        expect(await allRows(db), `${invalid.label}: restore wrote data`).toEqual(before)
+      }
     } finally {
       await db.delete()
     }

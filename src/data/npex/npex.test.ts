@@ -17,15 +17,15 @@ const INPUT: ExperimentalDatasetInput = {
   name: 'Replicate study',
   timeUnit: 'min',
   concentrationUnit: 'µM',
-  notes: 'Keep every observed point.',
+  notes: ' Study-level note measured at 5 min ',
   provenance: {
     source: 'csv',
     fileName: 'replicates.csv',
     importedAt: '2026-01-01T00:00:00.000Z',
   },
   measurements: [
-    { sourceRow: 1, time: 0, concentration: 0, sampleId: 'A', note: 'baseline' },
-    { sourceRow: 2, time: 0, concentration: 0, sampleId: 'A', note: 'exact replicate' },
+    { sourceRow: 1, time: 0, concentration: 0, sampleId: ' S-01 ', note: ' measured at 5 min ' },
+    { sourceRow: 2, time: 0, concentration: 0, sampleId: ' S-01 ', note: 'exact replicate' },
     { sourceRow: 3, time: 1.5, concentration: 2.25, sampleId: 'B' },
     { sourceRow: 4, time: 1.5, concentration: 2.25, sampleId: 'B', note: 'duplicate time' },
   ],

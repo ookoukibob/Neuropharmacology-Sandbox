@@ -84,6 +84,37 @@ describe('DexieExperimentalDatasetRepository', () => {
     ])
   })
 
+  it('stores accepted dataset notes, sample ids and measurement notes exactly', async () => {
+    const exact = input({
+      notes: ' dataset-level note ',
+      measurements: [
+        {
+          sourceRow: 1,
+          time: 0,
+          concentration: 1,
+          sampleId: ' S-01 ',
+          note: ' measured at 5 min ',
+        },
+      ],
+    })
+    const outcome = await repo.create(exact)
+    if (!outcome.ok) throw new Error(outcome.message)
+    expect(outcome.dataset.notes).toBe(' dataset-level note ')
+    expect(outcome.dataset.measurements[0]?.sampleId).toBe(' S-01 ')
+    expect(outcome.dataset.measurements[0]?.note).toBe(' measured at 5 min ')
+
+    const stored = await db.experimentDatasets.get(outcome.dataset.id)
+    expect(stored?.notes).toBe(' dataset-level note ')
+    expect(stored?.measurements[0]?.sampleId).toBe(' S-01 ')
+    expect(stored?.measurements[0]?.note).toBe(' measured at 5 min ')
+
+    const read = await repo.get(outcome.dataset.id)
+    if (!read.ok) throw new Error(read.message)
+    expect(read.dataset.notes).toBe(' dataset-level note ')
+    expect(read.dataset.measurements[0]?.sampleId).toBe(' S-01 ')
+    expect(read.dataset.measurements[0]?.note).toBe(' measured at 5 min ')
+  })
+
   it('rejects invalid fields and writes nothing', async () => {
     const cases: Partial<ExperimentalDatasetInput>[] = [
       { name: '   ' },

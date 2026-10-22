@@ -82,9 +82,12 @@ A measurement declares:
 - optional `sampleId`, at most 200 characters;
 - optional measurement `note`, at most 1,000 characters.
 
-Sample ids and notes have surrounding field whitespace trimmed and an empty
-value becomes absent. Internal text is preserved. Dataset names and notes use
-the same trimming rule; an empty note is omitted rather than stored as `""`.
+Every accepted sample id and note is stored **exactly**, including leading
+and trailing whitespace. Emptiness is decided with a separate whitespace-only
+check: an empty or whitespace-only optional value becomes absent, while a
+non-empty value is never rewritten to its trimmed form. Dataset names are the
+one exception — they are trimmed for display. Length limits apply to the exact
+stored text.
 
 Nothing in the model derives a unit, converts a value to another unit, sorts
 the measurements, detects duplicate timestamps, or removes exact replicates.
@@ -146,7 +149,9 @@ For each data row, the importer:
 4. converts it with `Number`;
 5. rejects a non-finite result or a negative number;
 6. normalizes negative zero to positive zero;
-7. validates optional sample id and note lengths;
+7. validates optional sample id and note lengths, treating only an empty or
+   whitespace-only cell as absent and preserving every other cell exactly
+   (including surrounding whitespace);
 8. keeps the row in source order and assigns `sourceRow = dataRowIndex + 1`.
 
 Rejected examples include blank cells, `<0.1`, `>5`, `BLQ`, `N/A`, `NA`, `-`,
@@ -297,8 +302,10 @@ For a dataset created through the application, `.npex` export followed by
 - each `sourceRow`, numeric time and concentration value, optional sample id
   and optional measurement note.
 
-Numeric equality is equality of the JavaScript binary64 value, not of the
-original textual spelling: `2.0` may serialize as `2`. No arithmetic,
+Text equality is exact: accepted sample ids and notes keep every code unit,
+including leading and trailing whitespace, through parse, import, storage and
+export. Numeric equality is equality of the JavaScript binary64 value, not of
+the original textual spelling: `2.0` may serialize as `2`. No arithmetic,
 rounding, averaging, conversion or reordering occurs. Negative zero is
 normalized to positive zero at the interchange boundary.
 

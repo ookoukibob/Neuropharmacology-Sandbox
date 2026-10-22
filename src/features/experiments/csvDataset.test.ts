@@ -58,6 +58,31 @@ describe('CSV experimental dataset import', () => {
     expect(preview.dataset.measurements).toHaveLength(3)
   })
 
+  it('preserves accepted sample id, measurement note and dataset notes exactly', () => {
+    const preview = buildDatasetFromCsv(
+      table('time,conc,sample,note\n0,1," S-01 "," measured at 5 min "\n'),
+      {
+        ...BASE_MAPPING,
+        notes: ' dataset-level note ',
+        sampleColumn: 2,
+        noteColumn: 3,
+      },
+      'exact-text.csv',
+      IMPORTED_AT,
+    )
+    expect(preview.issues).toEqual([])
+    expect(preview.dataset?.notes).toBe(' dataset-level note ')
+    expect(preview.dataset?.measurements).toEqual([
+      {
+        sourceRow: 1,
+        time: 0,
+        concentration: 1,
+        sampleId: ' S-01 ',
+        note: ' measured at 5 min ',
+      },
+    ])
+  })
+
   it('rejects qualifiers and markers with the exact data row and no dataset', () => {
     const cases = ['<0.1', 'BLQ', 'N/A', '>5', '0.1-0.2', '']
     for (const value of cases) {

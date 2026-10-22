@@ -28,6 +28,7 @@ import {
   hasOwn,
 } from './fidelity'
 import {
+  BACKUP_ADDITIVE_STORES_SINCE,
   BACKUP_FORMAT_ID,
   BACKUP_VERSION,
   MAX_ARCHIVE_BYTES,
@@ -445,6 +446,23 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
+/**
+ * Compare two already-validated semantic versions by numeric components.
+ * `parseRecoveryArchive` uses this only to decide whether the archive's
+ * declared version requires the additive-store pairs; it never infers
+ * historical status from missing data.
+ */
+function versionAtLeast(candidate: string, minimum: string): boolean {
+  const candidateParts = candidate.split('.').map(Number)
+  const minimumParts = minimum.split('.').map(Number)
+  for (let index = 0; index < 3; index += 1) {
+    const candidatePart = candidateParts[index] ?? 0
+    const minimumPart = minimumParts[index] ?? 0
+    if (candidatePart !== minimumPart) return candidatePart > minimumPart
+  }
+  return true
+}
+
 function isIsoDateTime(value: string): boolean {
   return !Number.isNaN(Date.parse(value)) && /T\d{2}:\d{2}:\d{2}/.test(value)
 }
@@ -521,6 +539,7 @@ export function parseRecoveryArchive(text: string): ParseArchiveResult {
   if (!compatibility.ok) {
     return oneIssue({ code: 'ARCHIVE_VERSION', message: compatibility.reason })
   }
+  const additiveStoresRequired = versionAtLeast(version, BACKUP_ADDITIVE_STORES_SINCE)
   // 7. Envelope key set and field types.
   const knownKeys: readonly string[] = [...ENVELOPE_KEYS, ...OPTIONAL_ENVELOPE_KEYS]
   const unknownKeys = Object.keys(root).filter((key) => !knownKeys.includes(key))
@@ -576,8 +595,9 @@ export function parseRecoveryArchive(text: string): ParseArchiveResult {
   }
 
   // 8. Arrays within limits. Core stores are required. Additive stores are
-  // optional for pre-1.1 archives; each is paired with its counts field so an
-  // array and a count can never disagree or silently vanish.
+  // required from 1.1.0 onward, and optional only for a declared pre-1.1
+  // version that predates them. Each present pair must agree; absence is a
+  // property of the declared version, never an inference from missing data.
   const drugsArray = root['drugs']
   const metaArray = root['meta']
   if (!Array.isArray(drugsArray) || !Array.isArray(metaArray)) {
@@ -600,13 +620,19 @@ export function parseRecoveryArchive(text: string): ParseArchiveResult {
     const array = root[spec.store]
     const count = counts[spec.countKey]
     if (array === undefined) {
-      absentStores.push(spec.store)
       if (count !== undefined) {
         return oneIssue({
           code: 'ARCHIVE_COUNT_MISMATCH',
           message: `counts.${spec.countKey} is present but the "${spec.store}" array is absent — the archive is ambiguous`,
         })
       }
+      if (additiveStoresRequired) {
+        return oneIssue({
+          code: 'ARCHIVE_ENVELOPE_SHAPE',
+          message: `backupVersion ${version} requires the "${spec.store}" array and counts.${spec.countKey}; both are absent. Only a genuine pre-${BACKUP_ADDITIVE_STORES_SINCE} archive may omit additive stores, and empty stores must be explicit empty arrays with a zero count`,
+        })
+      }
+      absentStores.push(spec.store)
       additiveArrays.set(spec.store, [])
       continue
     }

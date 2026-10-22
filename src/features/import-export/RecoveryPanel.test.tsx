@@ -252,8 +252,19 @@ describe('RecoveryPanel — restore preview', () => {
 
     const archive = await exportText()
     const doc = JSON.parse(archive) as Record<string, unknown>
-    delete doc['experimentDatasets']
-    delete (doc['counts'] as Record<string, unknown>)['experimentDatasetRows']
+    doc['backupVersion'] = '1.0.0'
+    const counts = doc['counts'] as Record<string, unknown>
+    for (const store of ['compounds', 'observations', 'scenarios', 'experimentDatasets']) {
+      delete doc[store]
+    }
+    for (const count of [
+      'compoundRows',
+      'observationRows',
+      'scenarioRows',
+      'experimentDatasetRows',
+    ]) {
+      delete counts[count]
+    }
     const legacy = JSON.stringify(doc)
 
     render(<ImportExportView />)

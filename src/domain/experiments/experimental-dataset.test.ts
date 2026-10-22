@@ -49,18 +49,25 @@ describe('experimental dataset domain', () => {
     expect(concentrationUnitIssue('')).toBe('A concentration unit is required.')
   })
 
-  it('trims names and notes without inventing values', () => {
+  it('trims names only; notes and sample ids keep exact accepted text', () => {
     expect(normalizeDatasetName('  Study A  ')).toEqual({ ok: true, name: 'Study A' })
     expect(normalizeDatasetName('   ')).toEqual({
       ok: false,
       message: 'A dataset name is required.',
     })
-    expect(normalizeDatasetNotes('  note  ')).toEqual({ ok: true, notes: 'note' })
+    expect(normalizeDatasetNotes('  study note  ')).toEqual({
+      ok: true,
+      notes: '  study note  ',
+    })
     expect(normalizeDatasetNotes('   ')).toEqual({ ok: true, notes: undefined })
     expect(normalizeDatasetNotes(undefined)).toEqual({ ok: true, notes: undefined })
-    expect(normalizeSampleId(' S1 ')).toEqual({ ok: true, sampleId: 'S1' })
+    expect(normalizeSampleId(' S-01 ')).toEqual({ ok: true, sampleId: ' S-01 ' })
+    expect(normalizeSampleId('   ')).toEqual({ ok: true, sampleId: undefined })
     expect(normalizeSampleId('')).toEqual({ ok: true, sampleId: undefined })
-    expect(normalizeMeasurementNote('  note ')).toEqual({ ok: true, note: 'note' })
+    expect(normalizeMeasurementNote(' measured at 5 min ')).toEqual({
+      ok: true,
+      note: ' measured at 5 min ',
+    })
   })
 
   it('builds a list summary without exposing measurements', () => {

@@ -13,6 +13,13 @@
 
 export const BACKUP_FORMAT_ID = 'npsb'
 export const BACKUP_VERSION = '1.1.0'
+/**
+ * First archive format that requires the additive-store arrays and their
+ * counts. Older same-major versions predate those stores and may omit them;
+ * every version at or above this one must represent them explicitly, even
+ * when empty.
+ */
+export const BACKUP_ADDITIVE_STORES_SINCE = '1.1.0'
 export const BACKUP_EXTENSION = '.npsb'
 export const BACKUP_MIME_TYPE = 'application/json;charset=utf-8'
 
@@ -69,7 +76,10 @@ export interface RecoveryCounts {
   readonly readableAtExport: number
   readonly quarantinedAtExport: number
   readonly metaRows: number
-  /** Rows in extension stores. Absent in archives written before each store. */
+  /**
+   * Rows in extension stores. Required from backupVersion 1.1.0 onward;
+   * absent only in genuine pre-1.1.0 archives written before each store.
+   */
   readonly compoundRows?: number
   readonly observationRows?: number
   readonly scenarioRows?: number
@@ -99,8 +109,10 @@ export interface RecoveryArchive {
   readonly meta: readonly RecoveryEntry[]
   /**
    * Additive stores. v1.1.0 archives always emit these arrays (possibly
-   * empty); archives written by older builds may omit them. The parser treats
-   * an absent array as an empty store and warns before full replacement.
+   * empty), and the parser requires the paired arrays/counts for any archive
+   * declaring 1.1.0 or later. Only genuine pre-1.1.0 archives may omit them;
+   * the parser treats that absence as an empty store and warns before full
+   * replacement.
    */
   readonly compounds?: readonly RecoveryEntry[]
   readonly observations?: readonly RecoveryEntry[]

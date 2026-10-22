@@ -145,7 +145,7 @@ Neither path needs to know about the other; tests pin both directions
 | Format discriminator | `"formatId": "npsb"` (exact literal) | Authoritative detection; the extension is a hint only. |
 | Archive version | `"backupVersion"`, semver string | **Independent** of NPSL `formatVersion`/`schemaVersion`; the two version spaces never read or write each other's constants. |
 | Reader constant (implemented) | `BACKUP_VERSION = '1.1.0'` in `src/data/recovery/format.ts` | Must **not** be added to `npsl.ts` or reuse `checkNpslVersions()` (it is hardwired to the NPSL constants); a sibling helper with the same semantics is written for backups. |
-| 1.1.0 additive stores | `compounds`, `observations`, `scenarios`, `experimentDatasets` plus their counts | Added after 1.0.0. Current exports emit every array and count, including empty ones; older archives may omit the pair. |
+| 1.1.0 additive stores | `compounds`, `observations`, `scenarios`, `experimentDatasets` plus their counts | Added in 1.1.0. Every archive declaring 1.1.0 or later must emit every array/count pair, including empty arrays and zero counts. Only a genuine pre-1.1.0 archive may omit a pair. |
 
 **Compatibility rule (same semantics as NPSL §1, separate implementation):**
 an archive is restorable when `backupVersion` and the reader's version have
@@ -158,16 +158,20 @@ reader.
 
 **Envelope strictness.** The top level is the core seven keys of §4 plus
 only the four supported additive store arrays. Any missing core key or
-unknown extra key is rejected (`ARCHIVE_ENVELOPE_SHAPE`). Additive arrays and
-their count fields are optional as a **pair** for compatibility with older
-archives; a one-sided pair is invalid. Current exports always emit all four
-pairs, including empty arrays and zero counts.
+unknown extra key is rejected (`ARCHIVE_ENVELOPE_SHAPE`). For backupVersion
+`1.1.0` and later, all four additive arrays and their count fields are
+required (`ARCHIVE_ENVELOPE_SHAPE` when an array/count pair is absent);
+empty stores must be explicit empty arrays with a zero count. Only archives
+declaring a pre-1.1.0 version that predates the stores may omit a pair, and
+then both members must be absent. A one-sided pair is invalid for every
+version (`ARCHIVE_COUNT_MISMATCH`). Historical status is determined solely by
+the declared version, never inferred from missing data.
 
 ---
 
 ## 4. Envelope and row-entry schema
 
-### 4.1 Top level (core keys required; additive pairs optional)
+### 4.1 Top level (core keys required; additive pairs required from 1.1.0, optional only for declared pre-1.1.0 archives)
 
 | Field | Type | Validation | Meaning |
 | --- | --- | --- | --- |
@@ -175,13 +179,13 @@ pairs, including empty arrays and zero counts.
 | `backupVersion` | string | semver + §3 rule | Archive version |
 | `exportedAt` | string | ISO 8601 date-time | **Informational only** — never written into storage on restore |
 | `storage` | object | exactly `{databaseVersion, persistenceVersion}`, both non-negative integers | **Informational only** — diagnostics/preview warnings (§8.3); never used to skip validation or transform rows |
-| `counts` | object | core `{drugRows, readableAtExport, quarantinedAtExport, metaRows}` plus optional additive counts, non-negative integers; invariants below | Export-time facts of the snapshot |
+| `counts` | object | core `{drugRows, readableAtExport, quarantinedAtExport, metaRows}` plus additive counts required from 1.1.0, non-negative integers; invariants below | Export-time facts of the snapshot |
 | `drugs` | array of entries | ≤ `MAX_DRUG_ROWS` (§12) | Every `drugs` store row, verbatim |
 | `meta` | array of entries | ≤ `MAX_META_ROWS` (§12) | Every `meta` store row, verbatim |
-| `compounds` | array of entries, optional pair | ≤ `MAX_COMPOUND_ROWS` | Every `compounds` store row, verbatim |
-| `observations` | array of entries, optional pair | ≤ `MAX_OBSERVATION_ROWS` | Every `observations` store row, verbatim |
-| `scenarios` | array of entries, optional pair | ≤ `MAX_SCENARIO_ROWS` | Every `scenarios` store row, verbatim |
-| `experimentDatasets` | array of entries, optional pair | ≤ `MAX_EXPERIMENT_DATASET_ROWS` | Every `experimentDatasets` store row, verbatim |
+| `compounds` | array of entries | required from 1.1.0; absent pair allowed only for pre-1.1.0; ≤ `MAX_COMPOUND_ROWS` | Every `compounds` store row, verbatim |
+| `observations` | array of entries | required from 1.1.0; absent pair allowed only for pre-1.1.0; ≤ `MAX_OBSERVATION_ROWS` | Every `observations` store row, verbatim |
+| `scenarios` | array of entries | required from 1.1.0; absent pair allowed only for pre-1.1.0; ≤ `MAX_SCENARIO_ROWS` | Every `scenarios` store row, verbatim |
+| `experimentDatasets` | array of entries | required from 1.1.0; absent pair allowed only for pre-1.1.0; ≤ `MAX_EXPERIMENT_DATASET_ROWS` | Every `experimentDatasets` store row, verbatim |
 
 **Counts invariants (verified at restore, rejection on any violation —
 `ARCHIVE_COUNT_MISMATCH`):**
@@ -190,7 +194,9 @@ pairs, including empty arrays and zero counts.
 - `metaRows === meta.length`
 - `readableAtExport + quarantinedAtExport === drugRows`
 - For each additive store: array and count are both present or both absent;
-  when present, `compoundRows === compounds.length`,
+  a one-sided pair is rejected. Absence is accepted only when the declared
+  backupVersion is pre-1.1.0; 1.1.0+ requires the pair.
+- When present, `compoundRows === compounds.length`,
   `observationRows === observations.length`,
   `scenarioRows === scenarios.length`, and
   `experimentDatasetRows === experimentDatasets.length`.
@@ -278,8 +284,9 @@ fictional placeholders, not pharmacological information.
 The first drug passes `drugSchema` (`tags`/`targets`/`pharmacokinetics`
 have defaults); the second is quarantined by its `origin` yet must survive
 the round trip byte-for-byte, unknown `futureField` included. A 1.1.0 export
-always includes the four additive arrays and their counts; an older archive
-may omit both members of a pair (see §8.3). Example with a sidecar (see §6.3):
+always includes the four additive arrays and their counts; only a genuine
+pre-1.1.0 archive may omit both members of a pair (see §8.3). Example with a
+sidecar (see §6.3):
 
 ```jsonc
 {
@@ -541,9 +548,9 @@ rows get silently lost. A future merge mode requires its own ADR.
 
 Scope: every row of every archived store, **all** metadata rows (not only
 the first — §2.1/5), and all rows of the additive stores. An absent
-additive array/count pair in an older archive means an empty store: full
-replacement clears that local store and preview states so explicitly
-(§8.3). Envelope fields (`formatId`, `backupVersion`, `counts`, `storage`,
+additive array/count pair in a declared pre-1.1.0 archive means an empty
+store: full replacement clears that local store and preview states so
+explicitly (§8.3). A 1.1.0+ archive may not omit the pair. Envelope fields (`formatId`, `backupVersion`, `counts`, `storage`,
 `exportedAt`) are archive metadata and are **not** written into storage.
 The local `revisions` table is not in the archive; restore maintains it
 separately (§8.4).
@@ -577,11 +584,14 @@ Any violation → outcome `rejected`, zero writes:
    supported additive store arrays, correct types
    (`ARCHIVE_ENVELOPE_SHAPE`); `exportedAt` ISO 8601; `storage` exactly
    its two integer fields; counts types, count/array pairing and all
-   invariants (§4.1) → `ARCHIVE_COUNT_MISMATCH`.
+   invariants (§4.1) → `ARCHIVE_COUNT_MISMATCH`. A 1.1.0+ archive missing
+   an additive array/count pair is rejected as `ARCHIVE_ENVELOPE_SHAPE`.
 8. **Arrays:** each present store is an array within its row limit (§12) →
-   `ARCHIVE_LIMIT_EXCEEDED`. An absent additive array must have an absent
-   count; the pair is treated as an empty store and produces one
-   non-blocking `ARCHIVE_STORE_ABSENT` warning.
+   `ARCHIVE_LIMIT_EXCEEDED`. For a declared pre-1.1.0 archive only, an
+   absent additive array must have an absent count; the pair is treated as
+   an empty store and produces one non-blocking
+   `ARCHIVE_STORE_ABSENT` warning. Current versions require explicit empty
+   arrays and zero counts.
 9. **Per entry:** exact entry keys (`ARCHIVE_ENTRY_SHAPE`); `key` string
    (`ARCHIVE_KEY_TYPE`); `value` plain object with own string `id`
    strictly equal to `key` (`ARCHIVE_KEY_MISMATCH`), checked in every
@@ -626,7 +636,8 @@ text it is about to apply (the preview may have run earlier).
   `db.verno` — informational), `ARCHIVE_META_UNREADABLE` (a meta row
   fails the current `libraryMetadataSchema`; it will still be restored as
   stored), `ARCHIVE_STORE_ABSENT` (one warning per additive store omitted
-  by an older archive; full replacement will empty that local store), and
+  by a declared pre-1.1.0 archive; full replacement will empty that local
+  store), and
   `ARCHIVE_EMPTY` (0 drug rows — restoring empties the drug library; it
   does not by itself mean the other stores are empty).
 
@@ -790,8 +801,8 @@ failed — maps to the `committed-refresh-failed` outcome, §8.5).
 
 **Preview warnings (non-blocking):** `RECLASSIFICATION_DIFFERS`,
 `STORAGE_VERSION_DIFFERS`, `ARCHIVE_META_UNREADABLE`,
-`ARCHIVE_STORE_ABSENT` (one per additive store omitted by an older
-archive; replacement will empty that local store), `ARCHIVE_EMPTY`
+`ARCHIVE_STORE_ABSENT` (one per additive store omitted by a declared
+pre-1.1.0 archive; replacement will empty that local store), `ARCHIVE_EMPTY`
 (0 drug rows).
 
 Every error payload carries the store, row key (or entry index) and
@@ -822,7 +833,7 @@ backup" message.
 2. Preview (§8.3): the archive-recorded counts for every store, this
    build's drug classification, the current drug library that will be
    replaced, and any warnings — including one explicit absent-store warning
-   for each store an older archive omits.
+   for each store a declared pre-1.1.0 archive omits.
 3. Explicit acknowledgement checkbox (`recovery-acknowledge`)
    whose **label embeds the numbers**, e.g. "I understand this will
    permanently replace my current data — N records and Q quarantined
@@ -1018,9 +1029,11 @@ changing the ordering rule (validate fully before writing).
 | 18 | Empty archive (`drugRows: 0`) | `ARCHIVE_EMPTY` warning + acknowledgement states the counts; restore yields an empty drug library (and whatever the other store arrays contain) — explicit, not silent |
 | 19 | Receiving build later bumps DB schema | Dexie's upgrade runs on *pre-restore* data; restored rows keep the archive's `persistenceVersion` and are reclassified by current hydration — invalid ones are reported, never backfilled by restore. v6 is additive: opening an existing v5 database preserves every store and adds an empty `experimentDatasets` |
 | 20 | Restore on data the user did not intend to replace | Prevented by §11 (preview counts for every store + embedded acknowledgement), not by the format |
-| 21 | Older archive has no additive store array/count pair | Accepted as empty; one warning per store; full replacement clears that store |
+| 21 | Declared pre-1.1.0 archive has no additive store array/count pair | Accepted as empty; one warning per store; full replacement clears that store |
 | 22 | Additive array present but count absent (or vice versa) | `ARCHIVE_COUNT_MISMATCH` before any write; nothing cleared or restored |
 | 23 | 1.1.0 archive with an empty `experimentDatasets` array and `experimentDatasetRows: 0` | Valid; restore leaves the local dataset store empty; no absent-store warning because the empty store was explicitly recorded |
+| 24 | 1.1.0 archive omits an additive array/count pair entirely | `ARCHIVE_ENVELOPE_SHAPE` before any write; every store and revision unchanged. Historical compatibility is never inferred from missing fields |
+| 25 | 1.1.0 additive array and count disagree | `ARCHIVE_COUNT_MISMATCH` before any write; every store and revision unchanged |
 
 ---
 
@@ -1056,8 +1069,8 @@ Required gates:
 | Malformed JSON | `{`, trailing garbage, `NaN` literal → `ARCHIVE_PARSE` |
 | Duplicate JSON keys | Duplicated at envelope level and nested (plus a negative test: `"key":` appearing *inside* a string value does not trigger) → `ARCHIVE_DUPLICATE_JSON_KEY` with line/column |
 | Version errors | `backupVersion` `"2.0.0"` (major), `"1.2.0"` (newer minor), `"1.0.x"`, `"x"`, missing → `ARCHIVE_VERSION`; `"1.0.0"` and `"1.1.0"` accepted; the pure version-rule helper accepts an older file minor against a higher reader constant and treats patch as free (`1.0.99`, `1.1.99`) |
-| Envelope errors | Missing key, extra key, wrong `formatId`, wrong counts types, each counts invariant broken, one-sided additive array/count pair → `ARCHIVE_ENVELOPE_SHAPE` / `ARCHIVE_NOT_NPSB` / `ARCHIVE_COUNT_MISMATCH` |
-| Extension-store payloads | Additive `compounds`/`observations`/`scenarios`/`experimentDatasets` arrays round-trip verbatim; current exports emit all arrays and counts, including empty ones; a 1.0.0 archive without them remains valid and produces one `ARCHIVE_STORE_ABSENT` warning per missing store |
+| Envelope errors | Missing key, extra key, wrong `formatId`, wrong counts types, each counts invariant broken, one-sided additive array/count pair, current-version missing additive pair → `ARCHIVE_ENVELOPE_SHAPE` / `ARCHIVE_NOT_NPSB` / `ARCHIVE_COUNT_MISMATCH` |
+| Extension-store payloads | Additive `compounds`/`observations`/`scenarios`/`experimentDatasets` arrays round-trip verbatim; current exports emit all arrays and counts, including empty ones; a current 1.1.0 archive omitting a pair is rejected before writes; a genuine 1.0.0 archive without them remains valid and produces one `ARCHIVE_STORE_ABSENT` warning per missing store |
 | Key errors | `key` ≠ `value.id`, missing `id`, duplicate keys (both indices reported) → the §10 codes; empty-string key accepted as a string key; duplicate detection is per store |
 
 ### 15.2 Repository tests (`fake-indexeddb`, real repository)
@@ -1070,6 +1083,7 @@ Required gates:
 | Duplicate/mismatched/non-string keys rejected | Each case → named code, and every store's count/content is unchanged afterwards |
 | Transaction failure mid-write | Force a failure after clears and partial puts (e.g. stub the final `experimentDatasets.put` to throw once) → every store and revisions byte-identical to pre-restore contents; outcome `failed` |
 | Legacy archive clears absent stores | Restore a valid 1.0.0 archive into a database containing compounds, observations, scenarios and datasets → restore succeeds, those four stores are empty, one warning per absent store was previewed, and update/delete tokens for restored drugs are invalidated |
+| Current malformed archives are inert | For a 1.1.0 archive missing an additive pair and for one whose additive array/count disagree: preview and restore both reject with the documented code, and a full snapshot of all six stores plus revisions is byte-identical before and after each attempt |
 | All-store full replacement | Restore a 1.1.0 archive over different contents in every store → exact archive contents in all six stores; no stale row from any store survives |
 | Reclassification on restore | Archive whose rows the current schema quarantines → restore `ok`; `getAllDrugs()` returns them in `quarantine`, stored count unchanged. Archive recorded as quarantined-at-export but valid under current schema → restored as readable, no rejection. Counts-differs warnings, never rejections |
 | Ordinary paths unaffected | `importLibrary` on `.npsb` text → `SCHEMA`/`PARSE` error, zero writes; `replaceLibrary` still rejects invalid rows; `exportLibrary` still excludes quarantine; full existing suites unchanged |
@@ -1139,13 +1153,16 @@ Required gates:
    Chromium. Export is fail-closed on a read error and has no
    signature-compare fallback.
 5. **All-store extension (Phase 47A)** — resolved by extending the same
-   envelope with four optional array/count pairs and bumping
-   `BACKUP_VERSION` to `1.1.0`. Current exports always emit every pair;
-   same-major/older-minor compatibility keeps 1.0.0 archives restorable.
-   Missing pairs produce per-store `ARCHIVE_STORE_ABSENT` warnings and
-   empty the corresponding local store. Restore remains one transaction
-   over all six stores plus revisions; tests inject a failure after
-   earlier stores have been rewritten and assert full rollback.
+   envelope with four array/count pairs and bumping `BACKUP_VERSION` to
+   `1.1.0`. Current exports always emit every pair. For a declared 1.1.0+
+   version the pairs are required, so a missing pair cannot masquerade as a
+   historical archive; only a genuine declared pre-1.1.0 archive may omit
+   them. Those missing pairs produce per-store `ARCHIVE_STORE_ABSENT`
+   warnings and empty the corresponding local store. Restore remains one
+   transaction over all six stores plus revisions; tests inject a failure
+   after earlier stores have been rewritten and assert full rollback, and
+   assert malformed current archives leave every store and revision
+   unchanged.
 
 **Coverage gaps recorded (not silently dropped):** unicode/empty-string
 storage keys and multi-row `meta` archives are not separately

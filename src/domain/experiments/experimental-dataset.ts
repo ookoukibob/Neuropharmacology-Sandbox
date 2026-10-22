@@ -141,54 +141,49 @@ export function normalizeDatasetName(
 }
 
 /**
- * Notes policy: surrounding whitespace is trimmed and an empty note becomes
- * `undefined` (it is optional, never an empty required value).
+ * Notes policy: a whitespace-only note is absent, but every non-empty note is
+ * returned exactly as supplied — surrounding whitespace included — so storing
+ * and re-exporting the dataset cannot alter the text.
  */
 export function normalizeDatasetNotes(
   raw: string | undefined,
 ): { readonly ok: true; readonly notes: string | undefined } | { readonly ok: false; readonly message: string } {
-  if (raw === undefined) return { ok: true, notes: undefined }
-  const notes = raw.trim()
-  if (notes === '') return { ok: true, notes: undefined }
-  if (notes.length > MAX_DATASET_NOTES_LENGTH) {
+  if (raw === undefined || raw.trim() === '') return { ok: true, notes: undefined }
+  if (raw.length > MAX_DATASET_NOTES_LENGTH) {
     return {
       ok: false,
       message: `Dataset notes may be at most ${MAX_DATASET_NOTES_LENGTH} characters.`,
     }
   }
-  return { ok: true, notes }
+  return { ok: true, notes: raw }
 }
 
-/** Same policy for an optional measurement note. */
+/** Same exact-text policy for an optional measurement note. */
 export function normalizeMeasurementNote(
   raw: string | undefined,
 ): { readonly ok: true; readonly note: string | undefined } | { readonly ok: false; readonly message: string } {
-  if (raw === undefined) return { ok: true, note: undefined }
-  const note = raw.trim()
-  if (note === '') return { ok: true, note: undefined }
-  if (note.length > MAX_MEASUREMENT_NOTE_LENGTH) {
+  if (raw === undefined || raw.trim() === '') return { ok: true, note: undefined }
+  if (raw.length > MAX_MEASUREMENT_NOTE_LENGTH) {
     return {
       ok: false,
       message: `A measurement note may be at most ${MAX_MEASUREMENT_NOTE_LENGTH} characters.`,
     }
   }
-  return { ok: true, note }
+  return { ok: true, note: raw }
 }
 
-/** Same policy for an optional replicate/sample identifier. */
+/** Same exact-text policy for an optional replicate/sample identifier. */
 export function normalizeSampleId(
   raw: string | undefined,
 ): { readonly ok: true; readonly sampleId: string | undefined } | { readonly ok: false; readonly message: string } {
-  if (raw === undefined) return { ok: true, sampleId: undefined }
-  const sampleId = raw.trim()
-  if (sampleId === '') return { ok: true, sampleId: undefined }
-  if (sampleId.length > MAX_SAMPLE_ID_LENGTH) {
+  if (raw === undefined || raw.trim() === '') return { ok: true, sampleId: undefined }
+  if (raw.length > MAX_SAMPLE_ID_LENGTH) {
     return {
       ok: false,
       message: `A sample id may be at most ${MAX_SAMPLE_ID_LENGTH} characters.`,
     }
   }
-  return { ok: true, sampleId }
+  return { ok: true, sampleId: raw }
 }
 
 /** Time must resolve to the catalog's `time` dimension. */
