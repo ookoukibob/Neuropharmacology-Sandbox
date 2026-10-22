@@ -19,6 +19,16 @@ import {
   type MonoExponentialProfileResult,
   type ProfileLocalization,
 } from '@/domain/experiments/mono-exponential-profile'
+import {
+  ERROR_MODEL_CAVEAT,
+  ERROR_MODEL_STATEMENT,
+  GAUSSIAN_ADDITIVE_ERROR_MODEL,
+  buildComparisonAicc,
+  compareMonoExponentialModels,
+  type CandidateModel,
+  type ConditionalAicc,
+  type MonoExponentialModelComparisonResult,
+} from '@/domain/experiments/mono-exponential-model-comparison'
 import { formatNumber } from '@/engine/numeric/decimal'
 import {
   AlertTriangle,
@@ -98,8 +108,10 @@ export function ExperimentalDatasetsView({ repository }: ExperimentalDatasetsVie
           the measurements. Residuals and RMSE are descriptive diagnostics. A practical
           identifiability screen profiles the same least-squares objective over a documented set of
           candidate rates: it is a heuristic screening aid, not a proof of structural
-          identifiability and not a confidence region. Formal uncertainty estimates and
-          model-selection metrics are not provided.
+          identifiability and not a confidence region. A two-candidate comparison (decay versus
+          decay with an additive baseline) reports descriptive metrics, and a conditional AICc
+          that becomes available only after you explicitly declare the supported error assumption.
+          No other model-selection metric and no formal uncertainty estimate is provided.
         </p>
       </header>
 
@@ -276,6 +288,13 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
   // dataset rows or the fit change, exactly like the residual diagnostics.
   const fitProfile = useMemo(
     () => (fit === null || !fit.ok ? null : analyzeMonoExponentialProfile(dataset.measurements, fit)),
+    [dataset.measurements, fit],
+  )
+  // The comparison re-fits M1 against the same rows; it is recomputed on the
+  // same triggers and is never persisted. Declaring the error model does not
+  // re-run it (see ModelComparisonCard).
+  const modelComparison = useMemo(
+    () => (fit === null || !fit.ok ? null : compareMonoExponentialModels(dataset.measurements, fit)),
     [dataset.measurements, fit],
   )
   const runFit = (): void => {
@@ -608,7 +627,7 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
                 <p className="mt-2 text-xs text-muted-foreground">
                   A converged fit is a numerical result, not evidence that this decay model suits
                   the data. RMSE and raw residuals are shown below without a pass/fail threshold;
-                  parameter uncertainty and model-selection metrics are not inferred.
+                  parameter uncertainty is not inferred, and no model is chosen for you.
                 </p>
               </div>
             ) : (
@@ -710,6 +729,14 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
               timeUnit={dataset.timeUnit}
               concentrationUnit={dataset.concentrationUnit}
               datasetName={dataset.name}
+            />
+          )}
+
+          {modelComparison !== null && (
+            <ModelComparisonCard
+              comparison={modelComparison}
+              timeUnit={dataset.timeUnit}
+              concentrationUnit={dataset.concentrationUnit}
             />
           )}
 
@@ -892,6 +919,283 @@ function FitProfileDiagnostics({
           <p role="alert" className="text-sm text-destructive" data-testid="fit-profile-error">
             {profile.message} The fit itself is unaffected.
           </p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+
+interface ModelComparisonCardProps {
+  readonly comparison: MonoExponentialModelComparisonResult
+  readonly timeUnit: string
+  readonly concentrationUnit: string
+}
+
+/**
+ * Two-candidate model comparison with a CONDITIONAL AICc.
+ *
+ * The error-model declaration is component state that starts false, so no
+ * information criterion can ever appear from an implicit assumption. Changing
+ * it only recomputes the criterion — neither model is re-fitted.
+ */
+function ModelComparisonCard({
+  comparison,
+  timeUnit,
+  concentrationUnit,
+}: ModelComparisonCardProps) {
+  const [errorModelDeclared, setErrorModelDeclared] = useState(false)
+  const aicc = useMemo(
+    () =>
+      comparison.ok
+        ? buildComparisonAicc(
+            comparison,
+            errorModelDeclared ? GAUSSIAN_ADDITIVE_ERROR_MODEL : null,
+          )
+        : null,
+    [comparison, errorModelDeclared],
+  )
+
+  const unitLabel = (unit: 'concentration' | 'inverse-time'): string =>
+    unit === 'concentration' ? concentrationUnit : `${timeUnit}⁻¹`
+
+  const parameterText = (model: CandidateModel, key: 'A' | 'B' | 'k'): string => {
+    if (!model.ok) return '—'
+    const parameter = model.parameters.find((entry) => entry.key === key)
+    return parameter === undefined ? '—' : `${formatNumber(parameter.value)} ${unitLabel(parameter.unit)}`
+  }
+
+  const metricText = (
+    model: CandidateModel,
+    pick: (fitted: Extract<CandidateModel, { ok: true }>) => string,
+  ): string => (model.ok ? pick(model) : '—')
+
+  const aiccText = (result: ConditionalAicc | undefined): string =>
+    result === undefined ? '—' : result.ok ? formatNumber(result.aicc) : 'unavailable'
+
+  const fittedWarnings: string[] = []
+  if (comparison.ok) {
+    for (const model of comparison.models) {
+      for (const warning of model.ok ? model.warnings : [model.message]) {
+        fittedWarnings.push(`${model.modelId}: ${warning}`)
+      }
+    }
+  }
+  const hasBoundary =
+    comparison.ok && comparison.models.some((model) => model.ok && model.hasBoundaryEstimate)
+
+  return (
+    <Card data-testid="fit-model-comparison">
+      <CardHeader>
+        <CardTitle headingLevel={3}>Model comparison (two candidates)</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          The existing decay fit (M0) is compared with the same decay plus an additive baseline (M1).
+          Both are fitted to the same rows, reference time, observed span and original concentration
+          scale, with the same unweighted objective. A lower residual sum of squares for M1 is
+          expected when a baseline is added — it is not evidence that M1 is the better description of
+          the system, and the baseline is a shape, not a mechanism.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!comparison.ok ? (
+          <p role="alert" className="text-sm text-destructive" data-testid="comparison-error">
+            {comparison.message} The mono-exponential fit above is unaffected.
+          </p>
+        ) : (
+          <>
+            <div className="space-y-2 rounded-md border p-3 text-sm" data-testid="comparison-assumption-block">
+              <h4 className="font-medium">Error-model assumption required for AICc</h4>
+              <p className="text-xs text-muted-foreground">{ERROR_MODEL_STATEMENT}</p>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4"
+                  checked={errorModelDeclared}
+                  data-testid="comparison-assumption"
+                  onChange={(event) => setErrorModelDeclared(event.target.checked)}
+                />
+                <span>I declare this error assumption for this comparison.</span>
+              </label>
+              <p className="text-xs text-muted-foreground" data-testid="comparison-caveat">
+                {ERROR_MODEL_CAVEAT}
+              </p>
+              {errorModelDeclared ? null : (
+                <p className="text-xs text-muted-foreground" data-testid="comparison-aicc-gate">
+                  AICc stays unavailable until this assumption is declared. The descriptive
+                  comparison below does not depend on it.
+                </p>
+              )}
+            </div>
+
+            <Table data-testid="comparison-table">
+              <TableCaption>
+                Descriptive comparison of M0 and M1 on {comparison.observationCount} observations
+                ({comparison.distinctTimeCount} distinct times). Parameter counts include the residual
+                variance where the information criterion is concerned.
+              </TableCaption>
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">Quantity</TableHead>
+                  <TableHead scope="col">M0 · decay</TableHead>
+                  <TableHead scope="col">M1 · decay + baseline</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow>
+                  <TableHead scope="row">Model</TableHead>
+                  <TableCell className="text-xs">{comparison.models[0].label}</TableCell>
+                  <TableCell className="text-xs">
+                    {comparison.models[1].label}
+                    {comparison.models[1].ok ? '' : ' · fit unavailable'}
+                  </TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableHead scope="row">Equation</TableHead>
+                  <TableCell className="font-mono text-xs">{comparison.models[0].formula}</TableCell>
+                  <TableCell className="font-mono text-xs">{comparison.models[1].formula}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableHead scope="row">A (amplitude)</TableHead>
+                  <TableCell className="font-mono text-xs" data-testid="comparison-m0-amplitude">
+                    {parameterText(comparison.models[0], 'A')}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs" data-testid="comparison-m1-amplitude">
+                    {parameterText(comparison.models[1], 'A')}
+                  </TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableHead scope="row">B (baseline)</TableHead>
+                  <TableCell className="text-xs text-muted-foreground">
+                    not a parameter of M0
+                  </TableCell>
+                  <TableCell className="font-mono text-xs" data-testid="comparison-m1-baseline">
+                    {parameterText(comparison.models[1], 'B')}
+                  </TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableHead scope="row">k (decay rate)</TableHead>
+                  <TableCell className="font-mono text-xs">{parameterText(comparison.models[0], 'k')}</TableCell>
+                  <TableCell className="font-mono text-xs">{parameterText(comparison.models[1], 'k')}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableHead scope="row">SSE (residual sum of squares)</TableHead>
+                  <TableCell className="font-mono text-xs" data-testid="comparison-m0-sse">
+                    {metricText(comparison.models[0], (model) =>
+                      `${formatNumber(model.sse)} (${concentrationUnit})²`,
+                    )}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs" data-testid="comparison-m1-sse">
+                    {metricText(comparison.models[1], (model) =>
+                      `${formatNumber(model.sse)} (${concentrationUnit})²`,
+                    )}
+                  </TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableHead scope="row">RMSE</TableHead>
+                  <TableCell className="font-mono text-xs">
+                    {metricText(comparison.models[0], (model) =>
+                      `${formatNumber(model.rmse)} ${concentrationUnit}`,
+                    )}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {metricText(comparison.models[1], (model) =>
+                      `${formatNumber(model.rmse)} ${concentrationUnit}`,
+                    )}
+                  </TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableHead scope="row">Observations used</TableHead>
+                  <TableCell className="font-mono text-xs">
+                    {metricText(comparison.models[0], (model) => String(model.measurementCount))}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {metricText(comparison.models[1], (model) => String(model.measurementCount))}
+                  </TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableHead scope="row">Mean-model parameters</TableHead>
+                  <TableCell className="font-mono text-xs">{comparison.models[0].meanParameterCount}</TableCell>
+                  <TableCell className="font-mono text-xs">{comparison.models[1].meanParameterCount}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableHead scope="row">Total parameters K (incl. variance)</TableHead>
+                  <TableCell className="font-mono text-xs">{comparison.models[0].totalParameterCount}</TableCell>
+                  <TableCell className="font-mono text-xs">{comparison.models[1].totalParameterCount}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableHead scope="row">AICc</TableHead>
+                  <TableCell className="font-mono text-xs" data-testid="comparison-m0-aicc">
+                    {aiccText(aicc?.m0)}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs" data-testid="comparison-m1-aicc">
+                    {aiccText(aicc?.m1)}
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+
+            {aicc !== null && aicc.difference !== null && (
+              <p className="text-xs text-muted-foreground" data-testid="comparison-difference">
+                AICc difference (M1 − M0):{' '}
+                <span className="font-mono" data-testid="comparison-difference-value">
+                  {formatNumber(aicc.difference)}
+                </span>
+                . This is arithmetic only: no threshold, model weight, probability or verdict is
+                applied, and a lower value is relative support within these two candidates under the
+                declared assumption.
+              </p>
+            )}
+
+            {aicc !== null && (!aicc.m0.ok || !aicc.m1.ok) && (
+              <div
+                className="space-y-1 rounded-md border p-3 text-xs text-muted-foreground"
+                role="note"
+                data-testid="comparison-aicc-reasons"
+              >
+                <h4 className="font-medium text-foreground">Why AICc is unavailable</h4>
+                <ul className="list-disc space-y-1 pl-4">
+                  {!aicc.m0.ok && <li>M0: {aicc.m0.message}</li>}
+                  {!aicc.m1.ok && <li>M1: {aicc.m1.message}</li>}
+                </ul>
+              </div>
+            )}
+
+            {fittedWarnings.length > 0 && (
+              <div
+                className="space-y-1 rounded-md border border-amber-500/40 p-3 text-xs text-amber-700"
+                role="status"
+                data-testid="comparison-warnings"
+              >
+                <h4 className="font-medium">Fit warnings from the compared models</h4>
+                <ul className="list-disc space-y-1 pl-4">
+                  {fittedWarnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {hasBoundary && (
+              <p className="text-xs text-muted-foreground" data-testid="comparison-boundary-note">
+                At least one estimate sits on a constraint boundary or is unresolved. Constrained
+                estimates weaken the regular-likelihood assumptions behind information criteria, so
+                treat any criterion shown here as less reliable than the numbers suggest.
+              </p>
+            )}
+
+            <div
+              className="space-y-1 rounded-md border p-3 text-xs text-muted-foreground"
+              role="note"
+              data-testid="comparison-notes"
+            >
+              <h4 className="font-medium text-foreground">Standing limitations of this comparison</h4>
+              <ul className="list-disc space-y-1 pl-4">
+                {comparison.notes.map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+            </div>
+          </>
         )}
       </CardContent>
     </Card>

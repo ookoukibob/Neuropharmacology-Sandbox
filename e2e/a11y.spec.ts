@@ -326,6 +326,14 @@ test('a11y: the experimental dataset import, detail and destructive states pass 
   })
   await scan(page, 'experimental datasets (fit results, residual plot and objective profile)')
 
+  // Phase 47C model comparison: the declared-assumption state is scanned with
+  // the criterion block on screen. This three-row dataset is too small for the
+  // criterion, which is itself a reported state, not a rendering failure.
+  await expect(page.getByTestId('fit-model-comparison')).toBeVisible()
+  await page.getByTestId('comparison-assumption').check()
+  await expect(page.getByTestId('comparison-table')).not.toContainText('NaN')
+  await scan(page, 'experimental datasets (model comparison with declared assumption)')
+
   await page.getByTestId('dataset-rename').click()
   await expect(page.getByTestId('dataset-rename-name')).toBeVisible()
   await scan(page, 'experimental datasets (rename form)')

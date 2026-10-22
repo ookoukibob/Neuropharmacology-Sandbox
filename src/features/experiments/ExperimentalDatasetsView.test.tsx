@@ -604,3 +604,184 @@ describe('practical identifiability screen (phase 47C)', () => {
     expect(screen.getByTestId('fit-results')).toBeInTheDocument()
   })
 })
+
+describe('model comparison and conditional AICc (phase 47C)', () => {
+  const row = (id: string, sourceRow: number, time: number, concentration: number) => ({
+    id,
+    sourceRow,
+    time,
+    concentration,
+  })
+
+  /**
+   * Synthetic decay with a persistent baseline, rounded to two decimals so the
+   * residuals are non-zero (AICc is refused for an exact fit).
+   */
+  const baselineStudy = (): ExperimentalDataset => {
+    const times = [0, 0.5, 1, 2, 3, 5, 7, 9]
+    return storedDataset({
+      name: 'Baseline study',
+      measurements: times.map((time, index) =>
+        row(`b${String(index + 1)}`, index + 1, time, Math.round((10 + 90 * Math.exp(-0.4 * time)) * 100) / 100),
+      ),
+    })
+  }
+
+  const select = async (dataset: ExperimentalDataset): Promise<void> => {
+    repository.rows.set(dataset.id, dataset)
+    renderView()
+    const list = await screen.findByRole('list', { name: 'Saved experimental datasets' })
+    fireEvent.click(within(list).getByRole('button', { name: new RegExp(dataset.name) }))
+    await screen.findByRole('heading', { level: 2, name: dataset.name })
+  }
+
+  const comparisonCell = (testId: string): string =>
+    screen.getByTestId(testId).textContent ?? ''
+
+  it('appears only after a fit and reports both models with their own parameter counts', async () => {
+    await select(baselineStudy())
+    expect(screen.queryByTestId('fit-model-comparison')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('fit-model-comparison')
+
+    // A named table: the caption is its accessible name.
+    const table = within(card).getByRole('table', { name: /Descriptive comparison of M0 and M1/ })
+    expect(within(card).getByText(/M0 · mono-exponential decay/)).toBeInTheDocument()
+    expect(within(card).getByText(/M1 · mono-exponential decay with additive baseline/)).toBeInTheDocument()
+
+    // Mean-model parameters and the variance-inclusive total are both shown.
+    const meanRow = within(table).getByRole('row', { name: /Mean-model parameters/ })
+    expect(meanRow).toHaveTextContent(/2/)
+    expect(meanRow).toHaveTextContent(/3/)
+    const totalRow = within(table).getByRole('row', { name: /Total parameters K/ })
+    expect(totalRow).toHaveTextContent(/3/)
+    expect(totalRow).toHaveTextContent(/4/)
+
+    // M1 carries a baseline parameter; M0 does not.
+    expect(comparisonCell('comparison-m1-baseline')).toMatch(/mg\/L/)
+    expect(comparisonCell('comparison-m0-amplitude')).toMatch(/mg\/L/)
+    expect(comparisonCell('comparison-m0-sse')).toMatch(/mg\/L/)
+
+    // The baseline model explains this shape better, and the UI says that a
+    // lower SSE is not by itself evidence of superiority.
+    const sse0 = Number(comparisonCell('comparison-m0-sse').split(' ')[0])
+    const sse1 = Number(comparisonCell('comparison-m1-sse').split(' ')[0])
+    expect(sse1).toBeLessThan(sse0)
+    expect(card).toHaveTextContent(/not evidence that M1 is the better description/i)
+  })
+
+  it('keeps AICc unavailable until the error assumption is declared', async () => {
+    await select(baselineStudy())
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('fit-model-comparison')
+
+    const assumption = within(card).getByTestId('comparison-assumption')
+    expect(assumption).not.toBeChecked()
+    expect(comparisonCell('comparison-m0-aicc')).toBe('unavailable')
+    expect(comparisonCell('comparison-m1-aicc')).toBe('unavailable')
+    expect(within(card).queryByTestId('comparison-difference')).not.toBeInTheDocument()
+    expect(within(card).getByTestId('comparison-aicc-gate')).toHaveTextContent(
+      /stays unavailable until this assumption is declared/i,
+    )
+    expect(within(card).getByTestId('comparison-aicc-reasons')).toHaveTextContent(
+      /requires an explicitly declared error model/i,
+    )
+    expect(card).not.toHaveTextContent(/NaN/)
+    expect(within(card).getByTestId('comparison-caveat')).toHaveTextContent(
+      /assumption, not evidence/i,
+    )
+  })
+
+  it('reports both criteria once the assumption is declared', async () => {
+    await select(baselineStudy())
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('fit-model-comparison')
+
+    fireEvent.click(within(card).getByTestId('comparison-assumption'))
+
+    const m0 = Number(comparisonCell('comparison-m0-aicc'))
+    const m1 = Number(comparisonCell('comparison-m1-aicc'))
+    expect(Number.isFinite(m0)).toBe(true)
+    expect(Number.isFinite(m1)).toBe(true)
+    expect(comparisonCell('comparison-m0-aicc')).not.toMatch(/NaN|Infinity/)
+    expect(comparisonCell('comparison-m1-aicc')).not.toMatch(/NaN|Infinity/)
+
+    const difference = within(card).getByTestId('comparison-difference')
+    expect(difference).toHaveTextContent(/no threshold/i)
+    expect(difference).toHaveTextContent(/arithmetic/i)
+    const differenceValue = Number(
+      within(card).getByTestId('comparison-difference-value').textContent,
+    )
+    expect(Number.isFinite(differenceValue)).toBe(true)
+    expect(differenceValue).toBeCloseTo(m1 - m0, 3)
+
+    // Withdrawing the declaration removes the criterion again.
+    fireEvent.click(within(card).getByTestId('comparison-assumption'))
+    expect(comparisonCell('comparison-m0-aicc')).toBe('unavailable')
+  })
+
+  it('reports AICc as unavailable when the sample is too small for M1', async () => {
+    // Five rows: M0 (K = 3) leaves one residual degree of freedom for the
+    // correction; M1 (K = 4) does not.
+    const five = storedDataset({
+      name: 'Five point study',
+      measurements: [
+        row('f1', 1, 0, 100),
+        row('f2', 2, 0.5, 83),
+        row('f3', 3, 1, 70),
+        row('f4', 4, 2, 51),
+        row('f5', 5, 3, 39),
+      ],
+    })
+    await select(five)
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('fit-model-comparison')
+    fireEvent.click(within(card).getByTestId('comparison-assumption'))
+
+    expect(comparisonCell('comparison-m0-aicc')).not.toBe('unavailable')
+    expect(comparisonCell('comparison-m1-aicc')).toBe('unavailable')
+    expect(within(card).getByTestId('comparison-aicc-reasons')).toHaveTextContent(
+      /n − K − 1 must be positive/i,
+    )
+    expect(within(card).queryByTestId('comparison-difference')).not.toBeInTheDocument()
+  })
+
+  it('warns about boundary estimates without hiding the comparison', async () => {
+    const flat = storedDataset({
+      name: 'Flat study',
+      measurements: [
+        row('c1', 1, 0, 50),
+        row('c2', 2, 1, 50),
+        row('c3', 3, 2, 50),
+        row('c4', 4, 4, 50),
+        row('c5', 5, 6, 50),
+      ],
+    })
+    await select(flat)
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('fit-model-comparison')
+
+    expect(within(card).getByTestId('comparison-warnings')).toHaveTextContent(/zero-rate boundary/i)
+    expect(within(card).getByTestId('comparison-boundary-note')).toHaveTextContent(
+      /less reliable than the numbers suggest/i,
+    )
+    // The exact fit has no residual variance, so AICc is refused rather than
+    // computed from a substituted epsilon.
+    fireEvent.click(within(card).getByTestId('comparison-assumption'))
+    expect(comparisonCell('comparison-m0-aicc')).toBe('unavailable')
+    expect(within(card).getByTestId('comparison-aicc-reasons')).toHaveTextContent(
+      /residual sum of squares is zero/i,
+    )
+  })
+
+  it('does not write anything to the repository', async () => {
+    await select(baselineStudy())
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('fit-model-comparison')
+    fireEvent.click(within(card).getByTestId('comparison-assumption'))
+    expect(repository.createCalls).toHaveLength(0)
+    expect(repository.updateCalls).toHaveLength(0)
+    expect(repository.deleteCalls).toHaveLength(0)
+  })
+})

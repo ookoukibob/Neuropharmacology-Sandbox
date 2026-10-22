@@ -404,3 +404,78 @@ test('profiles the objective after fitting and degrades safely for sparse data',
     timeout: 30_000,
   })
 })
+
+test('compares M0 with a baseline model and gates AICc on the declared assumption', async ({
+  page,
+}) => {
+  await page.goto('/experiments')
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+
+  // Synthetic decay onto a persistent baseline, rounded to two decimals so the
+  // residuals are non-zero and the criterion is defined.
+  await importTwoColumnCsv(page, {
+    fileName: 'synthetic-47c-baseline.csv',
+    csv:
+      'time,concentration\n' +
+      '0,100\n0.5,83.61\n1,70.32\n2,50.44\n3,37.13\n5,22.24\n7,14.92\n9,11.12\n',
+    name: 'Synthetic 47C baseline',
+  })
+
+  // Nothing is compared before a fit exists.
+  await expect(page.getByTestId('fit-model-comparison')).toHaveCount(0)
+  await page.getByTestId('dataset-fit').click()
+  await expect(page.getByTestId('fit-results')).toBeVisible()
+
+  const card = page.getByTestId('fit-model-comparison')
+  await expect(card).toBeVisible()
+  await expect(page.getByTestId('comparison-table')).toBeVisible()
+
+  // Both candidates report their own parameters, units and counts.
+  await expect(page.getByTestId('comparison-m1-baseline')).toContainText('mg/L')
+  await expect(page.getByTestId('comparison-m0-aicc')).toHaveText('unavailable')
+  await expect(page.getByTestId('comparison-m1-aicc')).toHaveText('unavailable')
+  await expect(page.getByTestId('comparison-aicc-gate')).toContainText(
+    /until this assumption is declared/i,
+  )
+  // No fabricated score anywhere before the declaration.
+  await expect(page.getByTestId('comparison-table')).not.toContainText('NaN')
+
+  // Declaring the assumption makes the criterion available for both models.
+  await page.getByTestId('comparison-assumption').check()
+  const m0Text = (await page.getByTestId('comparison-m0-aicc').textContent()) ?? ''
+  const m1Text = (await page.getByTestId('comparison-m1-aicc').textContent()) ?? ''
+  expect(m0Text).not.toBe('unavailable')
+  expect(m1Text).not.toBe('unavailable')
+  expect(Number.isFinite(Number(m0Text))).toBe(true)
+  expect(Number.isFinite(Number(m1Text))).toBe(true)
+  await expect(page.getByTestId('comparison-difference-value')).toBeVisible()
+  await expect(page.getByTestId('comparison-table')).not.toContainText('NaN')
+
+  // The measurement table is unchanged by the comparison.
+  await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(8)
+})
+
+test('reports AICc as unavailable when the baseline model has too few observations', async ({
+  page,
+}) => {
+  await page.goto('/experiments')
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+
+  // Five rows: M0 (K = 3) leaves room for the correction, M1 (K = 4) does not.
+  await importTwoColumnCsv(page, {
+    fileName: 'synthetic-47c-small.csv',
+    csv: 'time,concentration\n0,100\n0.5,83\n1,70\n2,51\n3,39\n',
+    name: 'Synthetic 47C small sample',
+  })
+
+  await page.getByTestId('dataset-fit').click()
+  await expect(page.getByTestId('fit-model-comparison')).toBeVisible()
+  await page.getByTestId('comparison-assumption').check()
+
+  await expect(page.getByTestId('comparison-m0-aicc')).not.toHaveText('unavailable')
+  await expect(page.getByTestId('comparison-m1-aicc')).toHaveText('unavailable')
+  await expect(page.getByTestId('comparison-aicc-reasons')).toContainText(
+    /n − K − 1 must be positive/i,
+  )
+  await expect(page.getByTestId('comparison-difference')).toHaveCount(0)
+})

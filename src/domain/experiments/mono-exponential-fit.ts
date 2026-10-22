@@ -16,6 +16,7 @@
  * independently to the objective, including exact replicates.
  */
 import type { ExperimentalMeasurement } from './experimental-dataset'
+import { goldenSectionMinimize } from './bounded-minimize'
 
 /**
  * Upper search bound for the dimensionless rate q = k·T.
@@ -29,10 +30,6 @@ export const MAX_DIMENSIONLESS_RATE = 50
 
 /** Coarse scan resolution over [0, MAX_DIMENSIONLESS_RATE]. */
 const COARSE_STEPS = 200
-
-/** Golden-section relative tolerance on q, and its iteration cap. */
-const REFINE_RELATIVE_TOLERANCE = 1e-12
-const REFINE_MAX_ITERATIONS = 200
 
 /** A rate at or below this fraction of the span is reported as k = 0. */
 const ZERO_RATE_EPSILON = 1e-12
@@ -95,10 +92,12 @@ const failure = (code: FitFailureCode, message: string): MonoExponentialFitFailu
 })
 
 /** One normalized observation: unit-free time and scaled concentration. */
-interface NormalizedPoint {
+export interface NormalizedObservation {
   readonly u: number
   readonly c: number
 }
+
+type NormalizedPoint = NormalizedObservation
 
 /**
  * Sum of squared errors at a trial q, with the amplitude solved by variable
@@ -123,39 +122,6 @@ function sseAt(q: number, points: readonly NormalizedPoint[]): { sse: number; cR
   }
   if (!Number.isFinite(sse)) return null
   return { sse, cRef }
-}
-
-/** Golden-section minimisation on a bracketed interval (deterministic). */
-function goldenSection(
-  f: (q: number) => number,
-  lo: number,
-  hi: number,
-): { q: number; value: number } {
-  const invPhi = (Math.sqrt(5) - 1) / 2
-  let a = lo
-  let b = hi
-  let c = b - invPhi * (b - a)
-  let d = a + invPhi * (b - a)
-  let fc = f(c)
-  let fd = f(d)
-  for (let i = 0; i < REFINE_MAX_ITERATIONS; i += 1) {
-    if (Math.abs(b - a) <= REFINE_RELATIVE_TOLERANCE * (Math.abs(a) + Math.abs(b) + 1e-300)) break
-    if (fc <= fd) {
-      b = d
-      d = c
-      fd = fc
-      c = b - invPhi * (b - a)
-      fc = f(c)
-    } else {
-      a = c
-      c = d
-      fc = fd
-      d = a + invPhi * (b - a)
-      fd = f(d)
-    }
-  }
-  const q = (a + b) / 2
-  return { q, value: f(q) }
 }
 
 /**
@@ -263,6 +229,40 @@ function prepareObjective(
 }
 
 /**
+ * The normalized problem a fit is defined on, exposed so a second candidate
+ * model can be fitted to EXACTLY the same rows, reference time, span and
+ * concentration scale (phase 47C model comparison).
+ */
+export interface NormalizedMonoExponentialProblem {
+  readonly tRef: number
+  readonly span: number
+  readonly maxAbsConcentration: number
+  /** One entry per measurement, in the caller's source order. */
+  readonly observations: readonly NormalizedObservation[]
+}
+
+export type MonoExponentialProblemOutcome =
+  | { readonly ok: true; readonly problem: NormalizedMonoExponentialProblem }
+  | { readonly ok: false; readonly code: FitFailureCode; readonly message: string }
+
+/**
+ * Validate rows and derive the shared normalization without fitting anything.
+ *
+ * Codes and messages are the fit's own, so a comparison cannot report a
+ * different reason for the same rejected dataset.
+ */
+export function prepareMonoExponentialProblem(
+  measurements: readonly ExperimentalMeasurement[],
+): MonoExponentialProblemOutcome {
+  const prepared = prepareObjective(measurements)
+  if (!prepared.ok) {
+    return { ok: false, code: prepared.failure.code, message: prepared.failure.message }
+  }
+  const { tRef, span, maxAbsConcentration, points } = prepared.prepared
+  return { ok: true, problem: { tRef, span, maxAbsConcentration, observations: points } }
+}
+
+/**
  * The fit objective as a reusable evaluator (phase 47C).
  *
  * `evaluateDimensionless(q)` is exactly the quantity the optimizer minimises:
@@ -358,8 +358,8 @@ export function fitMonoExponentialDecay(
   const step = MAX_DIMENSIONLESS_RATE / COARSE_STEPS
   const lo = Math.max(0, (bestIndex - 1) * step)
   const hi = Math.min(MAX_DIMENSIONLESS_RATE, (bestIndex + 1) * step)
-  const refined = goldenSection(objective, lo, hi)
-  if (!Number.isFinite(refined.q) || !Number.isFinite(refined.value)) {
+  const refined = goldenSectionMinimize(objective, lo, hi)
+  if (!Number.isFinite(refined.x) || !Number.isFinite(refined.value)) {
     return failure('NON_CONVERGED', 'The rate optimizer did not converge to a finite value.')
   }
 
@@ -367,7 +367,7 @@ export function fitMonoExponentialDecay(
   //    legitimately sit at q = 0 (no decay) or at the numerical upper bound.
   const atZero = objective(0)
   const atUpper = objective(MAX_DIMENSIONLESS_RATE)
-  let qBest = refined.q
+  let qBest = refined.x
   let bestSse = refined.value
   if (atZero <= bestSse) {
     qBest = 0
