@@ -183,7 +183,65 @@ describe('residual spread screen', () => {
     expect(spread.ratio).not.toBeNull()
     expect(spread.ratio as number).toBeLessThan(SPREAD_RATIO_HEURISTIC)
     // The wording must not claim that variance is constant.
-    expect(spread.message).toMatch(/does not establish constant variance/i)
+    expect(spread.message).toMatch(/not evidence that the spread is constant/i)
+  })
+
+  it('discloses an overlap when a fitted value straddles the count-based cut', () => {
+    // Six observations over four distinct fitted values: a count-based split
+    // lands inside the group fitted at 20, so both halves contain it.
+    const residuals: MonoExponentialResidual[] = [
+      { measurementId: 'a', sourceRow: 1, time: 0, observed: 10, fitted: 10, residual: 1 },
+      { measurementId: 'b', sourceRow: 2, time: 0, observed: 10, fitted: 10, residual: -1 },
+      { measurementId: 'c', sourceRow: 3, time: 1, observed: 20, fitted: 20, residual: 3 },
+      { measurementId: 'd', sourceRow: 4, time: 1, observed: 20, fitted: 20, residual: -3 },
+      { measurementId: 'e', sourceRow: 5, time: 2, observed: 20, fitted: 20, residual: 1 },
+      { measurementId: 'f', sourceRow: 6, time: 2, observed: 20, fitted: 20, residual: -1 },
+    ]
+    const spread = screenResidualSpread(residuals)
+    expect(spread.ok).toBe(true)
+    if (!spread.ok) return
+
+    expect(spread.boundaryTies).toBe(true)
+    expect(spread.splitFittedValue).toBe(20)
+    expect(spread.upperFirstFittedValue).toBe(20)
+    expect(spread.splitDisclosure).toMatch(/overlap at the split/i)
+    expect(spread.splitDisclosure).toMatch(/both contain observations fitted at the same value/i)
+    expect(spread.splitDisclosure).toMatch(/count-based/i)
+    expect(spread.splitDisclosure).toMatch(/not two strictly separated/i)
+  })
+
+  it('reports a separated split when no fitted value straddles the cut', () => {
+    const residuals: MonoExponentialResidual[] = [
+      { measurementId: 'a', sourceRow: 1, time: 0, observed: 10, fitted: 10, residual: 1 },
+      { measurementId: 'b', sourceRow: 2, time: 1, observed: 20, fitted: 20, residual: -1 },
+      { measurementId: 'c', sourceRow: 3, time: 2, observed: 30, fitted: 30, residual: 1 },
+      { measurementId: 'd', sourceRow: 4, time: 3, observed: 40, fitted: 40, residual: -1 },
+      { measurementId: 'e', sourceRow: 5, time: 4, observed: 50, fitted: 50, residual: 1 },
+      { measurementId: 'f', sourceRow: 6, time: 5, observed: 60, fitted: 60, residual: -1 },
+    ]
+    const spread = screenResidualSpread(residuals)
+    expect(spread.ok).toBe(true)
+    if (!spread.ok) return
+
+    expect(spread.boundaryTies).toBe(false)
+    expect(spread.splitFittedValue).toBe(30)
+    expect(spread.upperFirstFittedValue).toBe(40)
+    expect(spread.splitDisclosure).toMatch(/separated/i)
+    expect(spread.splitDisclosure).not.toMatch(/overlap/i)
+  })
+
+  it('does not reorder the caller’s residuals when splitting', () => {
+    const residuals: MonoExponentialResidual[] = [
+      { measurementId: 'a', sourceRow: 1, time: 0, observed: 10, fitted: 50, residual: 1 },
+      { measurementId: 'b', sourceRow: 2, time: 1, observed: 20, fitted: 10, residual: -1 },
+      { measurementId: 'c', sourceRow: 3, time: 2, observed: 30, fitted: 40, residual: 1 },
+      { measurementId: 'd', sourceRow: 4, time: 3, observed: 40, fitted: 20, residual: -1 },
+      { measurementId: 'e', sourceRow: 5, time: 4, observed: 50, fitted: 60, residual: 1 },
+      { measurementId: 'f', sourceRow: 6, time: 5, observed: 60, fitted: 30, residual: -1 },
+    ]
+    const order = residuals.map((point) => point.sourceRow)
+    screenResidualSpread(residuals)
+    expect(residuals.map((point) => point.sourceRow)).toEqual(order)
   })
 
   it('reports inconclusive when every residual is exactly zero', () => {

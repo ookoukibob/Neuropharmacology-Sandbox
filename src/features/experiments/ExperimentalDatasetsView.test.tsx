@@ -920,23 +920,29 @@ describe('residual structure diagnostics (phase 47C)', () => {
     await screen.findByTestId('residual-structure')
 
     expect(screen.getByTestId('residual-spread-status-m0')).toHaveTextContent(
-      /visible spread pattern/i,
+      /visible difference in observed mean absolute residual/i,
     )
     const block = screen.getByTestId('residual-spread-m0')
     expect(block).toHaveTextContent('mg/L')
     expect(block).toHaveTextContent(/lower fitted half/)
     expect(block).toHaveTextContent(/upper fitted half/)
-    expect(block).toHaveTextContent(/not a heteroscedasticity test/i)
+    expect(block).toHaveTextContent(/does not establish heteroscedasticity/i)
     const ratio = Number(screen.getByTestId('residual-spread-ratio-m0').textContent)
     expect(Number.isFinite(ratio)).toBe(true)
     expect(ratio).toBeGreaterThanOrEqual(2)
+
+    // Eight distinct fitted values: the cut falls between two of them.
+    const split = screen.getByTestId('residual-spread-split-m0')
+    expect(split).toHaveTextContent(/separated/i)
+    expect(split).not.toHaveTextContent(/overlap/i)
     expect(screen.getByTestId('residual-spread-message-m0')).toHaveTextContent(
       /not a test result/i,
     )
 
     // The criterion's interpretation is caveated, never rewritten.
     const caveat = screen.getByTestId('comparison-spread-caveat')
-    expect(caveat).toHaveTextContent(/visible pattern/i)
+    expect(caveat).toHaveTextContent(/visible difference between the fitted halves/i)
+    expect(caveat).toHaveTextContent(/does not establish that the assumption is false/i)
     expect(caveat).toHaveTextContent(/unchanged/i)
     expect(caveat).toHaveTextContent(/no different assumption has been substituted/i)
   })
@@ -987,6 +993,13 @@ describe('residual structure diagnostics (phase 47C)', () => {
     const ordering = screen.getByTestId('residual-ordering-m0')
     expect(ordering).toHaveTextContent(/sharing a timestamp/i)
     expect(ordering).toHaveTextContent(/6/)
+
+    // Three distinct times produce three distinct fitted values, each shared by
+    // two rows: the count-based cut necessarily lands inside one of them.
+    const split = screen.getByTestId('residual-spread-split-m0')
+    expect(split).toHaveTextContent(/overlap at the split/i)
+    expect(split).toHaveTextContent(/both contain observations fitted at the same value/i)
+    expect(split).toHaveTextContent(/count-based/i)
     expect(screen.getByTestId('stub-fit-residual-chart')).toHaveTextContent('6 residual points')
     expect(screen.getByTestId('residual-fitted-chart-m0')).toHaveTextContent('6 fitted points')
   })

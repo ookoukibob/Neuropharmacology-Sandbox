@@ -1230,10 +1230,12 @@ function ModelComparisonCard({
 
             {spreadConcern.length > 0 && (
               <p className="text-xs text-muted-foreground" data-testid="comparison-spread-caveat">
-                The residual spread screen below found a visible pattern for{' '}
-                {spreadConcern.join(' and ')}. The declared error assumption includes a common
-                variance, so a criterion computed under it is harder to interpret for these data.
-                The values above are unchanged and no different assumption has been substituted.
+                The residual spread screen found a visible difference between the fitted halves for{' '}
+                {spreadConcern.join(' and ')}. That raises a concern about the common-variance part
+                of the declared assumption, but it does not establish that the assumption is false:
+                a mean model missing structure, or a few unusual observations, can produce a similar
+                pattern. The values above are unchanged and no different assumption has been
+                substituted.
               </p>
             )}
 
@@ -1273,9 +1275,10 @@ interface ResidualStructureCardProps {
 }
 
 const SPREAD_STATUS_TEXT: Record<SpreadStatus, string> = {
-  'visible-pattern': 'A visible spread pattern is present in this sample.',
-  'no-visible-pattern': 'No visible spread pattern at the screening resolution used here.',
-  inconclusive: 'Inconclusive: these residuals cannot show a spread pattern.',
+  'visible-pattern':
+    'A visible difference in observed mean absolute residual between the two fitted halves.',
+  'no-visible-pattern': 'No visible difference at the screening resolution used here.',
+  inconclusive: 'Inconclusive: these residuals cannot show a spread difference.',
 }
 
 /**
@@ -1409,38 +1412,45 @@ function ResidualStructureBlock({
         {spread.ok ? (
           <>
             {spread.status === 'inconclusive' ? null : (
-            <dl className="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-3">
-              <div>
-                <dt className="text-muted-foreground">
-                  Mean absolute residual · lower fitted half ({spread.lowerHalf.count})
-                </dt>
-                <dd className="font-mono">
-                  {formatNumber(spread.lowerHalf.meanAbsoluteResidual)} {concentrationUnit}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">
-                  Mean absolute residual · upper fitted half ({spread.upperHalf.count})
-                </dt>
-                <dd className="font-mono">
-                  {formatNumber(spread.upperHalf.meanAbsoluteResidual)} {concentrationUnit}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">Larger ÷ smaller</dt>
-                <dd className="font-mono" data-testid={`residual-spread-ratio-${idSuffix}`}>
-                  {spread.ratio === null ? 'not defined' : formatNumber(spread.ratio)}
-                </dd>
-              </div>
-            </dl>
+              <dl className="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-3">
+                <div>
+                  <dt className="text-muted-foreground">
+                    Mean absolute residual · lower fitted half ({spread.lowerHalf.count})
+                  </dt>
+                  <dd className="font-mono">
+                    {formatNumber(spread.lowerHalf.meanAbsoluteResidual)} {concentrationUnit}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">
+                    Mean absolute residual · upper fitted half ({spread.upperHalf.count})
+                  </dt>
+                  <dd className="font-mono">
+                    {formatNumber(spread.upperHalf.meanAbsoluteResidual)} {concentrationUnit}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Larger ÷ smaller</dt>
+                  <dd className="font-mono" data-testid={`residual-spread-ratio-${idSuffix}`}>
+                    {spread.ratio === null ? 'not defined' : formatNumber(spread.ratio)}
+                  </dd>
+                </div>
+              </dl>
+            )}
+            {spread.status === 'inconclusive' ? null : (
+              <p className="text-xs text-muted-foreground" data-testid={`residual-spread-split-${idSuffix}`}>
+                {spread.splitDisclosure}
+              </p>
             )}
             <p className="text-xs text-muted-foreground" data-testid={`residual-spread-message-${idSuffix}`}>
               {spread.message}
             </p>
             <p className="text-xs text-muted-foreground">
               Screening only: a ratio of about {formatNumber(spread.heuristicRatio)} or more is
-              reported as a visible pattern. It is not a heteroscedasticity test, it carries no
-              p-value, and a small ratio does not establish that the spread is constant.
+              reported as a visible difference. It is a documented convention with no p-value, and
+              a smaller ratio is not evidence that the spread is constant. A difference between the
+              halves can also come from the mean model missing structure, or from a few unusual
+              observations, so this does not establish heteroscedasticity or identify its cause.
             </p>
           </>
         ) : (

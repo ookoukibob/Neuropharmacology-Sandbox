@@ -525,7 +525,7 @@ test('shows residual structure for both fitted models and keeps duplicates separ
 
   // The screen states its heuristic and never claims a test result.
   await expect(page.getByTestId('residual-spread-m0')).toContainText(
-    /not a heteroscedasticity test/i,
+    /does not establish heteroscedasticity/i,
   )
   await expect(page.getByTestId('residual-ordering-m0')).toContainText(/measured time/i)
   await expect(card).not.toContainText('NaN')

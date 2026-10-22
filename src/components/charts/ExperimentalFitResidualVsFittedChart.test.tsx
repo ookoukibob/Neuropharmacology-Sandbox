@@ -3,9 +3,21 @@ import type { MonoExponentialResidual } from '@/domain/experiments/mono-exponent
 import { render, screen } from '@testing-library/react'
 import { ExperimentalFitResidualVsFittedChart } from './ExperimentalFitResidualVsFittedChart'
 
+// The hover content is user-facing output, so the stub exposes the trace's
+// text array verbatim instead of hiding it behind chart internals.
 vi.mock('react-plotly.js', () => ({
-  default: ({ 'aria-label': ariaLabel }: { 'aria-label'?: string }) => (
-    <div data-testid="mock-plot" aria-label={ariaLabel} />
+  default: ({
+    'aria-label': ariaLabel,
+    data,
+  }: {
+    'aria-label'?: string
+    data?: readonly { text?: readonly string[] }[]
+  }) => (
+    <div
+      data-testid="mock-plot"
+      aria-label={ariaLabel}
+      data-hover={(data?.[0]?.text ?? []).join(' | ')}
+    />
   ),
 }))
 
@@ -34,6 +46,31 @@ describe('ExperimentalFitResidualVsFittedChart', () => {
     // The wording must not present the view as a test.
     expect(label).toMatch(/not a test of constant variance/i)
     expect(label).toMatch(/source row/i)
+  })
+
+  it('includes the observed concentration and its unit in every point', () => {
+    const withDistinctObserved: MonoExponentialResidual[] = [
+      { measurementId: 'a', sourceRow: 7, time: 2, observed: 4.2, fitted: 3.9, residual: 0.3 },
+      { measurementId: 'b', sourceRow: 8, time: 3, observed: 2.1, fitted: 2.4, residual: -0.3 },
+    ]
+    render(
+      <ExperimentalFitResidualVsFittedChart
+        residuals={withDistinctObserved}
+        timeUnit="h"
+        concentrationUnit="mg/L"
+        datasetName="Synthetic study"
+      />,
+    )
+    const hover = screen.getByTestId('mock-plot').getAttribute('data-hover') ?? ''
+    // Every point carries the full identity: row, time, observed, fitted, residual.
+    expect(hover).toMatch(/Source row: 7/)
+    expect(hover).toMatch(/Measured time: 2 h/)
+    expect(hover).toMatch(/Observed: 4\.2 mg\/L/)
+    expect(hover).toMatch(/Fitted: 3\.9 mg\/L/)
+    expect(hover).toMatch(/Residual \(observed − fitted\): 0\.3 mg\/L/)
+    // The second point keeps its own observed value; the array is not shared.
+    expect(hover).toMatch(/Source row: 8/)
+    expect(hover).toMatch(/Observed: 2\.1 mg\/L/)
   })
 
   it('keeps a model label and a custom test id for a second instance', () => {

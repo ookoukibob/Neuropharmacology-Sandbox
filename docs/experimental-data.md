@@ -1044,11 +1044,21 @@ A conservative, descriptive screen for a spread that changes with the fitted
 level:
 
 1. The observations are split into two halves of the **fitted** range by a
-   deterministic count-based split (a copy of the indices is sorted; the stored
-   rows are never reordered). Rows with identical fitted values may fall on
-   both sides of the cut, and that is stated rather than hidden.
+   deterministic **count-based** split: a copy of the indices is sorted by
+   fitted value and divided by position, so the stored rows are never
+   reordered.
 2. The mean absolute residual of each half is reported, with the group counts.
 3. The screen compares the larger mean with the smaller one.
+
+**The split is a cut through the sample, not two natural groups.** Because it
+is count-based it can land inside a run of identical fitted values — which
+happens routinely when several rows share a timestamp, since they share a
+fitted value too. The result therefore reports both edges of the cut
+(`splitFittedValue`, `upperFirstFittedValue`) and a `boundaryTies` flag:
+when the two edges are equal, the section says explicitly that the groups
+**overlap at the split** and that this is not two strictly separated
+fitted-value ranges. When they differ, it says the groups are separated while
+still noting that the boundary is arbitrary.
 
 | Status | Condition |
 | --- | --- |
@@ -1062,31 +1072,43 @@ identical so the fitted range cannot be split, or when a fitted value or
 residual is not finite. The residuals themselves remain available in all three
 cases — only the screen is withheld.
 
-**The constants are screening conventions, not tests.** A twofold ratio is
-large relative to the sampling variability of a three-point mean absolute
-residual, so it avoids flagging ordinary scatter; six observations is the
-smallest sample that gives two halves worth comparing. Neither is a universal
-threshold, neither carries a p-value, and a ratio below the trigger does not
-establish constant variance. Both numbers are shown next to the finding so the
-reader can judge the evidence directly.
+**What the screen actually measures.** It compares the observed mean absolute
+residual of two groups of rows in this one dataset. That is a difference
+between two sample summaries — nothing more. It does not estimate a variance,
+does not establish heteroscedasticity, and does not identify the cause of a
+difference: a mean model that misses structure, a level shift, or a few
+unusual observations can all widen one half.
+
+**The constants are screening conventions, not tests.** The twofold ratio is a
+deliberately coarse trigger chosen so that ordinary scatter in a small sample
+is not flagged; it is not derived from a sampling distribution and carries no
+probability statement. Six observations is the smallest sample that gives two
+halves worth comparing. Neither is a universal threshold, and a ratio below the
+trigger is not evidence that the spread is constant. Both means, both counts
+and the ratio are shown next to the finding so the reader can judge the
+evidence directly.
 
 ### 14.5 How this relates to the conditional AICc
 
-The declared error model includes a **common variance**. A visible spread
-pattern is therefore evidence that this part of the assumption is not
-consistent with the sample.
+The declared error model includes a **common variance**. A visible difference
+between the two halves therefore raises a concern about that part of the
+assumption for these data — but it does not establish that the assumption is
+false. Mean-model misspecification, a level shift or a few unusual
+observations can widen one half without any change in the error variance, and a
+two-group summary cannot separate those explanations.
 
 The application responds in exactly one way: the comparison section displays a
-caveat naming the models whose screen found a pattern and stating that the
-criterion is harder to interpret for these data. It **does not**:
+caveat naming the models whose screen found a visible difference and stating
+that the criterion is harder to interpret for these data, while saying that the
+pattern does not establish that the assumption is false. It **does not**:
 
 - change, recompute or hide the criterion;
 - silently substitute a weighted or different error model;
 - treat the screen as proof that the assumption is wrong.
 
 A patternless screen changes nothing either: AICc stays conditional on the
-declared assumption, and the absence of a visible pattern is not evidence that
-the assumption holds. Neither outcome creates a winner, a verdict or an
+declared assumption, and the absence of a visible difference is not evidence
+that the assumption holds. Neither outcome creates a winner, a verdict or an
 automatic model choice.
 
 ### 14.6 What these views cannot establish

@@ -46,6 +46,14 @@ export function ExperimentalFitResidualVsFittedChart({
         (point) =>
           'Source row: ' +
           String(point.sourceRow) +
+          '<br>Measured time: ' +
+          String(point.time) +
+          ' ' +
+          timeUnit +
+          '<br>Observed: ' +
+          String(point.observed) +
+          ' ' +
+          concentrationUnit +
           '<br>Fitted: ' +
           String(point.fitted) +
           ' ' +
@@ -53,11 +61,7 @@ export function ExperimentalFitResidualVsFittedChart({
           '<br>Residual (observed − fitted): ' +
           String(point.residual) +
           ' ' +
-          concentrationUnit +
-          '<br>Measured at: ' +
-          String(point.time) +
-          ' ' +
-          timeUnit,
+          concentrationUnit,
       ),
       hovertemplate: '%{text}<extra></extra>',
     },
@@ -109,7 +113,7 @@ export function ExperimentalFitResidualVsFittedChart({
           modelSuffix +
           '. Each marker is one stored observation: the horizontal axis is the fitted concentration in ' +
           concentrationUnit +
-          ', the vertical axis is observed minus fitted concentration in the same unit, and the horizontal zero line is a perfect prediction. A widening or narrowing cloud describes this sample only; it is not a test of constant variance. Source row, measurement time and values are available on hover.'
+          ', the vertical axis is observed minus fitted concentration in the same unit, and the horizontal zero line is a perfect prediction. A widening or narrowing cloud describes this sample only; it is not a test of constant variance. Source row, measured time, observed value, fitted value and residual are available on hover, each with its unit.'
         }
       />
     </div>

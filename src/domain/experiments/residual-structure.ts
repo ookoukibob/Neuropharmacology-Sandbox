@@ -52,13 +52,13 @@ export const SPREAD_SCREEN_MIN_PER_HALF = 3
 
 /**
  * Ratio of mean absolute residuals between the two halves that the screen
- * reports as a visible spread pattern.
+ * reports as a visible difference.
  *
- * Rationale: a factor of two is large relative to the sampling variability of a
- * three-point mean absolute residual, so it is a deliberately coarse trigger
- * that avoids flagging ordinary scatter. It is a HEURISTIC screening
- * convention, not a test threshold, and the underlying means are always
- * reported so the reader can judge the evidence directly.
+ * Rationale: it is a deliberately coarse trigger, chosen so that ordinary
+ * scatter in a small sample is not flagged. It is NOT derived from a sampling
+ * distribution, it carries no probability statement, and no claim is made that
+ * a ratio below it means the variances are equal. Both underlying means are
+ * always reported so the reader can judge the evidence directly.
  */
 export const SPREAD_RATIO_HEURISTIC = 2
 
@@ -90,8 +90,21 @@ export interface ResidualSpreadFinding {
   /** larger mean ÷ smaller mean; null when the smaller mean is exactly zero. */
   readonly ratio: number | null
   readonly heuristicRatio: number
-  /** Boundary between the halves: the largest fitted value in the lower half. */
+  /** Largest fitted value in the lower half — the lower edge of the cut. */
   readonly splitFittedValue: number
+  /** Smallest fitted value in the upper half — the upper edge of the cut. */
+  readonly upperFirstFittedValue: number
+  /**
+   * True when a fitted value straddles the cut: the lower half's largest
+   * fitted value equals the upper half's smallest. The two groups then
+   * OVERLAP at that value instead of forming two strictly separated ranges.
+   */
+  readonly boundaryTies: boolean
+  /**
+   * Plain-language statement of how the split landed, including the overlap
+   * when it occurs. Always present, so the grouping is never implicit.
+   */
+  readonly splitDisclosure: string
 }
 
 export type ResidualSpreadUnavailableCode =
@@ -161,7 +174,7 @@ const MODEL_LABELS: Record<ResidualStructureModelId, string> = {
 function standingNotes(): readonly string[] {
   return [
     'Residuals are observed concentration minus fitted concentration, in the declared concentration unit. The zero line is a perfect prediction, not a target.',
-    'A visible pattern suggests the model misses structure in these data: curvature, a level shift, or residuals that grow with the fitted value. It does not identify the cause.',
+    'A visible pattern suggests the model misses structure in these data: curvature, a level shift, or residuals that grow with the fitted value. It does not identify the cause, and it does not establish that the error variance changes with the fitted value.',
     'A patternless plot is consistent with the declared error model but does not establish it. These are descriptions of one dataset, not tests of normality, independence or constant variance.',
     'No autocorrelation, independence test or effective-sample-size adjustment is computed. Observations are not guaranteed to be independent, equally spaced or complete, so temporal dependence cannot be assessed from the available metadata.',
   ]
@@ -273,6 +286,10 @@ export function screenResidualSpread(
       ratio: null,
       heuristicRatio: SPREAD_RATIO_HEURISTIC,
       splitFittedValue: fittedMin,
+      upperFirstFittedValue: fittedMax,
+      boundaryTies: false,
+      splitDisclosure:
+        'No split was formed: every residual is zero, so there are no groups to compare.',
     }
   }
 
@@ -315,6 +332,15 @@ export function screenResidualSpread(
   const upperMean = meanAbsolute(upperIndices)
   const splitPoint = residuals[lowerIndices[lowerIndices.length - 1] ?? 0]
   const splitFittedValue = splitPoint === undefined ? fittedMin : splitPoint.fitted
+  const upperPoint = residuals[upperIndices[0] ?? 0]
+  const upperFirstFittedValue = upperPoint === undefined ? fittedMax : upperPoint.fitted
+  // A count-based cut can land inside a group of identical fitted values, so
+  // the same fitted value can appear on both sides. Say so rather than imply
+  // two separated ranges.
+  const boundaryTies = splitFittedValue === upperFirstFittedValue
+  const splitDisclosure = boundaryTies
+    ? 'The two groups overlap at the split: both contain observations fitted at the same value. The cut is count-based, so this is not two strictly separated fitted-value ranges.'
+    : 'The two groups are separated: the lower half ends below the upper half\'s first fitted value. The cut is still count-based rather than a natural boundary in the data.'
 
   let ratio: number | null
   let direction: SpreadDirection
@@ -340,14 +366,14 @@ export function screenResidualSpread(
   const halfDescription =
     direction === 'wider-at-low-fitted' ? 'the lower half of the fitted range' : 'the higher half of the fitted range'
   const message = visible
-    ? 'Absolute residuals are wider in ' +
+    ? 'The observed mean absolute residual is larger in ' +
       halfDescription +
-      ' than in the other half' +
+      ' than in the other' +
       (ratio === null
-        ? ', where they are exactly zero'
-        : ' by a factor of about ' + ratio.toFixed(2)) +
-      '. That is a visible spread pattern worth noting, not a test result.'
-    : 'The two halves of the fitted range show no visible difference in absolute residual spread at the screening resolution used here. This does not establish constant variance.'
+        ? ', where it is exactly zero'
+        : ', by a factor of about ' + ratio.toFixed(2)) +
+      '. That describes these two groups in this sample; it is not a test result and does not identify why they differ.'
+    : 'The two halves of the fitted range differ in observed mean absolute residual by less than the screening ratio. That is not evidence that the spread is constant.'
 
   return {
     ok: true,
@@ -359,6 +385,9 @@ export function screenResidualSpread(
     ratio,
     heuristicRatio: SPREAD_RATIO_HEURISTIC,
     splitFittedValue,
+    upperFirstFittedValue,
+    boundaryTies,
+    splitDisclosure,
   }
 }
 
