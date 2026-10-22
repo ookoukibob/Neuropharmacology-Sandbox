@@ -60,6 +60,12 @@ export type FitFailureCode =
   | 'NON_CONVERGED'
   | 'NON_FINITE'
 
+export type MonoExponentialFitFailure = {
+  readonly ok: false
+  readonly code: FitFailureCode
+  readonly message: string
+}
+
 export type MonoExponentialFitResult =
   | {
       readonly ok: true
@@ -82,7 +88,7 @@ export type MonoExponentialFitResult =
       readonly message: string
     }
 
-const failure = (code: FitFailureCode, message: string): MonoExponentialFitResult => ({
+const failure = (code: FitFailureCode, message: string): MonoExponentialFitFailure => ({
   ok: false,
   code,
   message,
@@ -153,17 +159,34 @@ function goldenSection(
 }
 
 /**
- * Fit the constrained mono-exponential decay model to measured observations.
- *
- * Every measurement is an independent contribution to an unweighted
- * least-squares objective on the ORIGINAL concentration scale (no log
- * transform), so zero concentrations are valid observations.
+ * The normalized problem the fit is defined on: the reference time and span,
+ * the concentration scale, and one unit-free observation per measurement.
  */
-export function fitMonoExponentialDecay(
+interface NormalizedObjective {
+  readonly tRef: number
+  readonly span: number
+  readonly maxAbsConcentration: number
+  readonly points: readonly NormalizedPoint[]
+}
+
+/**
+ * Validate the rows and derive the normalized problem. This is the single
+ * definition of "the objective" — the fit and the Phase 47C profile screening
+ * both go through it, so a diagnostic can never be computed against a
+ * different objective than the one that produced the estimate.
+ *
+ * Errors keep their original order, codes and messages.
+ */
+function prepareObjective(
   measurements: readonly ExperimentalMeasurement[],
-): MonoExponentialFitResult {
+):
+  | { readonly ok: true; readonly prepared: NormalizedObjective }
+  | { readonly ok: false; readonly failure: MonoExponentialFitFailure } {
   if (measurements.length === 0) {
-    return failure('NO_MEASUREMENTS', 'The dataset has no measurements to fit.')
+    return {
+      ok: false,
+      failure: failure('NO_MEASUREMENTS', 'The dataset has no measurements to fit.'),
+    }
   }
 
   let tRef = Number.POSITIVE_INFINITY
@@ -174,20 +197,35 @@ export function fitMonoExponentialDecay(
     // boundary must never throw on a malformed element (null, undefined, a
     // primitive, or an object missing a field). TypeScript types are erased.
     if (measurement === null || typeof measurement !== 'object') {
-      return failure('INVALID_MEASUREMENT', 'A measurement is not an object.')
+      return {
+        ok: false,
+        failure: failure('INVALID_MEASUREMENT', 'A measurement is not an object.'),
+      }
     }
     const { time, concentration } = measurement as { time?: unknown; concentration?: unknown }
     if (typeof time !== 'number' || typeof concentration !== 'number') {
-      return failure(
-        'INVALID_MEASUREMENT',
-        'A measurement is missing a numeric time or concentration.',
-      )
+      return {
+        ok: false,
+        failure: failure(
+          'INVALID_MEASUREMENT',
+          'A measurement is missing a numeric time or concentration.',
+        ),
+      }
     }
     if (!Number.isFinite(time) || !Number.isFinite(concentration)) {
-      return failure('INVALID_MEASUREMENT', 'A measurement contains a non-finite time or concentration.')
+      return {
+        ok: false,
+        failure: failure(
+          'INVALID_MEASUREMENT',
+          'A measurement contains a non-finite time or concentration.',
+        ),
+      }
     }
     if (time < 0 || concentration < 0) {
-      return failure('NEGATIVE_VALUE', 'Times and concentrations must be non-negative.')
+      return {
+        ok: false,
+        failure: failure('NEGATIVE_VALUE', 'Times and concentrations must be non-negative.'),
+      }
     }
     if (time < tRef) tRef = time
     if (time > tMax) tMax = time
@@ -196,16 +234,22 @@ export function fitMonoExponentialDecay(
 
   const span = tMax - tRef
   if (!(span > 0)) {
-    return failure(
-      'NO_TIME_SPAN',
-      'The dataset has a single distinct time, so a decay rate is not identifiable.',
-    )
+    return {
+      ok: false,
+      failure: failure(
+        'NO_TIME_SPAN',
+        'The dataset has a single distinct time, so a decay rate is not identifiable.',
+      ),
+    }
   }
   if (maxAbsConcentration === 0) {
-    return failure(
-      'ALL_ZERO_CONCENTRATIONS',
-      'Every measured concentration is zero, so a decay rate is not identifiable.',
-    )
+    return {
+      ok: false,
+      failure: failure(
+        'ALL_ZERO_CONCENTRATIONS',
+        'Every measured concentration is zero, so a decay rate is not identifiable.',
+      ),
+    }
   }
 
   // Scale by the largest concentration so extreme magnitudes cannot overflow
@@ -214,6 +258,78 @@ export function fitMonoExponentialDecay(
     u: (measurement.time - tRef) / span,
     c: measurement.concentration / maxAbsConcentration,
   }))
+
+  return { ok: true, prepared: { tRef, span, maxAbsConcentration, points } }
+}
+
+/**
+ * The fit objective as a reusable evaluator (phase 47C).
+ *
+ * `evaluateDimensionless(q)` is exactly the quantity the optimizer minimises:
+ * the residual sum of squares at a fixed dimensionless rate `q = k·span`, with
+ * the amplitude re-solved in closed form by the same non-negative variable
+ * projection the fit uses. Both `sse` and `cRef` are returned in the
+ * dataset's original units, so they are directly comparable with the fitted
+ * `sse`/`cRef`: `fit.sse` is the same quantity as
+ * `evaluateDimensionless(fit.k · span).sse`, up to floating-point resolution.
+ *
+ * A `null` return means the evaluation could not be completed (a non-finite
+ * or negative trial rate, or a non-finite intermediate). Callers must report
+ * that gap explicitly and must never substitute an interpolated or plausible
+ * value for it.
+ */
+export interface MonoExponentialObjectiveEvaluator {
+  readonly tRef: number
+  readonly span: number
+  readonly maxAbsConcentration: number
+  evaluateDimensionless(q: number): { readonly sse: number; readonly cRef: number } | null
+}
+
+export type MonoExponentialObjectiveOutcome =
+  | { readonly ok: true; readonly objective: MonoExponentialObjectiveEvaluator }
+  | { readonly ok: false; readonly code: FitFailureCode; readonly message: string }
+
+export function createMonoExponentialObjective(
+  measurements: readonly ExperimentalMeasurement[],
+): MonoExponentialObjectiveOutcome {
+  const prepared = prepareObjective(measurements)
+  if (!prepared.ok) {
+    return { ok: false, code: prepared.failure.code, message: prepared.failure.message }
+  }
+  const { tRef, span, maxAbsConcentration, points } = prepared.prepared
+  const scale = maxAbsConcentration * maxAbsConcentration
+  return {
+    ok: true,
+    objective: {
+      tRef,
+      span,
+      maxAbsConcentration,
+      evaluateDimensionless(q: number) {
+        if (!Number.isFinite(q) || q < 0) return null
+        const evaluated = sseAt(q, points)
+        if (evaluated === null) return null
+        const sse = evaluated.sse * scale
+        const cRef = evaluated.cRef * maxAbsConcentration
+        if (!Number.isFinite(sse) || !Number.isFinite(cRef)) return null
+        return { sse, cRef }
+      },
+    },
+  }
+}
+
+/**
+ * Fit the constrained mono-exponential decay model to measured observations.
+ *
+ * Every measurement is an independent contribution to an unweighted
+ * least-squares objective on the ORIGINAL concentration scale (no log
+ * transform), so zero concentrations are valid observations.
+ */
+export function fitMonoExponentialDecay(
+  measurements: readonly ExperimentalMeasurement[],
+): MonoExponentialFitResult {
+  const preparation = prepareObjective(measurements)
+  if (!preparation.ok) return preparation.failure
+  const { tRef, span, maxAbsConcentration, points } = preparation.prepared
 
   const objective = (q: number): number => {
     const evaluated = sseAt(q, points)

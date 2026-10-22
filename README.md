@@ -213,6 +213,7 @@ dependency-ordered roadmap lives in [docs/architecture.md](docs/architecture.md)
 | Phase 47A — experimental measured-data foundation: explicit CSV and `.npex` import, validated local dataset storage, ordered table, rename/delete, `.npex` round-trip and all-store `.npsb` 1.1.0 recovery | done |
 | Phase 47B — constrained mono-exponential fit of selected measured data with bounded optimizer, structured failures and temporary fitted curve | done |
 | Phase 47C initial slice — raw residual plot, RMSE, residual degrees of freedom and explicit data-support screening | implemented; formal uncertainty and model comparison remain deferred |
+| Phase 47C identifiability slice — practical screening of the fit's own least-squares objective over a documented rate grid: localized/broad/boundary/sparse classification, near-minimum band, boundary proximity in model-response terms, and explicit limitations; not a likelihood profile or a structural-identifiability proof | implemented; model comparison is the next deferred increment |
 
 The only remaining audit verification gap is **NV-2**: no authentic historical
 user database has been available for migration testing. Synthetic legacy

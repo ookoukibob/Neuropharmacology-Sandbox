@@ -1,10 +1,11 @@
 # Experimental concentration–time datasets
 
-**Status: Phases 47A and 47B plus the initial Phase 47C diagnostics slice — implemented.** This document is the
+**Status: Phases 47A and 47B plus the first two Phase 47C slices — implemented.** This document is the
 contract for measured-dataset import, validation, local storage, inspection and
 `.npex` interchange, the optional one-compartment mono-exponential decay fit
-(§10), and raw-residual/RMSE diagnostics (§11). Formal uncertainty estimation,
-model comparison and AICc are not implemented.
+(§10), raw-residual/RMSE diagnostics (§11), and the practical
+identifiability screen (§12). Formal uncertainty estimation, model comparison
+and AICc are not implemented.
 
 All examples below are synthetic test data, not pharmacological information.
 
@@ -495,9 +496,10 @@ browser-local state, use `.npsb`.
   re-import does not invent a new scientific source.
 - **No hidden write.** Import previews are read-only; writes occur only after
   explicit confirmation, through the repository, in validated transactions.
-- **Derived analysis never rewrites evidence.** Phase 47B fitting (§10) and
-  the initial Phase 47C residual/RMSE diagnostics (§11) are temporary derived
-  views; imports, stored observations, and `.npex` round trips are unchanged.
+- **Derived analysis never rewrites evidence.** Phase 47B fitting (§10), the
+  first Phase 47C residual/RMSE diagnostics (§11) and the Phase 47C objective
+  profile (§12) are temporary derived views; imports, stored observations, and
+  `.npex` round trips are unchanged.
   RMSE is descriptive and has no universal pass/fail threshold. Formal
   identifiability tests, uncertainty estimates and model comparison need
   additional contracts and assumptions.
@@ -508,14 +510,14 @@ browser-local state, use `.npsb`.
 
 | Layer | Representative files | Coverage |
 | --- | --- | --- |
-| Domain | `src/domain/experiments/experimental-dataset.test.ts`, `src/domain/experiments/mono-exponential-fit.test.ts`, `src/domain/experiments/mono-exponential-fit-diagnostics.test.ts` | dataset contract, bounded fit/failures, raw residuals/RMSE, row fidelity and limited data-support notes |
+| Domain | `src/domain/experiments/experimental-dataset.test.ts`, `src/domain/experiments/mono-exponential-fit.test.ts`, `src/domain/experiments/mono-exponential-fit-diagnostics.test.ts`, `src/domain/experiments/mono-exponential-profile.test.ts` | dataset contract, bounded fit/failures, raw residuals/RMSE, row fidelity and limited data-support notes, and the objective profile (localized/broad/boundary/sparse/invalid/degenerate cases) |
 | Schemas | `src/data/schemas/experimentalDatasets.test.ts` | input/record/`.npex` shapes, limits, negative/non-finite rejection, units, duplicate measurement ids |
 | CSV | `src/features/experiments/csvDataset.test.ts` | explicit mapping, RFC 4180 reuse, row-specific errors, qualifiers, duplicates/order, all-or-nothing |
 | `.npex` | `src/data/npex/npex.test.ts` | envelope/version rules, strict shape, duplicate keys, depth/size, round trip, local identity absent |
 | Repository | `src/data/repositories/dexieExperimentalDatasetRepository.test.ts` | CRUD, validation on read/write, corruption reporting, atomicity, optimistic tokens, immutable science, strict timestamp ordering |
 | Database/recovery | `src/data/db/database.test.ts`, `experimentalDatasetRecovery.test.ts`, `archive.test.ts` | v5→v6 preservation, all-store snapshot/restore, legacy absent-store warnings/clearing, rollback |
-| UI | `src/features/experiments/*.test.tsx`, `src/components/charts/experimentalDatasetAdapter.test.ts`, `src/components/charts/ExperimentalFitResidualChart.test.tsx` | import/preview/confirm, table, observed/fitted chart, residual plot, RMSE and screening states, rename/delete/export/error states |
-| Browser | `e2e/experimentalDatasets.spec.ts`, `e2e/a11y.spec.ts` | real Chromium CSV→chart→`.npex`→re-import, persistence, recovery, fit overlay, residual plot/RMSE/data-support screen, narrow layout and axe scans |
+| UI | `src/features/experiments/*.test.tsx`, `src/components/charts/experimentalDatasetAdapter.test.ts`, `src/components/charts/ExperimentalFitResidualChart.test.tsx`, `src/components/charts/ExperimentalFitProfileChart.test.tsx` | import/preview/confirm, table, observed/fitted chart, residual plot, RMSE and screening states, objective-profile chart labelling and empty/invalid-candidate states, rename/delete/export/error states |
+| Browser | `e2e/experimentalDatasets.spec.ts`, `e2e/a11y.spec.ts` | real Chromium CSV→chart→`.npex`→re-import, persistence, recovery, fit overlay, residual plot/RMSE/data-support screen, objective profile after fitting plus its sparse-data and stale-fit states, narrow layout and axe scans |
 
 The full matrix and gate commands are maintained in
 [`docs/testing.md`](testing.md).
@@ -585,8 +587,9 @@ A converged optimization is a numerical result, not evidence that a
 mono-exponential decay describes the data. The model cannot represent a rising
 curve, an absorption phase, a baseline offset or multiple kinetic phases.
 Raw residuals, RMSE and an explicitly preliminary data-support screen are now
-available in §11. Parameter uncertainty, confidence intervals, R², formal
-identifiability analysis and model comparison remain unimplemented.
+available in §11, and an objective-shape screen in §12. Parameter uncertainty,
+confidence intervals, R², formal identifiability analysis and model comparison
+remain unimplemented.
 
 
 ## 11. Fit quality diagnostics (initial Phase 47C slice)
@@ -623,9 +626,189 @@ stored measurement:
   AICc are generated. Model comparison requires multiple candidate models fit
   to the same observations and a declared error/likelihood model. AICc must not
   be reported until those assumptions, parameter counts, sample-size limits
-  and failure behaviour are implemented and tested.
+  and failure behaviour are implemented and tested. The objective-shape screen
+  in §12 is a practical screening aid and adds no probabilistic quantity.
 
 Tests use synthetic values only. The diagnostics function is pure and only
 accepts a successful fit; a mismatch between the current measurements and the
 fit's observation count produces a structured failure rather than displaying
 stale or misaligned residuals.
+
+## 12. Practical identifiability screen (Phase 47C, second slice)
+
+After a **successful** fit the page also profiles the fit's own objective over
+candidate decay rates, to describe whether that objective localizes the rate
+or leaves many rates nearly equivalent. It is an additional diagnostic: the
+fit, its estimator, its stopping rule and its reported parameters are
+unchanged.
+
+### 12.1 What is actually profiled
+
+The fitted model has **one** parameter in its nonlinear search. Writing
+`T = max(t) − min(t)` and `q = kT`, the objective at a trial rate is
+
+    RSS(k) = Σ_i [ c_i − C_ref(k) · exp(−k (t_i − t_ref)) ]²
+    C_ref(k) = max(0, Σ_i c_i g_i / Σ_i g_i²),   g_i = exp(−k (t_i − t_ref))
+
+The amplitude is **concentrated out** by the same non-negative variable
+projection the optimizer uses — it is not held fixed, and it is not a second
+grid dimension. The screened quantity is therefore a *profile of the
+least-squares objective* in the single rate parameter, which is exactly the
+objective the estimator minimizes.
+
+Both modules go through one shared normalization (`prepareObjective` in
+`mono-exponential-fit.ts`, exposed as `createMonoExponentialObjective`), so the
+diagnostic can never be computed against a different objective, a different
+scaling, or a different `t_ref` than the one that produced the estimate.
+
+The estimate and its `sse` are reported **verbatim**. The screen never
+re-optimizes and never substitutes a candidate rate for the estimate. The
+optimizer stops on a relative tolerance, so a candidate rate can occasionally
+evaluate a few ulps *below* the reported `sse`; that difference is numerical
+and is never used to replace the reported result.
+
+### 12.2 The evaluation grid
+
+Candidate rates are evaluated over the same admissible interval as the fit,
+`q ∈ [0, 50]` (`k ∈ [0, 50/T]`). The grid is **deliberately non-uniform**:
+
+| Segment | `q` range | Step | Points |
+| --- | --- | --- | --- |
+| Dense | 0 – 10 | 1/12 | 121 |
+| Sparse | 11 – 50 | 1 | 40 |
+
+The non-uniformity is a **display decision, not a scientific claim**: the
+reported estimate never comes from this grid, and the whole admissible
+interval is still covered so a flat tail or an estimate at the numerical cap
+stays visible. Denser sampling where a decay of practical interest lives keeps
+the near-minimum region legible instead of compressing it into the first
+fraction of a 0–50 axis.
+
+Each evaluation costs `O(n)` for `n` stored rows, so one screen is
+`O(161 · n)` — linear in the dataset and independent of row order.
+
+### 12.3 How the shape is described
+
+The near-minimum band is the set of evaluated rates whose objective is within
+a documented relative increase over the estimate's own value:
+
+    RSS(k) ≤ RSS(k̂) · (1 + 0.5)
+
+**Why this one and not the improvement over `k = 0`.** A tolerance scaled by
+the attainable improvement is dominated by the strongest residual in the
+dataset — a single outlier at the reference time makes almost every rate look
+equivalent. The relative-increase form is local to the minimum and asks a
+question about the fit itself: *how much worse does the residual get if the
+rate is forced away?*
+
+**It is a heuristic, and it is documented as one.** A 50 % increase in a sum of
+squares is a ≈ 22 % increase in residual magnitude (`√1.5 ≈ 1.22`), so rates
+that worsen the unweighted residual by about a fifth or more are treated as
+distinguishable. It carries **no coverage probability**; with a declared error
+model it would not correspond to any particular interval either. The
+coefficient lives in `NEAR_MINIMUM_RSS_FRACTION` with this rationale.
+
+The classification is then:
+
+| `localization` | Condition |
+| --- | --- |
+| `boundary-zero-rate` | The estimate is exactly at `k = 0` |
+| `boundary-upper-rate` | The estimate reached the optimizer's numerical cap |
+| `localized` | Band width ≤ 10 % of the admissible interval (`BROAD_BAND_FRACTION`), or the band is narrower than the grid step |
+| `broad` | Band width > 10 % of the admissible interval: many rates are nearly equivalent |
+| `indeterminate` | The band is truncated by a bound, too few distinct times exist, or no improvement over `k = 0` was found |
+
+A band narrower than the grid step is reported as `narrower-than-grid` and
+classified `localized`: the gap only means the objective rises steeply on both
+sides of the estimate. A band **truncated by a bound** is classified
+`indeterminate` instead, because its width is not a measure of the objective's
+shape.
+
+### 12.4 Boundary proximity
+
+Two different, individually justified tests are used — no universal
+"identifiability threshold" is introduced:
+
+- **Lower bound.** `q` is the decay exponent across the whole observed span, so
+  the fitted model predicts a fractional decline of `1 − e^(−q)`. At
+  `q < 0.02` that decline is under ≈ 2 %, and the estimate is reported as
+  *close to the zero-rate boundary*. The threshold therefore states a property
+  of the fitted curve rather than a distance in parameter space.
+- **Upper bound.** At 98 % of the numerical cap the exponential has fallen to
+  `e^(−49) ≈ 5e−22`, so the objective is numerically identical to its value at
+  the cap either way. `q ≥ 49` is reported inside the unresolvable band; the
+  exact-cap warning still comes from the fit itself.
+
+A distance measured as a fraction of the 0–50 search interval would be
+misleading here: `q = 1` is 2 % of that interval yet describes 63 % decay
+across the window — an ordinary, well-supported rate.
+
+### 12.5 Data sufficiency
+
+The screen needs at least **three distinct measured times** (`MINIMUM_DISTINCT_TIMES`,
+matching the §11 note). Below that, residual patterns cannot separate a wrong
+shape from noise, so no shape classification is reported even when the band is
+narrow. Replicate rows at the same time increase `n` and the residual degrees
+of freedom but not the distinct-time count, and they remain separate
+observations everywhere.
+
+### 12.6 Failed evaluations are reported, never filled in
+
+A candidate that cannot be evaluated — its rate is not representable for this
+time span, or an intermediate is non-finite — is returned as an explicit failed
+point with a reason (`NON_FINITE_RATE`, `NON_FINITE_OBJECTIVE`). The screen
+counts them, states the count, and never interpolates, clamps or drops them
+silently. The chart omits them; the summary says how many of the candidates are
+unavailable. If *no* candidate can be evaluated, the screen returns a
+structured failure and the UI shows it as a state rather than as a number.
+
+### 12.7 What this screen is not
+
+- **Not a structural-identifiability analysis.** Structural identifiability is a
+  property of the model structure given perfect data. This screen is a property
+  of one objective on one dataset. Passing it proves nothing structural.
+- **Not a likelihood profile.** A sum-of-squares profile becomes a likelihood
+  profile only under a declared error model; none is declared. The UI and the
+  chart label say "residual sum of squares" and state explicitly that this is
+  not a likelihood or profile likelihood.
+- **Not a confidence interval, standard error, or coverage statement.** No
+  probabilistic quantity is produced.
+- **Not a model comparison.** Only this model's own rate parameterization is
+  evaluated. No AIC, AICc, F-test, likelihood-ratio test or alternative model
+  appears.
+- **Not a verdict.** There is no pass/fail badge, no R², and no claim that a low
+  RMSE or a narrow band proves the model appropriate.
+
+The unweighted objective also assumes that every observation is equally
+uncertain on the original concentration scale. That assumption is not tested
+here and is listed among the screen's standing limitations wherever it is
+shown.
+
+### 12.8 How it is displayed
+
+The screen appears as its own card in the selected-dataset view, **only after a
+successful fit** — never before one, and never against a failed fit. It shows:
+
+- the classification in plain language, with no colour-coded verdict;
+- the number of candidate rates evaluated and how many were unavailable;
+- the near-minimum band as an interval in the dataset's declared reciprocal
+  time unit, or the explicit "narrower than the grid"/"not defined" state;
+- the estimate's position relative to the bounds;
+- a **lazy-loaded** Plotly chart of the objective against `k`, labelled
+  `Decay rate k (<time unit>⁻¹)` and `Residual sum of squares ((<concentration
+  unit>)²)`, with the fitted estimate as a separate marker trace;
+- the dataset-specific warnings and the standing limitations, both in plain
+  language.
+
+Measured data, the fit result and the diagnostics stay visually and structurally
+distinct: the measurement table remains the accessible authority, the fitted
+curve is a separate line trace, and the profile is a separate card.
+
+### 12.9 Boundaries
+
+Like the fit, the screen is **derived and ephemeral**: no candidate rate, band,
+classification or chart datum is written to the dataset, its measurements,
+IndexedDB, `.npex` or `.npsb`. It is not persisted, not exported and not part of
+the experimental dataset schema. Switching datasets discards it with the fit.
+Tests use deterministic synthetic values with known rates; no test asserts exact
+floating-point formatting or grid internals.

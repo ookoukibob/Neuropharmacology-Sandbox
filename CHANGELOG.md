@@ -6,6 +6,42 @@ noncommercial static web application (see [LICENSE](LICENSE)).
 
 ## [Unreleased]
 
+### Added — practical identifiability screening for the mono-exponential fit (phase 47C)
+
+- **The fit's own objective is profiled over a documented rate grid.** After a
+  successful fit, the selected dataset view re-evaluates the same unweighted
+  least-squares objective at 161 candidate decay rates across the fit's own
+  admissible interval. The amplitude is concentrated out by the same
+  non-negative variable projection the optimizer uses, so the screened quantity
+  is a single profile in the rate — and it comes from one shared normalization,
+  so a diagnostic can never describe a different objective than the estimate.
+- **The shape is described, not scored.** The screen reports `localized`,
+  `broad`, `boundary-zero-rate`, `boundary-upper-rate` or `indeterminate`,
+  together with the near-minimum band, the estimate's position relative to the
+  admissible bounds, the number of candidate rates evaluated, and how many
+  could not be evaluated. Boundary proximity is stated in model-response terms
+  (under ~2 % predicted decline across the observed span) rather than as a
+  distance in arbitrary parameter units.
+- **Explicitly heuristic, explicitly limited.** The near-minimum band is a
+  documented `RSS ≤ RSS(k̂)·1.5` screening convention with no coverage
+  probability. The chart is labelled a residual sum of squares and states that
+  it is not a likelihood or profile likelihood; the UI states that this is not
+  a structural-identifiability proof, not a confidence interval, and not a
+  model comparison.
+- **Failed evaluations are reported, never filled in.** A candidate rate that
+  cannot be evaluated for a time span is counted and explained; nothing is
+  interpolated, clamped or dropped silently, and a screen with no comparable
+  evaluation renders as a state rather than as a number.
+- **The estimate and the fitting algorithm are unchanged.** The fit's `k`,
+  `C_ref` and `sse` are reported verbatim, nothing is re-optimized, and no
+  diagnostic is written to the dataset, IndexedDB, `.npex` or `.npsb`. No
+  likelihood, confidence interval, standard error, R², AIC, AICc or model
+  ranking is produced.
+- Added domain, chart, view and real-Chromium coverage, plus an axe scan of the
+  fitted state. That scan surfaced a contrast failure and a `role="status"`
+  list-semantics defect in the existing Phase 47B warning list, both fixed
+  rather than suppressed.
+
 ### Changed — simulation starts with a blank scenario
 
 - Simulation no longer loads synthetic pharmacology/time values or dosing events

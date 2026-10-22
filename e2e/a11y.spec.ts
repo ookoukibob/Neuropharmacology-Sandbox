@@ -314,6 +314,18 @@ test('a11y: the experimental dataset import, detail and destructive states pass 
   })
   await scan(page, 'experimental datasets (saved detail, chart and table)')
 
+  // Phase 47C: the fitted state adds the residual plot and the objective
+  // profile beside the fit results, so it is scanned in place.
+  await page.getByTestId('dataset-fit').click()
+  await expect(page.getByTestId('fit-results')).toBeVisible()
+  await expect(page.getByTestId('fit-residual-chart').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.getByTestId('fit-profile-chart').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+  await scan(page, 'experimental datasets (fit results, residual plot and objective profile)')
+
   await page.getByTestId('dataset-rename').click()
   await expect(page.getByTestId('dataset-rename-name')).toBeVisible()
   await scan(page, 'experimental datasets (rename form)')

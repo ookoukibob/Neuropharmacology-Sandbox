@@ -28,6 +28,41 @@ vi.mock('@/components/charts/ExperimentalFitResidualChart', () => ({
   ),
 }))
 
+vi.mock('@/components/charts/ExperimentalFitProfileChart', () => ({
+  ExperimentalFitProfileChart: ({
+    points,
+    fittedRate,
+  }: {
+    points: readonly { ok: boolean }[]
+    fittedRate: number
+  }) => (
+    <div data-testid="stub-fit-profile-chart">
+      {points.length} candidate rates · fitted k {fittedRate}
+    </div>
+  ),
+}))
+
+// The profile result is real by default; one test forces the unavailable
+// branch, which the current bounds make unreachable through the UI.
+const profileOverride = vi.hoisted(() => ({ unavailable: false }))
+vi.mock('@/domain/experiments/mono-exponential-profile', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/domain/experiments/mono-exponential-profile')>()
+  return {
+    ...actual,
+    analyzeMonoExponentialProfile: (
+      ...args: Parameters<typeof actual.analyzeMonoExponentialProfile>
+    ) =>
+      profileOverride.unavailable
+        ? {
+            ok: false as const,
+            code: 'NO_VALID_EVALUATION' as const,
+            message: 'No candidate decay rate could be evaluated for this dataset.',
+          }
+        : actual.analyzeMonoExponentialProfile(...args),
+  }
+})
+
 const BASE_TIME = Date.parse('2026-03-01T00:00:00.000Z')
 
 function storedDataset(overrides: Partial<ExperimentalDataset> = {}): ExperimentalDataset {
@@ -155,6 +190,7 @@ let repository: FakeExperimentalDatasetRepository
 
 beforeEach(() => {
   repository = new FakeExperimentalDatasetRepository()
+  profileOverride.unavailable = false
 })
 
 function renderView(): void {
@@ -364,6 +400,7 @@ describe('one-compartment mono-exponential fit (phase 47B)', () => {
     expect(screen.getByTestId('dataset-fit')).toBeInTheDocument()
     expect(screen.queryByTestId('fit-results')).not.toBeInTheDocument()
     expect(screen.queryByTestId('fit-diagnostics')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('fit-profile-diagnostics')).not.toBeInTheDocument()
   })
 
   it('reports the fitted parameters with the dataset units', async () => {
@@ -446,5 +483,124 @@ describe('one-compartment mono-exponential fit (phase 47B)', () => {
     fireEvent.click(within(list).getByRole('button', { name: /Other study/ }))
     await screen.findByRole('heading', { level: 2, name: 'Other study' })
     await waitFor(() => expect(screen.queryByTestId('fit-results')).not.toBeInTheDocument())
+  })
+})
+
+describe('practical identifiability screen (phase 47C)', () => {
+  const row = (id: string, sourceRow: number, time: number, concentration: number) => ({
+    id,
+    sourceRow,
+    time,
+    concentration,
+  })
+
+  // Scatter around a clear decay: the objective has a measurable minimum, so
+  // the near-minimum band is a rate interval rather than a single grid point.
+  const decaying = (): ExperimentalDataset =>
+    storedDataset({
+      name: 'Identifiability study',
+      measurements: [
+        row('m1', 1, 0, 100),
+        row('m2', 2, 1, 80),
+        row('m3', 3, 2, 75),
+        row('m4', 4, 3, 45),
+      ],
+    })
+
+  const select = async (dataset: ExperimentalDataset): Promise<void> => {
+    repository.rows.set(dataset.id, dataset)
+    renderView()
+    const list = await screen.findByRole('list', { name: 'Saved experimental datasets' })
+    fireEvent.click(within(list).getByRole('button', { name: new RegExp(dataset.name) }))
+    await screen.findByRole('heading', { level: 2, name: dataset.name })
+  }
+
+  it('reports a localized objective with a measured band after a fit', async () => {
+    await select(decaying())
+    expect(screen.queryByTestId('fit-profile-diagnostics')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('fit-profile-diagnostics')
+
+    expect(card).toHaveTextContent(/residual sum of squares/i)
+    expect(card).toHaveTextContent(/not a likelihood/i)
+    expect(within(card).getByTestId('fit-profile-localization')).toHaveTextContent(
+      /narrow minimum/i,
+    )
+    expect(within(card).getByTestId('fit-profile-band')).toHaveTextContent('h⁻¹')
+    expect(within(card).getByTestId('fit-profile-boundary')).toHaveTextContent(
+      /interior to the evaluated range/i,
+    )
+    // Candidate data reaches the chart component, and the fit itself is shown
+    // separately from the diagnostics.
+    expect(await within(card).findByTestId('stub-fit-profile-chart')).toHaveTextContent(
+      /candidate rates/,
+    )
+    expect(screen.getByTestId('fit-results')).toBeInTheDocument()
+    expect(screen.getByTestId('fit-diagnostics')).toBeInTheDocument()
+
+    // Standing limitations are always stated in plain language.
+    const limitations = within(card).getByTestId('fit-profile-limitations')
+    expect(limitations).toHaveTextContent(/not a structural or formal practical-identifiability proof/i)
+    expect(limitations).toHaveTextContent(/not a confidence interval/i)
+    expect(limitations).toHaveTextContent(/alternative models/i)
+
+    // Still a derived view: nothing is written.
+    expect(repository.createCalls).toHaveLength(0)
+    expect(repository.updateCalls).toHaveLength(0)
+    expect(repository.deleteCalls).toHaveLength(0)
+  })
+
+  it('reports the zero-rate boundary without inventing a band', async () => {
+    await select(
+      storedDataset({
+        name: 'Rising identifiability study',
+        measurements: [row('r1', 1, 0, 5), row('r2', 2, 1, 9), row('r3', 3, 2, 20)],
+      }),
+    )
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('fit-profile-diagnostics')
+    expect(within(card).getByTestId('fit-profile-localization')).toHaveTextContent(
+      /zero-rate boundary/i,
+    )
+    expect(within(card).getByTestId('fit-profile-boundary')).toHaveTextContent(/k = 0 boundary/i)
+    expect(within(card).getByTestId('fit-profile-band')).toHaveTextContent(
+      /not defined for this dataset/i,
+    )
+  })
+
+  it('degrades safely for sparse time coverage', async () => {
+    await select(
+      storedDataset({
+        name: 'Sparse identifiability study',
+        measurements: [row('s1', 1, 0, 100), row('s2', 2, 0, 98), row('s3', 3, 1, 50), row('s4', 4, 1, 49)],
+      }),
+    )
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('fit-profile-diagnostics')
+    expect(within(card).getByTestId('fit-profile-localization')).toHaveTextContent(
+      /does not support a shape classification/i,
+    )
+    expect(within(card).getByTestId('fit-profile-warnings')).toHaveTextContent(
+      /2 distinct time points/i,
+    )
+    // The chart still renders: measurement data is never withheld.
+    expect(await within(card).findByTestId('stub-fit-profile-chart')).toBeInTheDocument()
+  })
+
+  it('renders an unavailable analysis as a state rather than a number', async () => {
+    profileOverride.unavailable = true
+    await select(decaying())
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+
+    const card = await screen.findByTestId('fit-profile-diagnostics')
+    expect(within(card).getByTestId('fit-profile-error')).toHaveTextContent(
+      /no candidate decay rate could be evaluated/i,
+    )
+    expect(within(card).getByTestId('fit-profile-error')).toHaveTextContent(/fit itself is unaffected/i)
+    expect(within(card).queryByTestId('fit-profile-localization')).not.toBeInTheDocument()
+    expect(within(card).queryByTestId('stub-fit-profile-chart')).not.toBeInTheDocument()
+    // The fit result remains visible and usable.
+    expect(screen.getByTestId('fit-results')).toBeInTheDocument()
   })
 })

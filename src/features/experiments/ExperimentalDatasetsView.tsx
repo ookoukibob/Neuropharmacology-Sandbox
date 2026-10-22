@@ -14,6 +14,11 @@ import {
   type MonoExponentialFitResult,
 } from '@/domain/experiments/mono-exponential-fit'
 import { diagnoseMonoExponentialFit } from '@/domain/experiments/mono-exponential-fit-diagnostics'
+import {
+  analyzeMonoExponentialProfile,
+  type MonoExponentialProfileResult,
+  type ProfileLocalization,
+} from '@/domain/experiments/mono-exponential-profile'
 import { formatNumber } from '@/engine/numeric/decimal'
 import {
   AlertTriangle,
@@ -61,6 +66,11 @@ const ExperimentalFitResidualChart = lazy(async () => {
   return { default: module.ExperimentalFitResidualChart }
 })
 
+const ExperimentalFitProfileChart = lazy(async () => {
+  const module = await import('@/components/charts/ExperimentalFitProfileChart')
+  return { default: module.ExperimentalFitProfileChart }
+})
+
 export interface ExperimentalDatasetsViewProps {
   readonly repository: ExperimentalDatasetRepository
 }
@@ -85,8 +95,11 @@ export function ExperimentalDatasetsView({ repository }: ExperimentalDatasetsVie
           source order exactly as measured — duplicates and replicates are never averaged,
           deduplicated or interpolated. A one-compartment mono-exponential decay fit can be run on
           the selected dataset; the fit is a temporary derived result that never modifies or saves
-          the measurements. Residuals and RMSE are descriptive diagnostics; formal uncertainty
-          estimates and model-selection metrics are not provided.
+          the measurements. Residuals and RMSE are descriptive diagnostics. A practical
+          identifiability screen profiles the same least-squares objective over a documented set of
+          candidate rates: it is a heuristic screening aid, not a proof of structural
+          identifiability and not a confidence region. Formal uncertainty estimates and
+          model-selection metrics are not provided.
         </p>
       </header>
 
@@ -257,6 +270,12 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
   const fit = storedFit !== null && storedFit.key === fitKey ? storedFit.result : null
   const fitDiagnostics = useMemo(
     () => (fit === null || !fit.ok ? null : diagnoseMonoExponentialFit(dataset.measurements, fit)),
+    [dataset.measurements, fit],
+  )
+  // Derived from the same fit and never persisted; recomputed only when the
+  // dataset rows or the fit change, exactly like the residual diagnostics.
+  const fitProfile = useMemo(
+    () => (fit === null || !fit.ok ? null : analyzeMonoExponentialProfile(dataset.measurements, fit)),
     [dataset.measurements, fit],
   )
   const runFit = (): void => {
@@ -575,11 +594,16 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
                   <dd className="font-mono text-xs">{fit.measurementCount}</dd>
                 </dl>
                 {fit.warnings.length === 0 ? null : (
-                  <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-600" role="status" data-testid="fit-warnings">
-                    {fit.warnings.map((warning) => (
-                      <li key={warning.code}>{warning.message}</li>
-                    ))}
-                  </ul>
+                  // The announcement role belongs to the wrapper: putting it on
+                  // the list itself removes the list semantics and leaves every
+                  // <li> without a list parent.
+                  <div role="status" data-testid="fit-warnings">
+                    <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-700">
+                      {fit.warnings.map((warning) => (
+                        <li key={warning.code}>{warning.message}</li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
                 <p className="mt-2 text-xs text-muted-foreground">
                   A converged fit is a numerical result, not evidence that this decay model suits
@@ -680,6 +704,15 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
             </Card>
           )}
 
+          {fitProfile !== null && (
+            <FitProfileDiagnostics
+              profile={fitProfile}
+              timeUnit={dataset.timeUnit}
+              concentrationUnit={dataset.concentrationUnit}
+              datasetName={dataset.name}
+            />
+          )}
+
           <div className="max-h-[36rem] overflow-auto rounded-md border">
             <Table data-testid="dataset-measurements">
               <TableCaption>
@@ -711,5 +744,156 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+const PROFILE_LOCALIZATION_TEXT: Record<ProfileLocalization, string> = {
+  localized:
+    'The objective has a narrow minimum: moving the rate away from the estimate makes the residual clearly worse.',
+  broad:
+    'The objective has a broad minimum: a wide range of decay rates fits almost as well as the estimate.',
+  'boundary-zero-rate':
+    'The best fit sits at the zero-rate boundary, so there is no interior minimum to locate.',
+  'boundary-upper-rate':
+    'The best fit reached the optimizer’s numerical upper bound, so the rate is not resolved inside the evaluated range.',
+  indeterminate:
+    'This dataset does not support a shape classification for the objective.',
+}
+
+interface FitProfileDiagnosticsProps {
+  readonly profile: MonoExponentialProfileResult
+  readonly timeUnit: string
+  readonly concentrationUnit: string
+  readonly datasetName: string
+}
+
+/**
+ * Practical identifiability screen for the mono-exponential fit.
+ *
+ * Rendered only for a dataset that already has a successful fit, so no
+ * diagnostic is ever shown against a failed or missing estimate. Every number
+ * comes from the domain layer; this component only chooses words and layout.
+ */
+function FitProfileDiagnostics({
+  profile,
+  timeUnit,
+  concentrationUnit,
+  datasetName,
+}: FitProfileDiagnosticsProps) {
+  return (
+    <Card data-testid="fit-profile-diagnostics">
+      <CardHeader>
+        <CardTitle headingLevel={3}>Practical identifiability screen</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          The same least-squares objective is re-evaluated at a documented set of candidate decay
+          rates, with the amplitude re-solved at each one exactly as the fit does. The plotted curve
+          is a residual sum of squares — not a likelihood and not a profile likelihood — and it is
+          not a confidence region.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {profile.ok ? (
+          <>
+            <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-3" data-testid="fit-profile-summary">
+              <div className="sm:col-span-3">
+                <dt className="text-xs text-muted-foreground">Objective shape</dt>
+                <dd className="text-sm" data-testid="fit-profile-localization">
+                  {PROFILE_LOCALIZATION_TEXT[profile.localization]}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Candidate rates evaluated</dt>
+                <dd className="font-mono text-sm" data-testid="fit-profile-points">
+                  {profile.validPointCount}
+                  {profile.invalidPointCount === 0
+                    ? ''
+                    : ` of ${profile.points.length} (${profile.invalidPointCount} unavailable)`}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Near-minimum band</dt>
+                <dd className="font-mono text-xs" data-testid="fit-profile-band">
+                  {profile.nearMinimumRateRange === null
+                    ? profile.nearMinimumBandResolution === 'narrower-than-grid'
+                      ? 'narrower than the evaluated grid'
+                      : 'not defined for this dataset'
+                    : `${formatNumber(profile.nearMinimumRateRange.min)} – ${formatNumber(
+                        profile.nearMinimumRateRange.max,
+                      )} ${timeUnit}⁻¹`}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Estimate position</dt>
+                <dd className="text-xs" data-testid="fit-profile-boundary">
+                  {profile.boundary.atLowerBound
+                    ? 'at the k = 0 boundary'
+                    : profile.boundary.atUpperBound
+                      ? 'at the numerical upper bound'
+                      : profile.boundary.nearLowerBound
+                        ? 'close to the k = 0 boundary'
+                        : profile.boundary.nearUpperBound
+                          ? 'in the unresolvable band below the upper bound'
+                          : 'interior to the evaluated range'}
+                </dd>
+              </div>
+            </dl>
+
+            <Suspense
+              fallback={
+                <p role="status" className="py-6 text-sm text-muted-foreground">
+                  Loading objective profile…
+                </p>
+              }
+            >
+              <ExperimentalFitProfileChart
+                points={profile.points}
+                fittedRate={profile.fittedRate}
+                fittedSse={profile.fittedSse}
+                timeUnit={timeUnit}
+                concentrationUnit={concentrationUnit}
+                datasetName={datasetName}
+              />
+            </Suspense>
+            <p className="text-xs text-muted-foreground">
+              Diamond: the fitted estimate. Line: the residual sum of squares at each evaluated
+              rate. Lower is better for this objective only; the vertical axis is in squared{' '}
+              {concentrationUnit} and has no threshold.
+            </p>
+
+            {profile.warnings.length === 0 ? null : (
+              <div
+                className="space-y-1 rounded-md border border-amber-500/40 p-3 text-xs text-amber-700"
+                role="status"
+                data-testid="fit-profile-warnings"
+              >
+                <h4 className="font-medium">What limits this screen here</h4>
+                <ul className="list-disc space-y-1 pl-4">
+                  {profile.warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div
+              className="space-y-1 rounded-md border p-3 text-xs text-muted-foreground"
+              role="note"
+              data-testid="fit-profile-limitations"
+            >
+              <h4 className="font-medium text-foreground">Standing limitations</h4>
+              <ul className="list-disc space-y-1 pl-4">
+                {profile.limitations.map((limitation) => (
+                  <li key={limitation}>{limitation}</li>
+                ))}
+              </ul>
+            </div>
+          </>
+        ) : (
+          <p role="alert" className="text-sm text-destructive" data-testid="fit-profile-error">
+            {profile.message} The fit itself is unaffected.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   )
 }
