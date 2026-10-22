@@ -305,10 +305,102 @@ test('fits a mono-exponential decay and overlays the curve', async ({ page }) =>
   await expect(page.getByTestId('fit-residual-chart').locator('.js-plotly-plot')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('fit-identifiability-screen')).toContainText(/not a formal .*identifiability test/i)
 
+  // Phase 47C: the objective profile is derived from the same fit. This
+  // synthetic series rises, so the fit sits on the zero-rate boundary.
+  await expect(page.getByTestId('fit-profile-diagnostics')).toBeVisible()
+  await expect(page.getByTestId('fit-profile-localization')).toContainText(/zero-rate boundary/i)
+  await expect(page.getByTestId('fit-profile-chart').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+
   // The fit is derived only: reloading the page loses it and the stored
   // measurements are unchanged.
   await page.reload()
   await list.getByRole('button', { name: /Synthetic 47A measured study/ }).click()
   await expect(page.getByTestId('fit-results')).toHaveCount(0)
+  await expect(page.getByTestId('fit-profile-diagnostics')).toHaveCount(0)
   await expect(page.getByTestId('dataset-measurements')).toContainText('4')
+})
+
+/** Import one synthetic two-column CSV with explicit columns and units. */
+async function importTwoColumnCsv(
+  page: import('@playwright/test').Page,
+  spec: { fileName: string; csv: string; name: string },
+): Promise<void> {
+  await page.getByTestId('csv-dataset-file').setInputFiles({
+    name: spec.fileName,
+    mimeType: 'text/csv',
+    buffer: Buffer.from(spec.csv, 'utf8'),
+  })
+  await expect(page.getByTestId('csv-dataset-mapping')).toBeVisible()
+  await page.getByTestId('csv-dataset-name').fill(spec.name)
+  await page.getByTestId('csv-dataset-time-column').selectOption('0')
+  await page.getByTestId('csv-dataset-time-unit').selectOption('h')
+  await page.getByTestId('csv-dataset-concentration-column').selectOption('1')
+  await page.getByTestId('csv-dataset-concentration-unit').selectOption('mg/L')
+  await page.getByTestId('csv-dataset-preview').click()
+  await expect(page.getByTestId('csv-dataset-confirm')).toBeVisible()
+  await page.getByTestId('csv-dataset-confirm').click()
+  await expect(page.getByRole('heading', { level: 2, name: spec.name })).toBeVisible()
+}
+
+test('profiles the objective after fitting and degrades safely for sparse data', async ({
+  page,
+}) => {
+  await page.goto('/experiments')
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+
+  await importTwoColumnCsv(page, {
+    fileName: 'synthetic-47c-decay.csv',
+    csv: 'time,concentration\n0,100\n1,80\n2,75\n3,45\n',
+    name: 'Synthetic 47C decay',
+  })
+
+  // No diagnostic is shown before a valid fit exists.
+  await expect(page.getByTestId('fit-profile-diagnostics')).toHaveCount(0)
+
+  await page.getByTestId('dataset-fit').click()
+  await expect(page.getByTestId('fit-results')).toBeVisible()
+
+  const profile = page.getByTestId('fit-profile-diagnostics')
+  await expect(profile).toBeVisible()
+  await expect(page.getByTestId('fit-profile-localization')).toContainText(/narrow minimum/i)
+  await expect(page.getByTestId('fit-profile-band')).toContainText('h⁻¹')
+  await expect(page.getByTestId('fit-profile-points')).toContainText(/\d+/)
+
+  // The chart identifies the plotted objective, both axes and their units.
+  const chart = page.getByTestId('fit-profile-chart')
+  await expect(chart.locator('.js-plotly-plot')).toBeVisible({ timeout: 30_000 })
+  await expect(chart.locator('.xtitle')).toContainText('Decay rate k (h⁻¹)')
+  await expect(chart.locator('.ytitle')).toContainText(/Residual sum of squares/i)
+  await expect(chart.locator('.ytitle')).toContainText('mg/L')
+  // Residual sum of squares is never presented as a likelihood.
+  await expect(profile).toContainText(/not a likelihood/i)
+  await expect(page.getByTestId('fit-profile-limitations')).toContainText(
+    /not a confidence interval/i,
+  )
+
+  // Measured rows are untouched by the screen.
+  await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(4)
+
+  // Sparse time coverage: the screen states that it cannot classify the shape,
+  // and the chart still renders instead of silently disappearing.
+  await importTwoColumnCsv(page, {
+    fileName: 'synthetic-47c-sparse.csv',
+    csv: 'time,concentration\n0,100\n0,98\n1,50\n1,49\n',
+    name: 'Synthetic 47C sparse',
+  })
+  // The previous dataset's fit is not carried over to the newly selected one.
+  await expect(page.getByTestId('fit-results')).toHaveCount(0)
+  await expect(page.getByTestId('fit-profile-diagnostics')).toHaveCount(0)
+
+  await page.getByTestId('dataset-fit').click()
+  await expect(page.getByTestId('fit-results')).toBeVisible()
+  await expect(page.getByTestId('fit-profile-localization')).toContainText(
+    /does not support a shape classification/i,
+  )
+  await expect(page.getByTestId('fit-profile-warnings')).toContainText(/2 distinct time points/i)
+  await expect(page.getByTestId('fit-profile-chart').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
 })

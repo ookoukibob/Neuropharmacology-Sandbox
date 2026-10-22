@@ -116,6 +116,18 @@ no infrastructure defect had to be assumed.
 | E2E (Playwright) | `e2e/experimentalDatasets.spec.ts` | CSV → validated preview → saved dataset → real Plotly marker chart → `.npex` export → re-import → rename → reload → delete; qualifier/negative rejection with no write; `.npsb` export, local delete and full restore; real-Chromium narrow layout with no page overflow and a compact chart |
 | Accessibility | `e2e/a11y.spec.ts` | axe WCAG A/AA scans of empty, CSV mapping, validated preview, saved detail with chart + table, rename form, delete confirmation and acknowledged-delete states; no rules disabled |
 
+### 1e. Mono-exponential fit and practical identifiability matrix (phases 47B–47C)
+
+| Layer | File | Covers |
+| --- | --- | --- |
+| Domain — fit | `src/domain/experiments/mono-exponential-fit.test.ts` | recovery of known synthetic parameters, zero-rate and cap boundaries, span invariance of the dimensionless boundary test, non-representable subnormal rates, malformed rows, finite-field guarantees, curve sampling inside the observed range only, permutation invariance and no mutation. Also guards the shared `prepareObjective`/`createMonoExponentialObjective` extraction: the same codes, messages and estimates as before it existed |
+| Domain — residuals | `src/domain/experiments/mono-exponential-fit-diagnostics.test.ts` | one residual per stored row in source order, replicates preserved, RMSE arithmetic, n − 2 degrees of freedom, sparse-time and zero-df notes, structured failure on a row mismatch |
+| Domain — profile | `src/domain/experiments/mono-exponential-profile.test.ts` | localized profile with a measurable band; broad profile where many rates are nearly equivalent; zero-rate and cap boundaries; near-lower-bound estimate; two distinct times; rejected candidates reported with reasons instead of substituted values; unrepresentable admissible upper bound; empty, mismatched, malformed, all-zero and single-time datasets; non-finite fit parameters; the objective checked against independently computed arithmetic; the documented ascending grid; non-mutation, duplicate-timestamp independence, determinism and standing limitations |
+| Chart | `src/components/charts/ExperimentalFitProfileChart.test.tsx` | axis/unit labelling of a residual sum of squares (never a likelihood or profile likelihood), the amplitude-projection note, explicit "not a confidence interval", and safe single-point / failed-candidate / empty states |
+| UI | `src/features/experiments/ExperimentalDatasetsView.test.tsx` | no screen before a fit; localized, zero-rate-boundary, sparse and unavailable states after one; plain-language limitations; separate fit/residual/profile cards; no repository write |
+| E2E (Playwright) | `e2e/experimentalDatasets.spec.ts` | after a real fit: classification text, band in the declared reciprocal unit, real-Plotly axis titles for both quantities, the "not a likelihood" statement, unchanged measurement rows; a second import proves the previous fit and screen are not carried over; sparse data still renders a chart with an explicit "cannot classify" state |
+| Accessibility | `e2e/a11y.spec.ts` | axe scan of the fitted state with the residual plot and the objective profile on screen; no rules disabled |
+
 ## 2. Schema tests (phase 1 — implemented)
 
 `src/data/schemas/npsl.test.ts` covers:
