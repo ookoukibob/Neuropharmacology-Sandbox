@@ -58,6 +58,10 @@ intentionally.
   parameter validation, edge cases and error paths.
 - For UI changes, preserve keyboard operation, accessible names and visible
   error recovery; update E2E coverage where appropriate.
+- Keep application copy user-facing and product-oriented. Do not expose internal
+  phase numbers, roadmap milestones, PR/issue references, CI status, or developer
+  implementation notes in the shipped UI unless they are an explicitly intended
+  user-facing feature or a development-only build.
 - For data or format changes, document compatibility behavior and test both new
   and older records/archives.
 - Do not commit generated build output, test artifacts, local environment files,

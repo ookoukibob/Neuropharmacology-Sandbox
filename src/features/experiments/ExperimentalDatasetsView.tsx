@@ -41,7 +41,6 @@ import {
   X,
 } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { ScientificText } from '@/components/scientific/ScientificText'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -99,7 +98,6 @@ export function ExperimentalDatasetsView({ repository }: ExperimentalDatasetsVie
         <div className="flex flex-wrap items-center gap-3">
           <Database aria-hidden="true" className="size-6 text-muted-foreground" />
           <h1 className="text-2xl font-semibold">Experimental Datasets</h1>
-          <Badge variant="secondary">Phase 47A–47C · measured data + fit diagnostics</Badge>
         </div>
         <p className="max-w-4xl text-sm text-muted-foreground">
           Import, validate, store and export measured concentration–time datasets. Values are kept in
