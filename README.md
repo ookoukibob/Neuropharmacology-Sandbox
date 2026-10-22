@@ -215,6 +215,7 @@ dependency-ordered roadmap lives in [docs/architecture.md](docs/architecture.md)
 | Phase 47C initial slice — raw residual plot, RMSE, residual degrees of freedom and explicit data-support screening | implemented; formal uncertainty and model comparison remain deferred |
 | Phase 47C identifiability slice — practical screening of the fit's own least-squares objective over a documented rate grid: localized/broad/boundary/sparse classification, near-minimum band, boundary proximity in model-response terms, and explicit limitations; not a likelihood profile or a structural-identifiability proof | implemented; model comparison is the next deferred increment |
 | Phase 47C model-comparison slice — two-candidate comparison (decay vs decay + additive baseline) with descriptive SSE/RMSE/parameter counts and a conditional AICc that requires an explicitly declared Gaussian homoscedastic error model; unavailability is reported with reasons, never as a fabricated score | implemented; a third candidate and formal uncertainty remain deferred |
+| Phase 47C residual-structure slice — residual-vs-time and residual-vs-fitted plots for both candidates plus a documented spread screen with explicit ordering limitations; findings caveat the AICc reading without changing it | implemented; weighted fitting and formal tests remain deferred |
 
 The only remaining audit verification gap is **NV-2**: no authentic historical
 user database has been available for migration testing. Synthetic legacy

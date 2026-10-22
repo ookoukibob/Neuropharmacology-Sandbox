@@ -31,8 +31,14 @@ export interface MonoExponentialFitDiagnostics {
   readonly dataSupportNotes: readonly string[]
 }
 
+export type MonoExponentialFitDiagnosticsFailureCode =
+  | 'MEASUREMENT_MISMATCH'
+  | 'INVALID_MEASUREMENT'
+  | 'NON_FINITE_PARAMETER'
+
 export interface MonoExponentialFitDiagnosticsFailure {
   readonly ok: false
+  readonly code: MonoExponentialFitDiagnosticsFailureCode
   readonly message: string
 }
 
@@ -51,10 +57,18 @@ export function diagnoseMonoExponentialFit(
   fit: SuccessfulFit,
 ): MonoExponentialFitDiagnosticsResult {
   if (measurements.length === 0 || measurements.length !== fit.measurementCount) {
-    return { ok: false, message: 'The diagnostic rows do not match the observations used by this fit.' }
+    return {
+      ok: false,
+      code: 'MEASUREMENT_MISMATCH',
+      message: 'The diagnostic rows do not match the observations used by this fit.',
+    }
   }
   if (!Number.isFinite(fit.tRef) || !Number.isFinite(fit.cRef) || !Number.isFinite(fit.k)) {
-    return { ok: false, message: 'The fit contains a non-finite parameter; diagnostics are unavailable.' }
+    return {
+      ok: false,
+      code: 'NON_FINITE_PARAMETER',
+      message: 'The fit contains a non-finite parameter; diagnostics are unavailable.',
+    }
   }
 
   const residuals: MonoExponentialResidual[] = []
@@ -70,12 +84,20 @@ export function diagnoseMonoExponentialFit(
       !Number.isFinite(measurement.time) ||
       !Number.isFinite(measurement.concentration)
     ) {
-      return { ok: false, message: 'A measurement is invalid; residual diagnostics are unavailable.' }
+      return {
+        ok: false,
+        code: 'INVALID_MEASUREMENT',
+        message: 'A measurement is invalid; residual diagnostics are unavailable.',
+      }
     }
     const fitted = fit.cRef * Math.exp(-fit.k * (measurement.time - fit.tRef))
     const residual = measurement.concentration - fitted
     if (!Number.isFinite(fitted) || !Number.isFinite(residual)) {
-      return { ok: false, message: 'A fitted value or residual is not finite; diagnostics are unavailable.' }
+      return {
+        ok: false,
+        code: 'NON_FINITE_PARAMETER',
+        message: 'A fitted value or residual is not finite; diagnostics are unavailable.',
+      }
     }
     distinctTimes.add(measurement.time)
     maxAbsResidual = Math.max(maxAbsResidual, Math.abs(residual))
@@ -100,7 +122,11 @@ export function diagnoseMonoExponentialFit(
     ? 0
     : maxAbsResidual * Math.sqrt(scaledSumSquares / residuals.length)
   if (!Number.isFinite(rmse)) {
-    return { ok: false, message: 'RMSE is not finite; diagnostics are unavailable.' }
+    return {
+      ok: false,
+      code: 'NON_FINITE_PARAMETER',
+      message: 'RMSE is not finite; diagnostics are unavailable.',
+    }
   }
 
   const measurementCount = measurements.length

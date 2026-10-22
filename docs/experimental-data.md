@@ -4,9 +4,10 @@
 contract for measured-dataset import, validation, local storage, inspection and
 `.npex` interchange, the optional one-compartment mono-exponential decay fit
 (§10), raw-residual/RMSE diagnostics (§11), the practical identifiability
-screen (§12), and the two-candidate comparison with a conditional AICc (§13).
-Formal uncertainty estimation and any model set beyond those two candidates
-are not implemented.
+screen (§12), the two-candidate comparison with a conditional AICc (§13), and
+residual-structure diagnostics with a residual-spread screen (§14). Formal
+uncertainty estimation and any model set beyond those two candidates are not
+implemented.
 
 All examples below are synthetic test data, not pharmacological information.
 
@@ -498,10 +499,10 @@ browser-local state, use `.npsb`.
 - **No hidden write.** Import previews are read-only; writes occur only after
   explicit confirmation, through the repository, in validated transactions.
 - **Derived analysis never rewrites evidence.** Phase 47B fitting (§10), the
-  Phase 47C residual/RMSE diagnostics (§11), the objective profile (§12) and
-  the two-candidate comparison with its conditional AICc (§13) are temporary
-  derived views; imports, stored observations, and `.npex` round trips are
-  unchanged.
+  Phase 47C residual/RMSE diagnostics (§11), the objective profile (§12), the
+  two-candidate comparison with its conditional AICc (§13) and the residual
+  structure views (§14) are temporary derived views; imports, stored
+  observations, and `.npex` round trips are unchanged.
   RMSE is descriptive and has no universal pass/fail threshold. AICc is
   conditional on an explicitly declared error model and ranks only the two
   configured candidates. Formal identifiability tests and parameter
@@ -519,8 +520,8 @@ browser-local state, use `.npsb`.
 | `.npex` | `src/data/npex/npex.test.ts` | envelope/version rules, strict shape, duplicate keys, depth/size, round trip, local identity absent |
 | Repository | `src/data/repositories/dexieExperimentalDatasetRepository.test.ts` | CRUD, validation on read/write, corruption reporting, atomicity, optimistic tokens, immutable science, strict timestamp ordering |
 | Database/recovery | `src/data/db/database.test.ts`, `experimentalDatasetRecovery.test.ts`, `archive.test.ts` | v5→v6 preservation, all-store snapshot/restore, legacy absent-store warnings/clearing, rollback |
-| UI | `src/features/experiments/*.test.tsx`, `src/components/charts/experimentalDatasetAdapter.test.ts`, `src/components/charts/ExperimentalFitResidualChart.test.tsx`, `src/components/charts/ExperimentalFitProfileChart.test.tsx` | import/preview/confirm, table, observed/fitted chart, residual plot, RMSE and screening states, objective-profile chart labelling and empty/invalid-candidate states, comparison table/parameter counts, AICc gating on the declared assumption, unavailable/insufficient/zero-variance states, rename/delete/export/error states |
-| Browser | `e2e/experimentalDatasets.spec.ts`, `e2e/a11y.spec.ts` | real Chromium CSV→chart→`.npex`→re-import, persistence, recovery, fit overlay, residual plot/RMSE/data-support screen, objective profile after fitting plus its sparse-data and stale-fit states, comparison with AICc unavailable→declared and an undersized sample, narrow layout and axe scans |
+| UI | `src/features/experiments/*.test.tsx`, `src/components/charts/experimentalDatasetAdapter.test.ts`, `src/components/charts/ExperimentalFitResidualChart.test.tsx`, `src/components/charts/ExperimentalFitResidualVsFittedChart.test.tsx`, `src/components/charts/ExperimentalFitProfileChart.test.tsx` | import/preview/confirm, table, observed/fitted chart, residual plots against time and fitted value, RMSE and screening states, residual-spread states, objective-profile chart labelling and empty/invalid-candidate states, comparison table/parameter counts, AICc gating on the declared assumption, unavailable/insufficient/zero-variance states, rename/delete/export/error states |
+| Browser | `e2e/experimentalDatasets.spec.ts`, `e2e/a11y.spec.ts` | real Chromium CSV→chart→`.npex`→re-import, persistence, recovery, fit overlay, residual plot/RMSE/data-support screen, objective profile after fitting plus its sparse-data and stale-fit states, comparison with AICc unavailable→declared and an undersized sample, residual structure for both models with real-Plotly axis titles, marker counts and duplicate-timestamp disclosure, narrow layout and axe scans |
 
 The full matrix and gate commands are maintained in
 [`docs/testing.md`](testing.md).
@@ -590,7 +591,8 @@ A converged optimization is a numerical result, not evidence that a
 mono-exponential decay describes the data. The model cannot represent a rising
 curve, an absorption phase, a baseline offset or multiple kinetic phases.
 Raw residuals, RMSE and an explicitly preliminary data-support screen are now
-available in §11, and an objective-shape screen in §12. Parameter uncertainty,
+available in §11, an objective-shape screen in §12 and residual-structure views in
+§14. Parameter uncertainty,
 confidence intervals, R², formal identifiability analysis and model comparison
 remain unimplemented.
 
@@ -983,3 +985,134 @@ The comparison is derived and ephemeral, like the fit: no parameter, SSE,
 criterion or declaration is written to the dataset, its measurements,
 IndexedDB, `.npex` or `.npsb`. Changing the declaration recomputes only the
 criterion — neither model is re-fitted. Switching datasets discards both.
+
+## 14. Residual structure and spread screening (Phase 47C)
+
+For every candidate that produced a successful fit, the page shows the same
+residuals two ways and screens their spread. Both candidates are described from
+the fits that already exist — M0's residual diagnostics and the M1 fit the
+comparison produced — so no model is fitted again for a plot.
+
+### 14.1 The two views
+
+    residual_i = observed_i − fitted_i
+
+on the original concentration scale, in the dataset's declared concentration
+unit.
+
+| View | Horizontal axis | What it makes visible |
+| --- | --- | --- |
+| Against measured time | time (`timeUnit`) | drift, level shifts, curvature that the model cannot follow |
+| Against fitted concentration | fitted concentration (`concentrationUnit`) | changing spread, curvature and systematic bias, because both axes share one scale |
+
+Both plots draw one marker per stored measurement and a horizontal zero line
+that represents a perfect prediction. **Markers are deliberately not
+connected.** The observations are not a continuous time course, are not
+guaranteed to be equally spaced, and plotting them in measured-time order says
+nothing about dependence between them.
+
+Hover text carries the source row, the measurement time, the observed value,
+the fitted value and the residual, so any point can be traced back to the row
+it came from.
+
+### 14.2 Identity, replicates and ordering
+
+- Every stored row contributes exactly one point. Duplicate timestamps and
+  exact replicates remain separate points with separate residuals; none is
+  averaged, dropped or merged.
+- Nothing is sorted, rewritten or persisted. The charts place each point at its
+  measured time, and the measurement table remains the authority for the stored
+  values.
+- When rows share a timestamp, the section says how many do.
+- When the stored source order is not non-decreasing in time, the section says
+  so, so nobody reads a left-to-right "sequence" into a chart that was never
+  stored in that order.
+
+### 14.3 What cannot be inferred from ordering
+
+**No autocorrelation, independence test or effective-sample-size adjustment is
+computed.** The dataset carries no sampling schedule, no subject identifier that
+guarantees a single series, and no guarantee that rows are complete or equally
+spaced. A lag-one correlation across such rows would be a number with no
+defensible interpretation. The section therefore reports the limitation instead
+of inventing an independence test, and the same sentence appears in every
+model's notes.
+
+### 14.4 Residual-spread screen
+
+A conservative, descriptive screen for a spread that changes with the fitted
+level:
+
+1. The observations are split into two halves of the **fitted** range by a
+   deterministic count-based split (a copy of the indices is sorted; the stored
+   rows are never reordered). Rows with identical fitted values may fall on
+   both sides of the cut, and that is stated rather than hidden.
+2. The mean absolute residual of each half is reported, with the group counts.
+3. The screen compares the larger mean with the smaller one.
+
+| Status | Condition |
+| --- | --- |
+| `visible-pattern` | The larger mean is at least **2×** the smaller, or one half is exactly zero while the other is not |
+| `no-visible-pattern` | The halves differ by less than that ratio |
+| `inconclusive` | Every residual is zero, so there is no spread to compare |
+
+The screen is **unavailable** (`ok: false` with a typed code) when there are
+fewer than **6** observations (three per half), when every fitted value is
+identical so the fitted range cannot be split, or when a fitted value or
+residual is not finite. The residuals themselves remain available in all three
+cases — only the screen is withheld.
+
+**The constants are screening conventions, not tests.** A twofold ratio is
+large relative to the sampling variability of a three-point mean absolute
+residual, so it avoids flagging ordinary scatter; six observations is the
+smallest sample that gives two halves worth comparing. Neither is a universal
+threshold, neither carries a p-value, and a ratio below the trigger does not
+establish constant variance. Both numbers are shown next to the finding so the
+reader can judge the evidence directly.
+
+### 14.5 How this relates to the conditional AICc
+
+The declared error model includes a **common variance**. A visible spread
+pattern is therefore evidence that this part of the assumption is not
+consistent with the sample.
+
+The application responds in exactly one way: the comparison section displays a
+caveat naming the models whose screen found a pattern and stating that the
+criterion is harder to interpret for these data. It **does not**:
+
+- change, recompute or hide the criterion;
+- silently substitute a weighted or different error model;
+- treat the screen as proof that the assumption is wrong.
+
+A patternless screen changes nothing either: AICc stays conditional on the
+declared assumption, and the absence of a visible pattern is not evidence that
+the assumption holds. Neither outcome creates a winner, a verdict or an
+automatic model choice.
+
+### 14.6 What these views cannot establish
+
+- **Gaussianity.** Residual shape cannot confirm a normal error distribution,
+  and a symmetric-looking cloud does not establish one.
+- **Independence.** Points are not a time series here; nothing in these views
+  speaks to correlation between observations.
+- **Constant variance.** The screen describes two halves of one sample.
+- **Model adequacy.** A patternless plot is consistent with the model but does
+  not prove it, and a visible pattern does not identify its cause (wrong model
+  form, a level shift, an outlier, or a different error structure).
+
+These are descriptions of one dataset. They are screening aids, not formal
+tests.
+
+### 14.7 Interface and boundaries
+
+The section is its own card, shown only after a successful fit, with one
+labelled block per candidate model. Each block carries its observation count,
+RMSE, distinct-time count, the spread finding, both plots and the ordering
+notes. A candidate whose fit failed is reported as unavailable rather than
+omitted silently.
+
+Charts are lazy-loaded; each figure has a caption and an accessible
+description naming both axes, the units, the zero line and the fact that
+markers are not connected. The section adds no persistence: no residual, fitted
+value, screen status or ordering note is written to the dataset, its
+measurements, IndexedDB, `.npex` or `.npsb`.

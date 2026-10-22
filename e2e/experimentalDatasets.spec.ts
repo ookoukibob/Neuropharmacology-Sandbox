@@ -479,3 +479,69 @@ test('reports AICc as unavailable when the baseline model has too few observatio
   )
   await expect(page.getByTestId('comparison-difference')).toHaveCount(0)
 })
+
+test('shows residual structure for both fitted models and keeps duplicates separate', async ({
+  page,
+}) => {
+  await page.goto('/experiments')
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+
+  await importTwoColumnCsv(page, {
+    fileName: 'synthetic-residual-structure.csv',
+    csv:
+      'time,concentration\n' +
+      '0,100\n0.5,89.8\n1,67\n2,44.9\n3,30.1\n5,20.2\n7,13.5\n9,9\n',
+    name: 'Synthetic residual structure',
+  })
+
+  // Nothing is shown before a fit exists.
+  await expect(page.getByTestId('residual-structure')).toHaveCount(0)
+  await page.getByTestId('dataset-fit').click()
+  await expect(page.getByTestId('fit-results')).toBeVisible()
+
+  const card = page.getByTestId('residual-structure')
+  await expect(card).toBeVisible()
+  await expect(page.getByTestId('residual-structure-m0')).toBeVisible()
+  await expect(page.getByTestId('residual-structure-m1')).toBeVisible()
+
+  // Both views exist per model, with declared units on both axes.
+  const m0Time = page.getByTestId('fit-residual-chart')
+  const m0Fitted = page.getByTestId('residual-fitted-chart-m0')
+  const m1Fitted = page.getByTestId('residual-fitted-chart-m1')
+  await expect(m0Time.locator('.js-plotly-plot')).toBeVisible({ timeout: 30_000 })
+  await expect(m0Fitted.locator('.js-plotly-plot')).toBeVisible({ timeout: 30_000 })
+  await expect(m1Fitted.locator('.js-plotly-plot')).toBeVisible({ timeout: 30_000 })
+
+  await expect(m0Time.locator('.scatterlayer .points path')).toHaveCount(8)
+  await expect(m0Fitted.locator('.scatterlayer .points path')).toHaveCount(8)
+  await expect(m1Fitted.locator('.scatterlayer .points path')).toHaveCount(8)
+  // Markers only: no line trace joins the observations.
+  await expect(m0Fitted.locator('.scatterlayer .lines path')).toHaveCount(0)
+
+  await expect(m0Time.locator('.xtitle')).toContainText('Time (h)')
+  await expect(m0Fitted.locator('.xtitle')).toContainText('Fitted concentration (mg/L)')
+  await expect(m0Fitted.locator('.ytitle')).toContainText('Residual')
+  await expect(m0Fitted.locator('.ytitle')).toContainText('mg/L')
+
+  // The screen states its heuristic and never claims a test result.
+  await expect(page.getByTestId('residual-spread-m0')).toContainText(
+    /not a heteroscedasticity test/i,
+  )
+  await expect(page.getByTestId('residual-ordering-m0')).toContainText(/measured time/i)
+  await expect(card).not.toContainText('NaN')
+
+  // Duplicate timestamps stay separate observations in every view.
+  await importTwoColumnCsv(page, {
+    fileName: 'synthetic-residual-duplicates.csv',
+    csv: 'time,concentration\n0,100\n0,98\n1,62\n1,60\n2,40\n2,39\n',
+    name: 'Synthetic residual duplicates',
+  })
+  await page.getByTestId('dataset-fit').click()
+  await expect(page.getByTestId('fit-results')).toBeVisible()
+  await expect(page.getByTestId('residual-ordering-m0')).toContainText(/sharing a timestamp/i)
+  await expect(page.getByTestId('fit-residual-chart').locator('.js-plotly-plot')).toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.getByTestId('fit-residual-chart').locator('.scatterlayer .points path')).toHaveCount(6)
+  await expect(page.getByTestId('residual-fitted-chart-m0').locator('.scatterlayer .points path')).toHaveCount(6)
+})

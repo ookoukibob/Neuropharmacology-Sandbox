@@ -23,8 +23,31 @@ vi.mock('@/components/charts/ExperimentalDatasetChart', () => ({
 }))
 
 vi.mock('@/components/charts/ExperimentalFitResidualChart', () => ({
-  ExperimentalFitResidualChart: ({ residuals }: { residuals: readonly { sourceRow: number }[] }) => (
-    <div data-testid="stub-fit-residual-chart">{residuals.length} residual points</div>
+  ExperimentalFitResidualChart: ({
+    residuals,
+    testId,
+  }: {
+    residuals: readonly { sourceRow: number }[]
+    testId?: string
+  }) => (
+    // Model-specific instances keep distinct test ids (see the view).
+    <div data-testid={testId === undefined ? 'stub-fit-residual-chart' : 'stub-' + testId}>
+      {residuals.length} residual points
+    </div>
+  ),
+}))
+
+vi.mock('@/components/charts/ExperimentalFitResidualVsFittedChart', () => ({
+  ExperimentalFitResidualVsFittedChart: ({
+    residuals,
+    testId,
+  }: {
+    residuals: readonly { fitted: number }[]
+    testId?: string
+  }) => (
+    <div data-testid={testId ?? 'stub-residual-fitted-chart'}>
+      {residuals.length} fitted points
+    </div>
   ),
 }))
 
@@ -45,6 +68,44 @@ vi.mock('@/components/charts/ExperimentalFitProfileChart', () => ({
 // The profile result is real by default; one test forces the unavailable
 // branch, which the current bounds make unreachable through the UI.
 const profileOverride = vi.hoisted(() => ({ unavailable: false }))
+
+// The comparison is real by default; one test forces a failed baseline
+// candidate so the residual section's unavailable branch is exercised.
+const comparisonOverride = vi.hoisted(() => ({ baselineUnavailable: false }))
+vi.mock('@/domain/experiments/mono-exponential-model-comparison', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/domain/experiments/mono-exponential-model-comparison')>()
+  return {
+    ...actual,
+    compareMonoExponentialModels: (
+      ...args: Parameters<typeof actual.compareMonoExponentialModels>
+    ) => {
+      const result = actual.compareMonoExponentialModels(...args)
+      if (!comparisonOverride.baselineUnavailable || !result.ok) return result
+      const [m0] = result.models
+      return {
+        ...result,
+        models: [
+          m0,
+          {
+            ok: false as const,
+            modelId: 'M1' as const,
+            label: 'M1 · mono-exponential decay with additive baseline',
+            formula: 'C(t) = B + A · exp(−k · (t − t_ref))',
+            meanParameterCount: 3 as const,
+            totalParameterCount: 4,
+            message: 'The rate optimizer did not converge to a finite value.',
+          },
+        ],
+        baselineFit: {
+          ok: false as const,
+          code: 'NON_CONVERGED' as const,
+          message: 'The rate optimizer did not converge to a finite value.',
+        },
+      }
+    },
+  }
+})
 vi.mock('@/domain/experiments/mono-exponential-profile', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@/domain/experiments/mono-exponential-profile')>()
@@ -191,6 +252,7 @@ let repository: FakeExperimentalDatasetRepository
 beforeEach(() => {
   repository = new FakeExperimentalDatasetRepository()
   profileOverride.unavailable = false
+  comparisonOverride.baselineUnavailable = false
 })
 
 function renderView(): void {
@@ -792,6 +854,162 @@ describe('model comparison and conditional AICc (phase 47C)', () => {
     fireEvent.click(screen.getByTestId('dataset-fit'))
     const card = await screen.findByTestId('fit-model-comparison')
     fireEvent.click(within(card).getByTestId('comparison-assumption'))
+    expect(repository.createCalls).toHaveLength(0)
+    expect(repository.updateCalls).toHaveLength(0)
+    expect(repository.deleteCalls).toHaveLength(0)
+  })
+})
+
+describe('residual structure diagnostics (phase 47C)', () => {
+  const row = (id: string, sourceRow: number, time: number, concentration: number) => ({
+    id,
+    sourceRow,
+    time,
+    concentration,
+  })
+
+  /** Decay with scatter that grows with the fitted level. */
+  const proportionalStudy = (): ExperimentalDataset => {
+    const times = [0, 0.5, 1, 2, 3, 5, 7, 9]
+    const signs = [1, -1, 1, -1, 1, -1, 1, -1]
+    return storedDataset({
+      name: 'Proportional scatter study',
+      measurements: times.map((time, index) =>
+        row(
+          `p${String(index + 1)}`,
+          index + 1,
+          time,
+          Math.round(100 * Math.exp(-0.4 * time) * (1 + 0.1 * (signs[index] ?? 1)) * 100) / 100,
+        ),
+      ),
+    })
+  }
+
+  const select = async (dataset: ExperimentalDataset): Promise<void> => {
+    repository.rows.set(dataset.id, dataset)
+    renderView()
+    const list = await screen.findByRole('list', { name: 'Saved experimental datasets' })
+    fireEvent.click(within(list).getByRole('button', { name: new RegExp(dataset.name) }))
+    await screen.findByRole('heading', { level: 2, name: dataset.name })
+  }
+
+  it('is absent before a fit and shows both models afterwards', async () => {
+    await select(proportionalStudy())
+    expect(screen.queryByTestId('residual-structure')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    const card = await screen.findByTestId('residual-structure')
+
+    // One block per candidate, each with both views.
+    const m0 = within(card).getByTestId('residual-structure-m0')
+    const m1 = within(card).getByTestId('residual-structure-m1')
+    expect(within(m0).getByText(/^Decay model$/)).toBeInTheDocument()
+    expect(within(m1).getByText(/^Decay with additive baseline$/)).toBeInTheDocument()
+    expect(within(m0).getByTestId('stub-fit-residual-chart')).toHaveTextContent('8 residual points')
+    expect(within(m1).getByTestId('stub-fit-residual-chart-m1')).toHaveTextContent('8 residual points')
+    expect(within(m0).getByTestId('residual-fitted-chart-m0')).toHaveTextContent('8 fitted points')
+    expect(within(m1).getByTestId('residual-fitted-chart-m1')).toHaveTextContent('8 fitted points')
+
+    // Named sections: each block is labelled by its own heading.
+    expect(within(card).getAllByRole('region', { name: /decay/i }).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('reports the spread screen with units and a visible pattern', async () => {
+    await select(proportionalStudy())
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    await screen.findByTestId('residual-structure')
+
+    expect(screen.getByTestId('residual-spread-status-m0')).toHaveTextContent(
+      /visible spread pattern/i,
+    )
+    const block = screen.getByTestId('residual-spread-m0')
+    expect(block).toHaveTextContent('mg/L')
+    expect(block).toHaveTextContent(/lower fitted half/)
+    expect(block).toHaveTextContent(/upper fitted half/)
+    expect(block).toHaveTextContent(/not a heteroscedasticity test/i)
+    const ratio = Number(screen.getByTestId('residual-spread-ratio-m0').textContent)
+    expect(Number.isFinite(ratio)).toBe(true)
+    expect(ratio).toBeGreaterThanOrEqual(2)
+    expect(screen.getByTestId('residual-spread-message-m0')).toHaveTextContent(
+      /not a test result/i,
+    )
+
+    // The criterion's interpretation is caveated, never rewritten.
+    const caveat = screen.getByTestId('comparison-spread-caveat')
+    expect(caveat).toHaveTextContent(/visible pattern/i)
+    expect(caveat).toHaveTextContent(/unchanged/i)
+    expect(caveat).toHaveTextContent(/no different assumption has been substituted/i)
+  })
+
+  it('reports the screen as unavailable for a small sample without hiding the residuals', async () => {
+    await select(
+      storedDataset({
+        name: 'Small residual study',
+        measurements: [
+          row('s1', 1, 0, 100),
+          row('s2', 2, 0.5, 83),
+          row('s3', 3, 1, 70),
+          row('s4', 4, 2, 51),
+          row('s5', 5, 3, 39),
+        ],
+      }),
+    )
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    await screen.findByTestId('residual-structure')
+
+    expect(screen.getByTestId('residual-spread-status-m0')).toHaveTextContent(/unavailable/i)
+    expect(screen.getByTestId('residual-spread-message-m0')).toHaveTextContent(
+      /at least 6 observations/i,
+    )
+    // The residual plots are still available: only the screen is withheld.
+    expect(screen.getByTestId('stub-fit-residual-chart')).toHaveTextContent('5 residual points')
+    // Without a visible pattern there is no spread caveat on the comparison.
+    expect(screen.queryByTestId('comparison-spread-caveat')).not.toBeInTheDocument()
+  })
+
+  it('discloses duplicate timestamps and keeps every row separate', async () => {
+    await select(
+      storedDataset({
+        name: 'Duplicate time study',
+        measurements: [
+          row('d1', 1, 0, 100),
+          row('d2', 2, 0, 98),
+          row('d3', 3, 1, 62),
+          row('d4', 4, 1, 60),
+          row('d5', 5, 2, 40),
+          row('d6', 6, 2, 39),
+        ],
+      }),
+    )
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    await screen.findByTestId('residual-structure')
+
+    const ordering = screen.getByTestId('residual-ordering-m0')
+    expect(ordering).toHaveTextContent(/sharing a timestamp/i)
+    expect(ordering).toHaveTextContent(/6/)
+    expect(screen.getByTestId('stub-fit-residual-chart')).toHaveTextContent('6 residual points')
+    expect(screen.getByTestId('residual-fitted-chart-m0')).toHaveTextContent('6 fitted points')
+  })
+
+  it('renders the baseline model as unavailable when its fit failed', async () => {
+    comparisonOverride.baselineUnavailable = true
+    await select(proportionalStudy())
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    await screen.findByTestId('residual-structure')
+
+    expect(screen.getByTestId('residual-structure-m1-unavailable')).toHaveTextContent(
+      /unavailable for this model/i,
+    )
+    expect(screen.queryByTestId('stub-fit-residual-chart-m1')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('residual-fitted-chart-m1')).not.toBeInTheDocument()
+    // The decay model's diagnostics are unaffected.
+    expect(screen.getByTestId('stub-fit-residual-chart')).toHaveTextContent('8 residual points')
+  })
+
+  it('never writes to the repository', async () => {
+    await select(proportionalStudy())
+    fireEvent.click(screen.getByTestId('dataset-fit'))
+    await screen.findByTestId('residual-structure')
     expect(repository.createCalls).toHaveLength(0)
     expect(repository.updateCalls).toHaveLength(0)
     expect(repository.deleteCalls).toHaveLength(0)

@@ -29,6 +29,7 @@ import type { ExperimentalMeasurement } from './experimental-dataset'
 import {
   fitMonoExponentialWithBaseline,
   type BaselineFitWarning,
+  type MonoExponentialBaselineFitResult,
 } from './mono-exponential-baseline-fit'
 import type { MonoExponentialFitResult } from './mono-exponential-fit'
 
@@ -108,6 +109,11 @@ export interface MonoExponentialModelComparison {
   readonly distinctTimeCount: number
   /** M0 first, M1 second. */
   readonly models: readonly [CandidateModel, CandidateModel]
+  /**
+   * The M1 fit this comparison was built from. Exposed so residual diagnostics
+   * describe the same fit instead of re-running the model.
+   */
+  readonly baselineFit: MonoExponentialBaselineFitResult
   /** Standing limitations of the comparison itself. */
   readonly notes: readonly string[]
 }
@@ -393,6 +399,7 @@ export function compareMonoExponentialModels(
     observationCount: n,
     distinctTimeCount: distinctTimes.size,
     models: [m0, m1],
+    baselineFit,
     notes: comparisonNotes(),
   }
 }
