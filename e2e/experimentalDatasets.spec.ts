@@ -299,6 +299,11 @@ test('fits a mono-exponential decay and overlays the curve', async ({ page }) =>
   // the accessible measurement table still holds the observed values.
   await expect(page.getByText('Fitted mono-exponential curve')).toBeVisible()
   await expect(page.getByTestId('dataset-measurements')).toBeVisible()
+  await expect(page.getByTestId('fit-diagnostics')).toBeVisible()
+  await expect(page.getByTestId('fit-rmse')).toContainText('mg/L')
+  await expect(page.getByTestId('fit-residual-df')).toContainText('2')
+  await expect(page.getByTestId('fit-residual-chart').locator('.js-plotly-plot')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('fit-identifiability-screen')).toContainText(/not a formal .*identifiability test/i)
 
   // The fit is derived only: reloading the page loses it and the stored
   // measurements are unchanged.
