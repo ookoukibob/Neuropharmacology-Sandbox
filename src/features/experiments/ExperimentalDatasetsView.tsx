@@ -1,5 +1,5 @@
 /**
- * Experimental datasets page (phase 47A).
+ * Experimental datasets page (phases 47A and 47B).
  *
  * Owns layout and user intent only: the repository-backed hook performs every
  * read/write, CSV/`.npex` import cards produce validated previews, and this
@@ -72,13 +72,15 @@ export function ExperimentalDatasetsView({ repository }: ExperimentalDatasetsVie
         <div className="flex flex-wrap items-center gap-3">
           <Database aria-hidden="true" className="size-6 text-muted-foreground" />
           <h1 className="text-2xl font-semibold">Experimental Datasets</h1>
-          <Badge variant="secondary">Phase 47A · measured data only</Badge>
+          <Badge variant="secondary">Phase 47A–47B · measured data + optional decay fit</Badge>
         </div>
         <p className="max-w-4xl text-sm text-muted-foreground">
           Import, validate, store and export measured concentration–time datasets. Values are kept in
           source order exactly as measured — duplicates and replicates are never averaged,
-          deduplicated or interpolated. No fitting, parameter estimation or diagnostics are
-          performed on this page.
+          deduplicated or interpolated. A one-compartment mono-exponential decay fit can be run on
+          the selected dataset; the fit is a temporary derived result that never modifies or saves
+          the measurements. Phase 47C residual diagnostics, uncertainty estimates and model
+          comparison are not available.
         </p>
       </header>
 

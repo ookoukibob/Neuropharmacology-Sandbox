@@ -424,9 +424,12 @@ stored row, including duplicate times and exact replicates, in array order.
 The chart is presentation-only:
 
 - one marker trace, one marker per stored measurement, in source order;
-- no line, fitted curve, interpolation, smoothing or derived value;
 - axis titles use the declared time and concentration units;
-- no scientific calculation occurs in React or in the Plotly adapter.
+- no scientific calculation occurs in React or in the Plotly adapter;
+- a fitted curve (§10) is drawn only after the user runs the fit, and only as a
+  **separate line trace** beside the markers — it is never merged into the
+  observed trace, and the measurement table remains the authority for measured
+  values. The curve is a model visualization, not measured data.
 
 The chart is lazy-loaded. UI tests stub it; the E2E suite exercises the real
 Plotly rendering in Chromium. Both the measurement table and the controls are
