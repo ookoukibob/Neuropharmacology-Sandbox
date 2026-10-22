@@ -26,6 +26,6 @@ describe('ExperimentalFitResidualChart', () => {
       />,
     )
     expect(screen.getByTestId('fit-residual-chart')).toBeInTheDocument()
-    expect(screen.getByTestId('mock-plot')).toHaveAttribute('aria-label', /Residual plot/)
+    expect(screen.getByTestId('mock-plot').getAttribute('aria-label')).toMatch(/Residual plot/)
   })
 })
