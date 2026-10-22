@@ -507,8 +507,10 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
         <CardHeader>
           <CardTitle headingLevel={3}>Observed measurements</CardTitle>
           <p className="text-xs text-muted-foreground">
-            Markers only. No fitted curve, interpolation, averaging or unit conversion is shown.
-            The table below is the accessible source of the same values.
+            Measured observations are drawn as markers; no interpolation, averaging or unit
+            conversion is applied. A mono-exponential fit, when you run one, appears as a separate
+            model curve and never replaces the measured points. The table below remains the
+            accessible source of the measured values.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -596,7 +598,7 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
             </Suspense>
             <figcaption className="mt-2 text-xs text-muted-foreground">
               {fitOverlay === undefined
-                ? 'Observed points only.'
+                ? 'Observed measurements (markers). Run the fit above to overlay the fitted model curve as a separate line.'
                 : 'Observed points (markers) with the fitted mono-exponential curve (line). The curve is a model visualization, not additional measurements.'}{' '}
               Time axis in {dataset.timeUnit}; concentration axis in {dataset.concentrationUnit}.
               Hover shows the source row, sample id and note when present.

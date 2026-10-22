@@ -1,9 +1,10 @@
 # Experimental concentration–time datasets
 
-**Status: Phase 47A — implemented.** This document is the contract for
-measured-dataset import, validation, local storage, inspection and
-`.npex` interchange. Phase 47B/47C fitting, parameter estimation and
-diagnostics are **not implemented** and are out of scope here.
+**Status: Phase 47A and Phase 47B — implemented.** This document is the
+contract for measured-dataset import, validation, local storage, inspection and
+`.npex` interchange, plus the optional one-compartment mono-exponential decay
+fit (§10). Phase 47C residual diagnostics, parameter uncertainty and model
+comparison are **not implemented** and are out of scope here.
 
 All examples below are synthetic test data, not pharmacological information.
 
@@ -25,7 +26,7 @@ Phase 47A adds a first-class record for **measured concentration–time data**:
 
 **Non-goals.**
 
-- No curve fitting, regression, parameter estimation, half-life estimation,
+- Beyond the Phase 47B mono-exponential fit (§10): no further regression,
   AUC/Cmax derivation, interpolation, smoothing or diagnostics.
 - No automatic conversion between time or concentration units.
 - No merging of this store into the drug library, NPSL documents or the
@@ -489,7 +490,9 @@ browser-local state, use `.npsb`.
   re-import does not invent a new scientific source.
 - **No hidden write.** Import previews are read-only; writes occur only after
   explicit confirmation, through the repository, in validated transactions.
-- **No fitting yet.** Phase 47B/47C are deliberately absent; adding them will
+- **Phase 47B fitting is available; 47C is not.** A one-compartment
+  mono-exponential decay fit exists (§10). Residual diagnostics, uncertainty
+  estimates and model comparison are deliberately absent; adding them will
   require their own contracts and must not change the stored observations or
   the `.npex` fidelity rules retroactively.
 

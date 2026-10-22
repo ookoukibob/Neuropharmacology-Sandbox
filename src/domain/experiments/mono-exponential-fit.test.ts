@@ -272,3 +272,105 @@ describe('fitCurvePoints', () => {
     expect(fitCurvePoints(fit, Number.NaN, 1)).toEqual([])
   })
 })
+
+describe('rate representability and zero-rate consistency (review fixes)', () => {
+  it('fails rather than reporting an infinite rate for a subnormal time span', () => {
+    // The mathematical rate across this span is not representable as a finite
+    // JavaScript number, so the fit must not publish Infinity as a success.
+    const result = fitMonoExponentialDecay(rows([
+      [0, 1],
+      [Number.MIN_VALUE, 0.5],
+    ]))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('NON_FINITE')
+  })
+
+  it('reports a near-epsilon dimensionless rate consistently at every span', () => {
+    // q = 5e-13 sits inside the documented zero-rate tolerance, so the result
+    // must be the explicit zero-rate solution: k === 0 exactly, zeroRate true,
+    // no half-life. A positive k labelled as zero is the bug this pins.
+    for (const span of [1, 1e3, 1e6]) {
+      const k = 5e-13 / span
+      const data = rows([
+        [0, 100],
+        [span, 100 * Math.exp(-k * span)],
+      ])
+      const fit = okFit(fitMonoExponentialDecay(data))
+      expect(fit.k).toBe(0)
+      expect(fit.zeroRate).toBe(true)
+      expect(fit.halfLife).toBeUndefined()
+      expect(fit.warnings.map((w) => w.code)).toContain('ZERO_RATE_BOUNDARY')
+      // The two boundary warnings are mutually exclusive.
+      expect(fit.warnings.map((w) => w.code)).not.toContain('RATE_AT_UPPER_BOUND')
+    }
+  })
+
+  it('keeps a clearly positive rate positive, with a finite half-life', () => {
+    const fit = okFit(fitMonoExponentialDecay(synth(100, 0.5, [0, 1, 2, 3])))
+    expect(fit.k).toBeGreaterThan(0)
+    expect(fit.zeroRate).toBe(false)
+    expect(fit.halfLife).toBeDefined()
+    expect(Number.isFinite(fit.halfLife as number)).toBe(true)
+  })
+
+  it('never publishes a successful result with a non-finite required field', () => {
+    const cases = [
+      synth(100, 0.2, [0, 1, 2, 4]),
+      synth(1e-9, 0.4, [0, 2, 4]),
+      synth(1e9, 0.4, [0, 2, 4]),
+      synth(10, 1e-3, [0, 1e3, 2e3]),
+      rows([[0, 10], [1, 10], [2, 10]]),
+      rows([[0, 1], [1, 1e-30], [2, 1e-40]]),
+    ]
+    for (const data of cases) {
+      const result = fitMonoExponentialDecay(data)
+      if (!result.ok) continue
+      expect(Number.isFinite(result.tRef)).toBe(true)
+      expect(Number.isFinite(result.cRef)).toBe(true)
+      expect(Number.isFinite(result.k)).toBe(true)
+      expect(Number.isFinite(result.sse)).toBe(true)
+      expect(result.k).toBeGreaterThanOrEqual(0)
+      // zeroRate, k and halfLife must agree with each other.
+      if (result.zeroRate) {
+        expect(result.k).toBe(0)
+        expect(result.halfLife).toBeUndefined()
+      } else {
+        expect(result.k).toBeGreaterThan(0)
+        expect(result.halfLife).toBeDefined()
+        expect(Number.isFinite(result.halfLife as number)).toBe(true)
+      }
+    }
+  })
+})
+
+describe('malformed runtime rows return structured failures (review fixes)', () => {
+  const malformed: ReadonlyArray<readonly [string, unknown]> = [
+    ['null', null],
+    ['undefined', undefined],
+    ['a primitive', 42],
+    ['a string', 'measurement'],
+    ['an empty object', {}],
+    ['an object without time', { concentration: 1 }],
+    ['an object without concentration', { time: 0 }],
+    ['non-numeric fields', { time: '0', concentration: '1' }],
+  ]
+
+  for (const [label, value] of malformed) {
+    it(`returns INVALID_MEASUREMENT for ${label} without throwing`, () => {
+      const data = [value as never, row(0, 1), row(1, 0.5)]
+      let result: MonoExponentialFitResult | undefined
+      expect(() => {
+        result = fitMonoExponentialDecay(data)
+      }).not.toThrow()
+      expect(result?.ok).toBe(false)
+      if (result !== undefined && !result.ok) expect(result.code).toBe('INVALID_MEASUREMENT')
+    })
+  }
+
+  it('still accepts a well-formed array after rejecting a malformed one', () => {
+    // The guard must not leave any residual state behind.
+    fitMonoExponentialDecay([null as never])
+    const fit = okFit(fitMonoExponentialDecay(synth(50, 0.3, [0, 1, 2])))
+    expect(fit.k).toBeCloseTo(0.3, 6)
+  })
+})

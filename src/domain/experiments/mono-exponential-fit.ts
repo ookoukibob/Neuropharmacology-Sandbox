@@ -170,7 +170,19 @@ export function fitMonoExponentialDecay(
   let tMax = Number.NEGATIVE_INFINITY
   let maxAbsConcentration = 0
   for (const measurement of measurements) {
-    const { time, concentration } = measurement
+    // Runtime shape guard: a stored row is normally well formed, but this
+    // boundary must never throw on a malformed element (null, undefined, a
+    // primitive, or an object missing a field). TypeScript types are erased.
+    if (measurement === null || typeof measurement !== 'object') {
+      return failure('INVALID_MEASUREMENT', 'A measurement is not an object.')
+    }
+    const { time, concentration } = measurement as { time?: unknown; concentration?: unknown }
+    if (typeof time !== 'number' || typeof concentration !== 'number') {
+      return failure(
+        'INVALID_MEASUREMENT',
+        'A measurement is missing a numeric time or concentration.',
+      )
+    }
     if (!Number.isFinite(time) || !Number.isFinite(concentration)) {
       return failure('INVALID_MEASUREMENT', 'A measurement contains a non-finite time or concentration.')
     }
@@ -250,7 +262,19 @@ export function fitMonoExponentialDecay(
     bestSse = atUpper
   }
 
-  const solved = sseAt(qBest, points)
+  // 4. Boundary classification happens in the DIMENSIONLESS parameter q.
+  //    Comparing the dimensional k against epsilon/span is wrong twice over:
+  //    both sides scale with 1/span (so the test is span-invariant and can
+  //    mislabel a positive rate as zero), and for a subnormal span both can
+  //    overflow to Infinity, making "Infinity <= Infinity" true.
+  //
+  //    When the tolerance classifies qBest as zero we SET it to zero before
+  //    recomputing the amplitude and SSE, so k, zeroRate, halfLife and the
+  //    warnings all describe the same solution.
+  const atZeroBoundary = qBest <= ZERO_RATE_EPSILON
+  const qFinal = atZeroBoundary ? 0 : qBest
+
+  const solved = sseAt(qFinal, points)
   if (solved === null || !Number.isFinite(solved.cRef) || !Number.isFinite(solved.sse)) {
     return failure('NON_FINITE', 'The fit produced a non-finite intermediate value.')
   }
@@ -267,8 +291,17 @@ export function fitMonoExponentialDecay(
     )
   }
 
-  const k = qBest / span
-  const zeroRate = k <= ZERO_RATE_EPSILON / span || qBest <= ZERO_RATE_EPSILON
+  // k = q/T. A subnormal-but-positive span can make this overflow: that rate is
+  // not representable as a finite number, so it is a structured failure — never
+  // a successful fit reporting Infinity, and never clamped to an arbitrary value.
+  const k = qFinal / span
+  if (!Number.isFinite(k)) {
+    return failure(
+      'NON_FINITE',
+      'The fitted decay rate is not representable as a finite number for this time span.',
+    )
+  }
+  const zeroRate = qFinal === 0
   const warnings: FitWarning[] = []
 
   if (zeroRate) {
@@ -278,7 +311,10 @@ export function fitMonoExponentialDecay(
         'The best fit lies at the zero-rate boundary: the constrained model finds no positive decay rate, and no finite half-life is available. The data do not support an identifiable decay rate.',
     })
   }
-  if (qBest >= MAX_DIMENSIONLESS_RATE) {
+  // The upper-bound warning describes the same q the result reports, and the
+  // two boundary states are mutually exclusive by construction (qFinal is 0
+  // only when the optimum is at the lower boundary).
+  if (qFinal >= MAX_DIMENSIONLESS_RATE) {
     warnings.push({
       code: 'RATE_AT_UPPER_BOUND',
       message:
@@ -289,6 +325,12 @@ export function fitMonoExponentialDecay(
   const halfLife = zeroRate ? undefined : Math.LN2 / k
   if (halfLife !== undefined && !Number.isFinite(halfLife)) {
     return failure('NON_FINITE', 'The derived half-life is not finite.')
+  }
+
+  // Final guard: every reported numeric field must be finite before a result
+  // is published as successful.
+  if (!Number.isFinite(tRef) || !Number.isFinite(cRef) || !Number.isFinite(k) || !Number.isFinite(sse)) {
+    return failure('NON_FINITE', 'The fitted parameters are not finite.')
   }
 
   return {
