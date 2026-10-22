@@ -197,6 +197,18 @@ function renderView(): void {
   render(<ExperimentalDatasetsView repository={repository} />)
 }
 
+describe('ExperimentalDatasetsView — user-facing copy', () => {
+  it('does not expose internal development phase labels', async () => {
+    renderView()
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Experimental Datasets' }),
+    ).toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent(/Phase 47[A-C]/i)
+    expect(document.body).not.toHaveTextContent(/measured data \+ fit diagnostics/i)
+  })
+})
+
 describe('ExperimentalDatasetsView — CSV import and management', () => {
   it('previews CSV values, imports all rows, renders the ordered table and supports rename/delete', async () => {
     renderView()
