@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { MonoExponentialResidual } from '@/domain/experiments/mono-exponential-fit-diagnostics'
 import { render, screen } from '@testing-library/react'
 import { ExperimentalFitResidualChart } from './ExperimentalFitResidualChart'
