@@ -214,6 +214,7 @@ dependency-ordered roadmap lives in [docs/architecture.md](docs/architecture.md)
 | Phase 47B — constrained mono-exponential fit of selected measured data with bounded optimizer, structured failures and temporary fitted curve | done |
 | Phase 47C initial slice — raw residual plot, RMSE, residual degrees of freedom and explicit data-support screening | implemented; formal uncertainty and model comparison remain deferred |
 | Phase 47C identifiability slice — practical screening of the fit's own least-squares objective over a documented rate grid: localized/broad/boundary/sparse classification, near-minimum band, boundary proximity in model-response terms, and explicit limitations; not a likelihood profile or a structural-identifiability proof | implemented; model comparison is the next deferred increment |
+| Phase 47C model-comparison slice — two-candidate comparison (decay vs decay + additive baseline) with descriptive SSE/RMSE/parameter counts and a conditional AICc that requires an explicitly declared Gaussian homoscedastic error model; unavailability is reported with reasons, never as a fabricated score | implemented; a third candidate and formal uncertainty remain deferred |
 
 The only remaining audit verification gap is **NV-2**: no authentic historical
 user database has been available for migration testing. Synthetic legacy
@@ -267,6 +268,7 @@ assets when you need a reproducible version. See
 | [docs/validation.md](docs/validation.md) | Layered validation and the import pipeline |
 | [docs/data-sources.md](docs/data-sources.md) | On-demand PubChem/ChEMBL retrieval: three-layer model, provenance/licensing, explicit selection and import rules |
 | [docs/experimental-data.md](docs/experimental-data.md) | Measured concentration–time datasets: domain, explicit CSV mapping, `.npex` 1.0.0, storage, UI and recovery |
+| [docs/scientific-notation.md](docs/scientific-notation.md) | One notation renderer, centralized parameter metadata, and the lint rule that keeps raw `V_c` out of the UI |
 | [docs/testing.md](docs/testing.md) | Test strategy, required test matrix, round-trip testing |
 | [docs/releasing.md](docs/releasing.md) | Stable and prerelease procedures for tagged static builds, checks, ZIP + SHA-256 verification |
 | [CHANGELOG.md](CHANGELOG.md) | Versioned release notes and known limitations |

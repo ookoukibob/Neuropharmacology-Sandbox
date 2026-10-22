@@ -57,8 +57,15 @@ const IMPLICIT_SUBSCRIPTS: readonly ImplicitSubscript[] = [
  * Base symbols this application writes with an underscore subscript. A
  * generic `letter_letter` rule would reinterpret ordinary identifiers such as
  * `snake_case`, so the set is explicit and narrowly scoped.
+ *
+ * This list is the single authority for "what counts as notation" and is
+ * mirrored by `scripts/notation-lint/detect.mjs` (the static guard). The two
+ * copies are kept in sync by an assertion in `notation.test.ts`; when adding a
+ * base here, add it there too — otherwise the lint rule will not protect it.
  */
-const UNDERSCORE_BASES = new Set(['A', 'C', 'E', 'K', 'R', 'V', 'f', 'k', 't'])
+export const NOTATION_UNDERSCORE_BASES: readonly string[] = ['A', 'C', 'E', 'K', 'R', 'V', 'f', 'k', 't']
+
+const UNDERSCORE_BASES = new Set(NOTATION_UNDERSCORE_BASES)
 
 const WORD_CHAR = /[A-Za-z0-9_]/
 
@@ -351,4 +358,21 @@ export function parseChemicalFormula(input: string): readonly NotationToken[] {
 /** Parse a value using the selected presentation mode. */
 export function parseNotation(value: string, mode: NotationMode): readonly NotationToken[] {
   return mode === 'chemical' ? parseChemicalFormula(value) : parseMathNotation(value)
+}
+
+/**
+ * Spoken form of a notation value, for `aria-label` / accessible names.
+ *
+ * Subscripts and superscripts are announced by name instead of being flattened
+ * into indistinguishable baseline text: `V_c` becomes "V subscript c", so a
+ * screen-reader user hears the same distinction a sighted user sees. The
+ * visible glyphs are unchanged — this is only the text alternative.
+ */
+export function describeNotation(value: string, mode: NotationMode = 'math'): string {
+  const parts = parseNotation(value, mode).map((token) => {
+    if (token.kind === 'sub') return ` subscript ${token.value} `
+    if (token.kind === 'sup') return ` superscript ${token.value} `
+    return token.value
+  })
+  return parts.join('').replace(/\s+/g, ' ').trim()
 }

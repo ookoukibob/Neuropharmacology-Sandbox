@@ -13,6 +13,7 @@ dist-ssr
 *.local
 
 # Test artifacts
+src/features/__notation-lint-*-probe.tsx
 test-results
 playwright-report
 blob-report

@@ -261,7 +261,10 @@ describe('SimulationView — stale results and failures', () => {
     await user.click(runButton())
     expect(control.calls).toHaveLength(0)
     const summary = await screen.findByTestId('form-errors')
-    expect(summary).toHaveTextContent(/End time is required/)
+    // The summary names the field once (from the shared metadata) and then
+    // states the problem; the sentence must not repeat the parameter name.
+    expect(summary.textContent).toContain('End time (h): A value is required.')
+    expect(summary.textContent).not.toContain('End time (h): End time')
     expect(screen.queryByTestId('stub-chart-concentration')).not.toBeInTheDocument()
   })
 
@@ -274,7 +277,7 @@ describe('SimulationView — stale results and failures', () => {
     expect(input).toHaveAttribute('aria-invalid', 'true')
     const describedBy = input.getAttribute('aria-describedby')
     expect(describedBy).toBeTruthy()
-    expect(document.getElementById(describedBy ?? '')).toHaveTextContent(/must be a finite number/)
+    expect(document.getElementById(describedBy ?? '')).toHaveTextContent(/must be a finite number/i)
   })
 
   it('never lets a prior success stand in for a failed run', async () => {

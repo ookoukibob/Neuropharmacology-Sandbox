@@ -14,7 +14,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/tests/setup.ts'],
-    include: ['src/**/*.test.{ts,tsx}'],
+    // `scripts/**` holds the notation lint rule; its tests live next to it and
+    // run in the same suite so the static guard cannot rot unnoticed.
+    include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.test.mjs'],
     exclude: ['node_modules', 'e2e'],
     coverage: {
       provider: 'v8',

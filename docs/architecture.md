@@ -116,6 +116,12 @@ flowchart TD
 6. **Serialization** (NPSL/CSV/`.npex`/`.npsb`) lives in `src/data`, never
    inside components or the engine. Import/export can change without
    touching either.
+7. **Scientific notation is rendered, never typed into copy.** User-facing
+   symbols go through `ScientificText` / `ParameterLabel`, labels come from the
+   shared field metadata, and validation returns identifiers rather than
+   display strings. `notation/no-raw-scientific-notation` (oxlint) enforces
+   this in `npm run lint`. See
+   [docs/scientific-notation.md](scientific-notation.md).
 
 ### Why the data layer is independent
 
@@ -839,6 +845,7 @@ device-local presentation preferences — see §4.7.
 | 47B | Constrained one-compartment mono-exponential fit of user-selected measured concentration–time rows, bounded dimensionless-rate search, finite-value guards, structured failures and boundary warnings; fitted overlay is temporary and never persisted | 47A | done |
 | 47C (initial slice) | Raw observation-level residuals and residual-vs-time plot, RMSE in the declared concentration unit, n − 2 residual degrees of freedom, and explicit boundary/sparse-time screening. No invented thresholds, uncertainty estimates, model comparison or AICc; those require additional models and declared error assumptions | 47B | implemented; model-comparison work remains deferred |
 | 47C (identifiability slice) | Practical identifiability screening of the existing mono-exponential objective: a documented 161-point rate grid over the fit's own admissible interval, a near-minimum band with an explicit resolution state, boundary proximity stated in model-response terms, a distinct-time sufficiency gate, explicit failed-candidate reporting, and plain-language limitations. Labelled a least-squares objective profile — never a likelihood, confidence interval or structural-identifiability proof. Estimate and fitting algorithm unchanged | 47B, 47C (initial slice) | implemented; model comparison remains deferred |
+| 47C (model-comparison slice) | Two-candidate comparison (existing mono-exponential M0 versus mono-exponential with additive baseline M1) on identical rows, `t_ref`, span, scale and unweighted objective; exact constrained least squares for the M1 amplitude/baseline subproblem; descriptive SSE/RMSE/parameter-count table with model-based parameter counting; and a conditional AICc that requires an explicitly declared independent additive Gaussian homoscedastic error model, with structured unavailability reasons and no epsilon substitution, no ordinary-AIC fallback, no weights, thresholds or verdicts | 47B, 47C (initial slice), 47C (identifiability slice) | implemented; a third candidate and formal uncertainty remain deferred |
 
 The core NPSL import path (parse → schema → semantic validation → atomic
 commit) ships with phase 3 at the repository level; phase 5 added the full

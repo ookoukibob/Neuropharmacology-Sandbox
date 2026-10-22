@@ -1,9 +1,11 @@
 import { AlertCircle } from 'lucide-react'
+import { ParameterLabel } from '@/components/scientific/ParameterLabel'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Label } from '@/components/ui/label'
 import type { SimulationError } from '@/engine/simulation/types'
 import type { DraftError, SimulationDraft } from '../draft'
 import { engineErrorFieldPath } from '../draft'
+import { fieldSubject, SIMULATION_FIELDS } from '../parameterFields'
 import { NumberField, QuantityField } from './fields'
 import { errorMessages } from './scenarioErrors'
 
@@ -37,19 +39,26 @@ export function ScenarioErrorSummary({
         {draftErrors.length > 0 ? (
           <>
             <p className="mt-1 font-medium">Form input</p>
-            <ul className="list-disc pl-4">
-              {draftErrors.map((error) => (
-                <li key={error.field}>
-                  <button
-                    type="button"
-                    className="underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring"
-                    onClick={() => onFocusField(error.field)}
-                  >
-                    {error.label}
-                  </button>
-                  : {error.message}
-                </li>
-              ))}
+            <ul className="list-disc pl-4" data-testid="draft-errors">
+              {draftErrors.map((error) => {
+                // The label comes from the shared field metadata — the same
+                // definition the control's own <Label> renders — so a summary
+                // entry and the field it points at can never disagree about
+                // either the notation or the wording.
+                const subject = fieldSubject(error.field)
+                return (
+                  <li key={error.field}>
+                    <button
+                      type="button"
+                      className="underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring"
+                      onClick={() => onFocusField(error.field)}
+                    >
+                      <ParameterLabel label={subject.label} symbol={subject.symbol} />
+                    </button>
+                    : {error.message}
+                  </li>
+                )
+              })}
             </ul>
           </>
         ) : null}
@@ -110,8 +119,8 @@ export function ParameterSection({
       <div className="grid gap-3 sm:grid-cols-2">
         <QuantityField
           id="scenario-central-volume"
-          label="Central volume"
-          symbol="V_c"
+          label={SIMULATION_FIELDS.centralVolume.label}
+          symbol={SIMULATION_FIELDS.centralVolume.symbol}
           value={draft.centralVolume.value}
           unit={draft.centralVolume.unit}
           dimension="volume"
@@ -124,8 +133,8 @@ export function ParameterSection({
         />
         <QuantityField
           id="scenario-peripheral-volume"
-          label="Peripheral volume"
-          symbol="V_p"
+          label={SIMULATION_FIELDS.peripheralVolume.label}
+          symbol={SIMULATION_FIELDS.peripheralVolume.symbol}
           value={draft.peripheralVolume.value}
           unit={draft.peripheralVolume.unit}
           dimension="volume"
@@ -138,8 +147,8 @@ export function ParameterSection({
         />
         <QuantityField
           id="scenario-clearance"
-          label="Systemic clearance"
-          symbol="CL"
+          label={SIMULATION_FIELDS.clearance.label}
+          symbol={SIMULATION_FIELDS.clearance.symbol}
           value={draft.clearance.value}
           unit={draft.clearance.unit}
           dimension="clearance"
@@ -152,8 +161,8 @@ export function ParameterSection({
         />
         <QuantityField
           id="scenario-q"
-          label="Intercompartmental clearance"
-          symbol="Q"
+          label={SIMULATION_FIELDS.intercompartmentalClearance.label}
+          symbol={SIMULATION_FIELDS.intercompartmentalClearance.symbol}
           value={draft.intercompartmentalClearance.value}
           unit={draft.intercompartmentalClearance.unit}
           dimension="clearance"
@@ -166,8 +175,8 @@ export function ParameterSection({
         />
         <NumberField
           id="scenario-initial-central"
-          label="Initial central amount (mg — fixed canonical unit)"
-          symbol="A_c(0)"
+          label={SIMULATION_FIELDS.initialCentralAmount.label}
+          symbol={SIMULATION_FIELDS.initialCentralAmount.symbol}
           value={draft.initialCentralAmount}
           error={errorOf('initialCentralAmount')}
           fieldPath="initialCentralAmount"
@@ -176,8 +185,8 @@ export function ParameterSection({
         />
         <NumberField
           id="scenario-initial-peripheral"
-          label="Initial peripheral amount (mg — fixed canonical unit)"
-          symbol="A_p(0)"
+          label={SIMULATION_FIELDS.initialPeripheralAmount.label}
+          symbol={SIMULATION_FIELDS.initialPeripheralAmount.symbol}
           value={draft.initialPeripheralAmount}
           error={errorOf('initialPeripheralAmount')}
           fieldPath="initialPeripheralAmount"
@@ -213,7 +222,7 @@ export function HorizonSection({
       <div className="grid gap-3 sm:grid-cols-3">
         <NumberField
           id="scenario-start-time"
-          label="Start time (h)"
+          label={SIMULATION_FIELDS.startTime.label}
           value={draft.startTime}
           error={messages.get('startTime')}
           fieldPath="startTime"
@@ -222,7 +231,7 @@ export function HorizonSection({
         />
         <NumberField
           id="scenario-end-time"
-          label="End time (h)"
+          label={SIMULATION_FIELDS.endTime.label}
           value={draft.endTime}
           error={messages.get('endTime')}
           fieldPath="endTime"
@@ -231,7 +240,7 @@ export function HorizonSection({
         />
         <NumberField
           id="scenario-output-interval"
-          label="Output interval (h)"
+          label={SIMULATION_FIELDS.outputInterval.label}
           value={draft.outputInterval}
           error={messages.get('outputInterval')}
           fieldPath="outputInterval"
@@ -253,10 +262,10 @@ export function SolverSection({
   readonly onChange: (field: keyof SimulationDraft['solver'], value: string) => void
 }) {
   const messages = errorMessages(draftErrors)
-  const field = (key: keyof SimulationDraft['solver'], label: string, testId: string) => (
+  const field = (key: keyof SimulationDraft['solver'], testId: string) => (
     <NumberField
       id={`solver-${key}`}
-      label={label}
+      label={SIMULATION_FIELDS[`solver.${key}`].label}
       value={draft.solver[key]}
       error={messages.get(`solver.${key}`)}
       fieldPath={`solver.${key}`}
@@ -272,12 +281,12 @@ export function SolverSection({
         validates these settings and reports its own errors.
       </p>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        {field('absoluteTolerance', 'Absolute tolerance', 'solver-absolute-tolerance')}
-        {field('relativeTolerance', 'Relative tolerance', 'solver-relative-tolerance')}
-        {field('initialStep', 'Initial step (h)', 'solver-initial-step')}
-        {field('minStep', 'Minimum step (h)', 'solver-min-step')}
-        {field('maxStep', 'Maximum step (h)', 'solver-max-step')}
-        {field('maxSteps', 'Maximum step attempts', 'solver-max-steps')}
+        {field('absoluteTolerance', 'solver-absolute-tolerance')}
+        {field('relativeTolerance', 'solver-relative-tolerance')}
+        {field('initialStep', 'solver-initial-step')}
+        {field('minStep', 'solver-min-step')}
+        {field('maxStep', 'solver-max-step')}
+        {field('maxSteps', 'solver-max-steps')}
       </div>
     </details>
   )

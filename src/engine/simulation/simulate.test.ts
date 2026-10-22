@@ -130,7 +130,7 @@ describe('simulate — analytical Q = 0 scenarios', () => {
     )
     expect(converted.parameters[0]).toEqual({
       symbol: 'Vc',
-      label: 'Central volume V_c',
+      label: 'Central volume',
       declaredValue: 10000,
       declaredUnit: 'mL',
       canonicalValue: 10,

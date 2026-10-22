@@ -1,11 +1,12 @@
 # Experimental concentration–time datasets
 
-**Status: Phases 47A and 47B plus the first two Phase 47C slices — implemented.** This document is the
+**Status: Phases 47A and 47B plus three Phase 47C slices — implemented.** This document is the
 contract for measured-dataset import, validation, local storage, inspection and
 `.npex` interchange, the optional one-compartment mono-exponential decay fit
-(§10), raw-residual/RMSE diagnostics (§11), and the practical
-identifiability screen (§12). Formal uncertainty estimation, model comparison
-and AICc are not implemented.
+(§10), raw-residual/RMSE diagnostics (§11), the practical identifiability
+screen (§12), and the two-candidate comparison with a conditional AICc (§13).
+Formal uncertainty estimation and any model set beyond those two candidates
+are not implemented.
 
 All examples below are synthetic test data, not pharmacological information.
 
@@ -497,12 +498,14 @@ browser-local state, use `.npsb`.
 - **No hidden write.** Import previews are read-only; writes occur only after
   explicit confirmation, through the repository, in validated transactions.
 - **Derived analysis never rewrites evidence.** Phase 47B fitting (§10), the
-  first Phase 47C residual/RMSE diagnostics (§11) and the Phase 47C objective
-  profile (§12) are temporary derived views; imports, stored observations, and
-  `.npex` round trips are unchanged.
-  RMSE is descriptive and has no universal pass/fail threshold. Formal
-  identifiability tests, uncertainty estimates and model comparison need
-  additional contracts and assumptions.
+  Phase 47C residual/RMSE diagnostics (§11), the objective profile (§12) and
+  the two-candidate comparison with its conditional AICc (§13) are temporary
+  derived views; imports, stored observations, and `.npex` round trips are
+  unchanged.
+  RMSE is descriptive and has no universal pass/fail threshold. AICc is
+  conditional on an explicitly declared error model and ranks only the two
+  configured candidates. Formal identifiability tests and parameter
+  uncertainty estimates still need contracts and assumptions of their own.
 
 ---
 
@@ -510,14 +513,14 @@ browser-local state, use `.npsb`.
 
 | Layer | Representative files | Coverage |
 | --- | --- | --- |
-| Domain | `src/domain/experiments/experimental-dataset.test.ts`, `src/domain/experiments/mono-exponential-fit.test.ts`, `src/domain/experiments/mono-exponential-fit-diagnostics.test.ts`, `src/domain/experiments/mono-exponential-profile.test.ts` | dataset contract, bounded fit/failures, raw residuals/RMSE, row fidelity and limited data-support notes, and the objective profile (localized/broad/boundary/sparse/invalid/degenerate cases) |
+| Domain | `src/domain/experiments/experimental-dataset.test.ts`, `src/domain/experiments/mono-exponential-fit.test.ts`, `src/domain/experiments/mono-exponential-fit-diagnostics.test.ts`, `src/domain/experiments/mono-exponential-profile.test.ts`, `src/domain/experiments/mono-exponential-baseline-fit.test.ts`, `src/domain/experiments/mono-exponential-model-comparison.test.ts` | dataset contract, bounded fit/failures, raw residuals/RMSE, row fidelity and limited data-support notes, the objective profile (localized/broad/boundary/sparse/invalid/degenerate cases), constrained M1 recovery/boundaries/degeneracy, and the comparison with the AICc formula, parameter counts and every unavailability gate |
 | Schemas | `src/data/schemas/experimentalDatasets.test.ts` | input/record/`.npex` shapes, limits, negative/non-finite rejection, units, duplicate measurement ids |
 | CSV | `src/features/experiments/csvDataset.test.ts` | explicit mapping, RFC 4180 reuse, row-specific errors, qualifiers, duplicates/order, all-or-nothing |
 | `.npex` | `src/data/npex/npex.test.ts` | envelope/version rules, strict shape, duplicate keys, depth/size, round trip, local identity absent |
 | Repository | `src/data/repositories/dexieExperimentalDatasetRepository.test.ts` | CRUD, validation on read/write, corruption reporting, atomicity, optimistic tokens, immutable science, strict timestamp ordering |
 | Database/recovery | `src/data/db/database.test.ts`, `experimentalDatasetRecovery.test.ts`, `archive.test.ts` | v5→v6 preservation, all-store snapshot/restore, legacy absent-store warnings/clearing, rollback |
-| UI | `src/features/experiments/*.test.tsx`, `src/components/charts/experimentalDatasetAdapter.test.ts`, `src/components/charts/ExperimentalFitResidualChart.test.tsx`, `src/components/charts/ExperimentalFitProfileChart.test.tsx` | import/preview/confirm, table, observed/fitted chart, residual plot, RMSE and screening states, objective-profile chart labelling and empty/invalid-candidate states, rename/delete/export/error states |
-| Browser | `e2e/experimentalDatasets.spec.ts`, `e2e/a11y.spec.ts` | real Chromium CSV→chart→`.npex`→re-import, persistence, recovery, fit overlay, residual plot/RMSE/data-support screen, objective profile after fitting plus its sparse-data and stale-fit states, narrow layout and axe scans |
+| UI | `src/features/experiments/*.test.tsx`, `src/components/charts/experimentalDatasetAdapter.test.ts`, `src/components/charts/ExperimentalFitResidualChart.test.tsx`, `src/components/charts/ExperimentalFitProfileChart.test.tsx` | import/preview/confirm, table, observed/fitted chart, residual plot, RMSE and screening states, objective-profile chart labelling and empty/invalid-candidate states, comparison table/parameter counts, AICc gating on the declared assumption, unavailable/insufficient/zero-variance states, rename/delete/export/error states |
+| Browser | `e2e/experimentalDatasets.spec.ts`, `e2e/a11y.spec.ts` | real Chromium CSV→chart→`.npex`→re-import, persistence, recovery, fit overlay, residual plot/RMSE/data-support screen, objective profile after fitting plus its sparse-data and stale-fit states, comparison with AICc unavailable→declared and an undersized sample, narrow layout and axe scans |
 
 The full matrix and gate commands are maintained in
 [`docs/testing.md`](testing.md).
@@ -812,3 +815,171 @@ IndexedDB, `.npex` or `.npsb`. It is not persisted, not exported and not part of
 the experimental dataset schema. Switching datasets discards it with the fit.
 Tests use deterministic synthetic values with known rates; no test asserts exact
 floating-point formatting or grid internals.
+
+## 13. Two-candidate model comparison with a conditional AICc (Phase 47C)
+
+When a successful M0 fit exists, the page also fits **one** alternative and
+compares the two. The comparison is transparent accounting, not an automatic
+determination of the true pharmacokinetic mechanism.
+
+### 13.1 Candidate set
+
+| Id | Model | Mean-model parameters |
+| --- | --- | --- |
+| M0 | `C(t) = A · exp(−k · (t − t_ref))` | `A ≥ 0`, `k ≥ 0` — 2 |
+| M1 | `C(t) = B + A · exp(−k · (t − t_ref))` | `A ≥ 0`, `B ≥ 0`, `k ≥ 0` — 3 |
+
+M0 is the existing production fit, **reused verbatim**: its estimate, `sse`
+and warnings are reported as computed, never re-derived here.
+
+M1 adds an additive baseline. It can represent a plateau the decay does not
+reach, a persistent background reading or a model-form mismatch. A baseline
+is a **shape, not a cause**: nothing in this comparison establishes a
+physiological or analytical origin for it.
+
+There are exactly two candidates. A third model (for example a
+bi-exponential decay) is deliberately out of scope for this increment.
+
+### 13.2 How M1 is fitted
+
+For a fixed dimensionless rate `q = k·span`, with `g_i = exp(−q·u_i)`, the
+amplitude and baseline subproblem is a two-variable non-negative least
+squares problem. It has three faces — both coefficients free, `A = 0`, and
+`B = 0` — and because every observed concentration is non-negative the two
+single-coefficient faces are always feasible (`B = mean(c)` and
+`A = Σ c g / Σ g²`). The constrained optimum of a convex quadratic on two free
+variables must lie on one of the three, so **enumerating the faces and keeping
+the lowest sum of squares is exact**: no iterative solver, no tolerance-
+dependent stopping rule, and no possibility of a negative coefficient.
+
+Two numerical details matter:
+
+- **The 2×2 determinant is guarded.** `det = n·Σg² − (Σg)²` vanishes
+  quadratically as `q → 0`, where a decay and a constant are indistinguishable.
+  Below a documented relative floor the unconstrained candidate is skipped and
+  the constrained faces decide — which is the correct answer in that limit,
+  and reports `A = 0` with `B = mean(c)` rather than an arbitrary pair.
+- **The reported objective is recomputed from the residuals**, never from the
+  normal equations, so a near-perfect fit cannot return a small negative sum
+  of squares or hide cancellation error.
+
+The rate search mirrors M0 exactly: a deterministic coarse scan over
+`q ∈ [0, 50]` (201 points), a golden-section refinement inside the bracket
+around the best scanned point (the same shared routine), and an explicit
+comparison against both endpoints. **A coarse-grid value is never published as
+the estimate.**
+
+### 13.3 Comparison fairness
+
+Both models are constructed from the same normalized problem — one shared
+preparation (`prepareMonoExponentialProblem`) supplies the rows, `t_ref =
+min(t)`, the observed span and the concentration scaling to both. They
+therefore use:
+
+- the same measurement rows and the same set of observations (no point is
+  excluded for looking unrepresentative);
+- the same original concentration scale and no transformation;
+- the same unweighted objective (no weighting, no log scale);
+- the same treatment of duplicate timestamps and replicates — every row is an
+  independent contribution, so a duplicated row genuinely carries extra
+  weight;
+- the same definition of `t_ref`.
+
+Nothing is sorted, averaged, deduplicated, mutated or persisted.
+
+### 13.4 Descriptive comparison
+
+Both models are reported with comparable quantities: model identity,
+equation, fitted parameters **with their unit kind** (concentration or
+reciprocal time, resolved to the dataset's declared units), SSE in
+`(concentration unit)²`, RMSE in the concentration unit, the number of
+observations actually used, the number of mean-model parameters, and the
+total parameter count `K` used by the criterion. Boundary and convergence
+warnings are carried through.
+
+Parameter counting follows the **model**, not the optimizer. M1's amplitude is
+obtained by variable projection inside each rate trial, but it is still an
+estimated model parameter, so M1 has three mean-model parameters. The
+information criterion additionally counts one residual-variance parameter:
+`K(M0) = 3`, `K(M1) = 4`.
+
+The comparison never awards a winner. A model with more parameters can reduce
+the residual sum of squares by construction, and the UI says so explicitly.
+
+### 13.5 Error-model contract
+
+The only supported assumption is:
+
+> **Independent additive Gaussian errors with a common variance on the original
+> concentration scale.**
+
+The analyst must **explicitly declare** it before any AICc is computed; the
+declaration starts unchecked, and no default exists. Declaring it is an
+assumption, **not evidence**: the data do not establish that residuals are
+independent, Gaussian or equally uncertain, and nothing here tests that.
+
+Until the declaration is made, the descriptive comparison remains fully
+available and AICc is reported as unavailable, with the reason shown.
+
+### 13.6 Conditional AICc
+
+With `n` observations, residual sum of squares `SSE`, and `K` total estimated
+likelihood parameters (mean-model parameters plus one variance):
+
+    AIC  = n · ln(2π) + n + n · ln(SSE / n) + 2K
+    AICc = AIC + 2K(K + 1) / (n − K − 1)
+
+This is the ordinary Gaussian likelihood evaluated at the least-squares
+estimate with `σ² = SSE/n`. The maximized log-likelihood
+`−(n/2)·[ln(2π) + ln(SSE/n) + 1]` is exposed alongside the criterion so
+`AIC = −2·lnL + 2K` can be checked.
+
+AICc is returned as **unavailable**, with a structured reason, when:
+
+| Condition | Reason |
+| --- | --- |
+| No error model declared | `ASSUMPTION_NOT_DECLARED` |
+| That candidate's fit failed | `FIT_UNAVAILABLE` |
+| `SSE` is not finite | `NON_FINITE_SSE` |
+| `SSE` is zero (degenerate variance) | `ZERO_RESIDUAL_VARIANCE` |
+| `n − K − 1 ≤ 0` | `INSUFFICIENT_OBSERVATIONS` |
+
+A zero SSE is **never** replaced by an arbitrary epsilon, and ordinary AIC is
+**never** substituted for AICc. The per-model gate matters in practice: with
+five observations, M0 (`K = 3`) still satisfies `n − K − 1 = 1` while M1
+(`K = 4`) does not.
+
+### 13.7 Interpretation and limitations
+
+- Lower AICc is **relative support within these two candidates under the
+  declared error model**. It is not proof of the true mechanism, and it says
+  nothing about a model that is not in the candidate set.
+- AICc is conditional on the declared assumption; it does not test it.
+- The difference `AICc(M1) − AICc(M0)` is displayed as arithmetic only. **No
+  threshold, model weight, probability or verdict is applied**, and none
+  should be inferred from it.
+- Constrained boundary estimates and nonlinear fitting weaken the
+  regular-likelihood assumptions behind information criteria. Boundary
+  estimates are reported and flagged, and the comparison is explicitly less
+  reliable when they appear.
+- No hypothesis test, confidence interval, standard error, model weight or
+  third candidate is produced.
+
+### 13.8 Interface
+
+The comparison is its own card in the selected-dataset view, shown only after
+a successful M0 fit, and only after the fit itself — the measured-versus-fitted
+chart, residual diagnostics and identifiability screen are untouched.
+
+It contains: the error-assumption declaration with its caveat, a table of the
+quantities above (one column per model), the AICc row, the difference line, the
+per-model reasons whenever AICc is unavailable, any fit warnings from either
+candidate, and the standing limitations. Unavailable criteria read
+`unavailable` — never `NaN`, `Infinity`, a fabricated score or a zero.
+
+### 13.9 Boundaries
+
+The comparison is derived and ephemeral, like the fit: no parameter, SSE,
+criterion or declaration is written to the dataset, its measurements,
+IndexedDB, `.npex` or `.npsb`. Changing the declaration recomputes only the
+criterion — neither model is re-fitted. Switching datasets discards both.

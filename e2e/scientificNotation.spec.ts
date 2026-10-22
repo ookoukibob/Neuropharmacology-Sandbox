@@ -135,6 +135,35 @@ test('simulation: effect-site fields and equations use sub/sup and the chart leg
   expect(errors).toEqual([])
 })
 
+test('simulation: the validation summary renders the same notation as the field it points at', async ({
+  page,
+}) => {
+  const errors = watchErrors(page)
+  await page.goto('/simulation')
+
+  // A blank required field is the shortest path to a draft-level error.
+  await page.getByTestId('central-volume-value').fill('')
+  await page.getByTestId('run-simulation').click()
+
+  const summary = page.getByTestId('form-errors')
+  await expect(summary).toBeVisible()
+  const summaryLabel = summary.getByRole('button').first()
+  await expect(summaryLabel.locator('sub')).toHaveText('c')
+  await expect(summary).not.toContainText('V_c')
+  await expect(summary).toContainText('Central volume')
+
+  // The form label and the summary entry are produced by the same component.
+  // The unit select has its own (screen-reader only) label, so select the
+  // value control's label explicitly.
+  const fieldLabel = page.locator('label[for="scenario-central-volume"]')
+  await expect(fieldLabel.locator('sub')).toHaveText('c')
+  expect(await summaryLabel.textContent()).toBe(await fieldLabel.textContent())
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(summaryLabel.locator('sub')).toBeVisible()
+  expect(errors).toEqual([])
+})
+
 test('data sources: molecular-formula element counts render as subscripts', async ({ page }) => {
   const errors = watchErrors(page)
   await mockPubChem(page)

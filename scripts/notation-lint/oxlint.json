@@ -1,0 +1,6 @@
+{
+  "jsPlugins": ["./plugin.mjs"],
+  "rules": {
+    "notation/no-raw-scientific-notation": "error"
+  }
+}
