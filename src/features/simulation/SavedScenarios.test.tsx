@@ -42,6 +42,7 @@ beforeEach(() => {
 
 const renderView = () => render(<SimulationView scenarioRepository={repository} />)
 const runButton = () => screen.getByTestId('run-simulation')
+
 const nameInput = () => screen.getByTestId('scenario-name-input')
 
 const draftWith = (patch: Partial<SimulationDraft>): SimulationDraft => ({
@@ -49,7 +50,7 @@ const draftWith = (patch: Partial<SimulationDraft>): SimulationDraft => ({
   ...patch,
 })
 
-/** The demo draft as the editor seeds it (read from the live inputs). */
+/** Fully populated deterministic test draft for saved-record fixtures. */
 function baseDraft(): SimulationDraft {
   return {
     startTime: '0',
@@ -345,17 +346,22 @@ describe('saved scenarios — rename, duplicate, delete, save over', () => {
 describe('saved scenarios — results and failures', () => {
   it('loading a different scenario clears a previous result (never shown as current)', async () => {
     const user = userEvent.setup()
+    repository.seed('Current', draftWith({ clearance: { value: '3', unit: 'L/h' } }))
     repository.seed('Other', draftWith({ clearance: { value: '4', unit: 'L/h' } }))
     renderView()
+
+    // Load the first saved record while the initial blank draft is still clean.
+    await user.click(within(await screen.findByTestId('scenario-row-saved-1')).getByTestId('load-saved-1'))
+    await waitFor(() => expect(screen.getByTestId('clearance-value')).toHaveValue('3'))
     await user.click(runButton())
     expect(await screen.findByTestId('stub-chart-concentration')).toBeInTheDocument()
     expect(control.calls).toBe(1)
 
-    const row = await screen.findByTestId('scenario-row-saved-1')
-    await user.click(within(row).getByTestId('load-saved-1'))
-    // No implicit simulation; the old result is gone.
+    // Loading a different clean saved draft clears the result without re-running.
+    await user.click(within(screen.getByTestId('scenario-row-saved-2')).getByTestId('load-saved-2'))
     await waitFor(() => expect(screen.queryByTestId('stub-chart-concentration')).not.toBeInTheDocument())
     expect(screen.getByTestId('simulation-idle')).toBeInTheDocument()
+    expect(screen.getByTestId('clearance-value')).toHaveValue('4')
     expect(control.calls).toBe(1)
   })
 

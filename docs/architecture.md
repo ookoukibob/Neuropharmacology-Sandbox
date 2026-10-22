@@ -459,8 +459,8 @@ semantics it must honour).
 ### 4.3b Simulation visualisation (phase 42)
 
 ```
-DEMO_SCENARIO (explicit synthetic parameters, visible on the page)
-   ↓  user presses "Run demonstration" (explicit; never automatic)
+SimulationDraft (blank scientific/time inputs, technical solver defaults)
+   ↓  user supplies a complete scenario and presses "Run simulation"
 simulate()  ← the Phase 41 engine: the ONLY source of every displayed number
    ↓ SimulationReport (ok / structured errors; failures carry no samples)
 simulationAdapter (pure: sampled values copied in emission order,
@@ -469,7 +469,7 @@ simulationAdapter (pure: sampled values copied in emission order,
 SimulationChart (Plotly, lazy)   +   event table   +   diagnostics
 ```
 
-The simulation feature follows the same dependency rules as the calculator:
+The fixed `DEMO_SCENARIO` is retained as a test fixture only; it is not loaded into the product UI. The simulation feature follows the same dependency rules as the calculator:
 the page owns an ephemeral session (component state, no Zustand store, no
 IndexedDB, no network) and the chart layer performs no calculation. A
 dosing event keeps its two same-time samples (`pre-event`, `post-event`), so

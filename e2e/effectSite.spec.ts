@@ -10,6 +10,23 @@ import { test, expect } from '@playwright/test'
  * structural (labels, units, view availability, presence of results).
  */
 
+/** The simulation form is intentionally blank; tests enter valid PK inputs explicitly. */
+async function fillBaseScenario(page: import('@playwright/test').Page): Promise<void> {
+  for (const [testId, value] of [
+    ['central-volume-value', '10'],
+    ['peripheral-volume-value', '20'],
+    ['clearance-value', '2'],
+    ['q-value', '3'],
+    ['initial-central-value', '100'],
+    ['initial-peripheral-value', '0'],
+    ['start-time-value', '0'],
+    ['end-time-value', '24'],
+    ['output-interval-value', '0.25'],
+  ] as const) {
+    await page.getByTestId(testId).fill(value)
+  }
+}
+
 const enableEffectSite = async (page: import('@playwright/test').Page): Promise<void> => {
   await page.getByTestId('effect-site-enabled').check()
 }
@@ -22,6 +39,7 @@ const fillValid = async (page: import('@playwright/test').Page): Promise<void> =
 
 test('PK-only baseline: no effect-site controls and no extra views', async ({ page }) => {
   await page.goto('/simulation')
+  await fillBaseScenario(page)
   await expect(page.getByTestId('effect-site-enabled')).not.toBeChecked()
   await expect(page.getByTestId('effect-site-fu')).toHaveCount(0)
 
@@ -37,6 +55,7 @@ test('PK-only baseline: no effect-site controls and no extra views', async ({ pa
 
 test('valid configuration runs and exposes both new views with diagnostics', async ({ page }) => {
   await page.goto('/simulation')
+  await fillBaseScenario(page)
   await enableEffectSite(page)
   await fillValid(page)
 
@@ -62,6 +81,7 @@ test('valid configuration runs and exposes both new views with diagnostics', asy
 
 test('an incomplete enabled configuration never runs the engine', async ({ page }) => {
   await page.goto('/simulation')
+  await fillBaseScenario(page)
   await enableEffectSite(page)
   await page.getByTestId('effect-site-ke0').fill('abc')
 
@@ -78,6 +98,7 @@ test('an incomplete enabled configuration never runs the engine', async ({ page 
 
 test('view switching is presentation-only and edits invalidate the result', async ({ page }) => {
   await page.goto('/simulation')
+  await fillBaseScenario(page)
   await enableEffectSite(page)
   await fillValid(page)
   await page.getByTestId('run-simulation').click()
@@ -98,6 +119,7 @@ test('view switching is presentation-only and edits invalidate the result', asyn
 
 test('a configured scenario round-trips through save and load', async ({ page }) => {
   await page.goto('/simulation')
+  await fillBaseScenario(page)
   await enableEffectSite(page)
   await fillValid(page)
   await page.getByTestId('scenario-name-input').fill('Effect site example')
@@ -123,6 +145,7 @@ test('a configured scenario round-trips through save and load', async ({ page })
 
 test('blank effect-site text is saved verbatim without running the engine', async ({ page }) => {
   await page.goto('/simulation')
+  await fillBaseScenario(page)
   await enableEffectSite(page)
   await page.getByTestId('effect-site-ke0').fill('not-a-number')
   await page.getByTestId('scenario-name-input').fill('Blank draft')

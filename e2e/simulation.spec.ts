@@ -1,15 +1,15 @@
 import { test, expect } from '@playwright/test'
 
 /**
- * Simulation demonstration (phase 42).
+ * Simulation engine and chart integration smoke test.
  *
  * Drives the real route → real engine → real Plotly chart. No network is
  * intercepted because the simulation needs none: the spec asserts that no
- * request leaves the page origin while the demonstration runs, and that the
+ * request leaves the page origin while the entered scenario runs, and that the
  * result survives a reload only as "nothing was saved" (ephemeral state).
  */
-test.describe('simulation demonstration', () => {
-  test('runs the synthetic demonstration and preserves the bolus discontinuity', async ({ page }) => {
+test.describe('simulation integration', () => {
+  test('runs an explicitly entered scenario and preserves the bolus discontinuity', async ({ page }) => {
     const externalRequests: string[] = []
     page.on('request', (request) => {
       const url = request.url()
@@ -22,19 +22,37 @@ test.describe('simulation demonstration', () => {
     await page.goto('/simulation')
     await expect(page.getByRole('heading', { level: 1, name: 'Simulation' })).toBeVisible()
 
-    // 2. Synthetic disclaimer and visible example values (phase 43: the
-    // example scenario is now the editable starting point).
-    const notice = page.getByTestId('synthetic-scenario-notice')
-    await expect(notice).toContainText(/synthetic example scenario/i)
-    await expect(notice).toContainText(/not real compound parameters/i)
-    await expect(page.getByTestId('central-volume-value')).toHaveValue('10')
-    await expect(page.getByTestId('clearance-value')).toHaveValue('2')
-    await expect(page.getByTestId('bolus-1-amount')).toHaveValue('100')
-    await expect(page.getByTestId('infusion-3-rate')).toHaveValue('10')
-    await expect(page.getByTestId('bolus-2-amount')).toHaveValue('30')
+    // 2. The editor starts empty. Enter a deterministic test scenario
+    // explicitly; these values live in the E2E fixture, not in product defaults.
+    await expect(page.getByTestId('synthetic-scenario-notice')).toHaveCount(0)
+    await expect(page.getByTestId('central-volume-value')).toHaveValue('')
+    await expect(page.getByTestId('no-events')).toBeVisible()
+    for (const [testId, value] of [
+      ['central-volume-value', '10'],
+      ['peripheral-volume-value', '20'],
+      ['clearance-value', '2'],
+      ['q-value', '3'],
+      ['initial-central-value', '0'],
+      ['initial-peripheral-value', '0'],
+      ['start-time-value', '0'],
+      ['end-time-value', '24'],
+      ['output-interval-value', '0.25'],
+    ] as const) {
+      await page.getByTestId(testId).fill(value)
+    }
+    await page.getByTestId('add-bolus').click()
+    await page.getByTestId('bolus-1-time').fill('0')
+    await page.getByTestId('bolus-1-amount').fill('100')
+    await page.getByTestId('add-bolus').click()
+    await page.getByTestId('bolus-2-time').fill('8')
+    await page.getByTestId('bolus-2-amount').fill('30')
+    await page.getByTestId('add-infusion').click()
+    await page.getByTestId('infusion-3-start').fill('2')
+    await page.getByTestId('infusion-3-stop').fill('6')
+    await page.getByTestId('infusion-3-rate').fill('10')
     await expect(page.getByTestId('simulation-idle')).toBeVisible()
 
-    // 3. Run the demonstration with the keyboard (into the form's submit).
+    // 3. Run the manually entered test scenario with the keyboard (into the form's submit).
     const runButton = page.getByTestId('run-simulation')
     await runButton.focus()
     await expect(runButton).toBeFocused()
@@ -102,14 +120,13 @@ test.describe('simulation demonstration', () => {
     await expect(page.getByTestId('solver-diagnostics')).toContainText(/derivative evaluations/i)
     await expect(page.getByTestId('qualification-note')).toContainText(/does not mean/i)
 
-    // 8. No external network request was needed for the demonstration.
+    // 8. No external network request was needed for the simulation.
     expect(externalRequests).toEqual([])
 
-    // Ephemeral: a reload returns to the editor with the example values and
-    // no result (nothing was saved).
+    // Ephemeral: a reload returns to an empty editor and no result (nothing was saved).
     await page.reload()
     await expect(page.getByTestId('simulation-idle')).toBeVisible()
     await expect(page.getByTestId('simulation-chart-concentration')).toHaveCount(0)
-    await expect(page.getByTestId('central-volume-value')).toHaveValue('10')
+    await expect(page.getByTestId('central-volume-value')).toHaveValue('')
   })
 })

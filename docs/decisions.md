@@ -838,10 +838,12 @@ changes* — a stale chart reads as the new draft's answer; clearing is
 unambiguous. *Deriving the infusion-rate chart from event rows* — that would
 duplicate the scheduler's summation rules in the UI.
 
-**Consequences.** Editing is explicit and reversible ("Reset to synthetic
-example" restores every field, event and solver setting), every displayed
-number still comes from `simulate()`, and a future persistence or library
-integration can reuse `compileScenario` unchanged.
+**Consequences.** Scientific and time-horizon fields start blank, no dosing
+event is pre-filled, and "Clear scenario" returns the editor to that state
+while retaining the technical solver defaults. Every displayed result still
+comes from `simulate()`, and a future persistence or library integration can
+reuse `compileScenario` unchanged. The synthetic scenario is a test fixture,
+not a product default.
 
 ---
 
