@@ -426,6 +426,14 @@ not reorder or merge them. Output times only request observations: they never
 create, move or suppress an event, and changing the grid does not change the
 event trace.
 
+**Repeated and mixed regimens.** The editor may attach an optional repeat
+count and interval to a bolus or infusion row; a single pure `expandEventRows`
+expands the rows into this same flat event list before integration (ADR-29).
+The engine never sees the repeat syntax — only the expanded events — so a
+repeated bolus is the same instantaneous jump and a repeated infusion the same
+zero-order input as a single dose, and the same ordering and mass-balance
+rules apply unchanged.
+
 ### 8.4 Units at the boundary
 
 `V_c`, `V_p` accept mass-free volume units (L, mL); `CL`, `Q` accept

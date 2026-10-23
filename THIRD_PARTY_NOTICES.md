@@ -69,8 +69,44 @@ copied from them.
   positive terminal-phase end; a trailing non-positive observation makes the
   extrapolated AUC unavailable, rather than silently back-filling.
 
+## Dosing regimens and IV infusion (event-driven dosing)
+
+### Reference studied: mrgsolve
+
+- Project: mrgsolve — https://github.com/metrumresearchgroup/mrgsolve
+- Documentation: https://mrgsolve.org/user-guide/dose-events.html
+- License: **GNU General Public License v2.0 (GPL-2.0)** (the repository's
+  `LICENSE.md`; also stated in its `DESCRIPTION`).
+- Decision: **No source code was copied or adapted, and no GPL dependency was
+  added.** mrgsolve was studied for its *event semantics* only: a bolus as an
+  instantaneous compartment amount change (with an ODE solver reset at the dose
+  time), a finite constant-rate infusion as a zero-order input with explicit
+  start and stop boundaries (and a solver reset at each boundary), and repeated
+  dosing expressed as a dose amount plus an inter-dose interval and a dose
+  count (`amt`/`ii`/`addl`; the `ev_rx` shorthand "amount over duration q
+  interval x count").
+
+Why no reuse: this repository is distributed under the PolyForm Noncommercial
+License 1.0.0, which restricts use to noncommercial purposes. GPL-2.0 is a
+copyleft license; distributing mrgsolve-derived code here would require the
+combined work to be GPL-2.0, which cannot simultaneously carry the PolyForm
+Noncommercial restriction without conflicting with GPL's terms. Resolving that
+would require a repository-wide license change, which the project has not
+authorized. This is a technical reading of the license texts, not legal advice.
+
+The event model itself — bolus as a discontinuous state jump, infusion as a
+bounded zero-order input, and repeat as "interval + count" — is standard
+pharmacokinetic methodology (see Gabrielsson & Weiner; Rowland & Tozer; and
+NONMEM's `AMT`/`II`/`ADDL` dosing records), not mrgsolve's proprietary
+expression. The repeat expansion is a small, self-contained loop over these
+definitions, so no permissively-licensed third-party implementation was needed;
+it is implemented from first principles in
+`src/features/simulation/draft.ts` (`expandEventRows`). The engine's event
+scheduler and ordering (`src/engine/simulation/events.ts`, ADR-24) predate this
+phase and were already implemented independently.
+
 ## No other third-party source code incorporated
 
 At the time of writing, no other third-party source files, fixtures or test
 cases have been copied into this repository. All NCA fixtures are synthetic and
-authored for this project.
+authored for this project; all dosing-regimen fixtures are likewise synthetic.

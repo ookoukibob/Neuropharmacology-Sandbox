@@ -461,3 +461,34 @@ describe('SimulationView — chart views', () => {
     }
   })
 })
+
+describe('SimulationView — repeat regimens', () => {
+  it('expands a repeated dose into the explicit schedule preview', () => {
+    renderView()
+    fireEvent.click(screen.getByTestId('add-bolus'))
+    fireEvent.change(screen.getByTestId('bolus-1-time'), { target: { value: '2' } })
+    fireEvent.change(screen.getByTestId('bolus-1-amount'), { target: { value: '10' } })
+    fireEvent.change(screen.getByTestId('repeat-1-count'), { target: { value: '3' } })
+    fireEvent.change(screen.getByTestId('repeat-1-interval'), { target: { value: '6' } })
+
+    const preview = screen.getByTestId('expanded-schedule')
+    expect(preview).toBeInTheDocument()
+    // Three doses at 2, 8 and 14 h, one row each.
+    expect(screen.getByTestId('expanded-dose-1-1')).toHaveTextContent('2')
+    expect(screen.getByTestId('expanded-dose-1-2')).toHaveTextContent('8')
+    expect(screen.getByTestId('expanded-dose-1-3')).toHaveTextContent('14')
+  })
+
+  it('flags a missing repeat interval when the dose is repeated', () => {
+    renderView()
+    fireEvent.click(screen.getByTestId('add-bolus'))
+    fireEvent.change(screen.getByTestId('bolus-1-time'), { target: { value: '2' } })
+    fireEvent.change(screen.getByTestId('bolus-1-amount'), { target: { value: '10' } })
+    fireEvent.change(screen.getByTestId('repeat-1-count'), { target: { value: '3' } })
+    expect(screen.getByTestId('repeat-1-interval')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getAllByText(/repeat interval is required/i).length).toBeGreaterThan(0)
+    // An invalid repeat must not be presented as a runnable expanded schedule.
+    expect(screen.queryByTestId('expanded-schedule')).not.toBeInTheDocument()
+    expect(screen.getByTestId('expanded-schedule-invalid')).toHaveTextContent(/resolve the invalid or incomplete/i)
+  })
+})

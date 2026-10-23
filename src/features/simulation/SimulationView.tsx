@@ -259,10 +259,16 @@ export function SimulationView({ scenarioRepository }: { readonly scenarioReposi
 
 /** Readable description of an engine event id (stable editor ids). */
 function eventIdLabel(eventId: string): string {
-  const bolus = /^bolus-(\d+)$/.exec(eventId)
-  if (bolus !== null) return `${eventId} (IV bolus row ${bolus[1]} of the editor)`
-  const infusion = /^infusion-(\d+)-(start|stop)$/.exec(eventId)
-  if (infusion !== null) return `${eventId} (infusion ${infusion[2]} for editor row ${infusion[1]})`
+  const bolus = /^bolus-(\d+)(?:-(\d+))?$/.exec(eventId)
+  if (bolus !== null) {
+    const dose = bolus[2] === undefined ? '' : `, dose ${bolus[2]}`
+    return `${eventId} (IV bolus row ${bolus[1]}${dose} of the editor)`
+  }
+  const infusion = /^infusion-(\d+)(?:-(\d+))?-(start|stop)$/.exec(eventId)
+  if (infusion !== null) {
+    const dose = infusion[2] === undefined ? '' : `, dose ${infusion[2]}`
+    return `${eventId} (infusion ${infusion[3]} for editor row ${infusion[1]}${dose})`
+  }
   return eventId
 }
 

@@ -61,6 +61,14 @@ export interface BolusRow {
   readonly key: number
   readonly time: string
   readonly amount: QuantityDraft
+  /**
+   * Optional repeat: `repeatCount` is the total number of doses (blank/1 = a
+   * single dose), `repeatInterval` is the hours between successive doses.
+   * Both are draft strings; blank means "no repeat". Saved records from
+   * before phase 49 omit them entirely.
+   */
+  readonly repeatInterval?: string
+  readonly repeatCount?: string
 }
 
 export interface InfusionRow {
@@ -69,9 +77,25 @@ export interface InfusionRow {
   readonly startTime: string
   readonly stopTime: string
   readonly rate: QuantityDraft
+  /**
+   * Optional repeat, as for `BolusRow`. Session k spans
+   * [start + (k−1)·interval, stop + (k−1)·interval]; the duration is constant
+   * and the interval is measured between successive starts.
+   */
+  readonly repeatInterval?: string
+  readonly repeatCount?: string
 }
 
 export type EventRow = BolusRow | InfusionRow
+
+/**
+ * A partial update to one event row, without its `kind` or `key`. Expressed as
+ * an explicit union (rather than `Omit` over the `EventRow` union, which
+ * collapses to the shared keys only) so every editable field is addressable.
+ */
+export type EventRowPatch =
+  | Partial<Omit<BolusRow, 'kind' | 'key'>>
+  | Partial<Omit<InfusionRow, 'kind' | 'key'>>
 
 export interface SolverDraft {
   readonly absoluteTolerance: string
@@ -220,7 +244,7 @@ export function nextRowKey(rows: readonly EventRow[]): number {
 
 /** A new bolus row with blank values: clicking "Add" never invents a dose. */
 export function newBolusRow(rows: readonly EventRow[]): BolusRow {
-  return { kind: 'bolus', key: nextRowKey(rows), time: '', amount: { value: '', unit: 'mg' } }
+  return { kind: 'bolus', key: nextRowKey(rows), time: '', amount: { value: '', unit: 'mg' }, repeatInterval: '', repeatCount: '' }
 }
 
 /** A new infusion row with blank times and rate. */
@@ -231,6 +255,8 @@ export function newInfusionRow(rows: readonly EventRow[]): InfusionRow {
     startTime: '',
     stopTime: '',
     rate: { value: '', unit: 'mg/h' },
+    repeatInterval: '',
+    repeatCount: '',
   }
 }
 
@@ -255,6 +281,8 @@ export function draftFromScenario(scenario: SimulationScenario): SimulationDraft
         key,
         time: stringify(event.time),
         amount: { value: stringify(event.amount.value), unit: event.amount.unit },
+        repeatInterval: '',
+        repeatCount: '',
       })
     } else if (event.type === 'infusion-start') {
       infusions.set(event.infusionId, { start: event.time, rate: { value: event.rate.value, unit: event.rate.unit } })
@@ -271,6 +299,8 @@ export function draftFromScenario(scenario: SimulationScenario): SimulationDraft
       startTime: stringify(session.start),
       stopTime: session.stop === undefined ? '' : stringify(session.stop),
       rate: { value: stringify(session.rate.value), unit: session.rate.unit },
+      repeatInterval: '',
+      repeatCount: '',
     })
   }
   return {
@@ -406,29 +436,196 @@ function checkInfusionOrder(errors: DraftError[], row: InfusionRow, start: numbe
   return true
 }
 
-/** Engine events from editor rows; a row with unparseable fields yields errors. */
-function compileEvents(errors: DraftError[], rows: readonly EventRow[]): DosingEvent[] {
-  const events: DosingEvent[] = []
-  for (const row of rows) {
-    if (row.kind === 'bolus') {
-      const time = readNumber(errors, `events.${row.key}.time`, row.time)
-      const amount = readQuantity(errors, `events.${row.key}.amount.value`, row.amount, 'mg')
-      if (time === undefined || amount.value === undefined) continue
-      events.push({ type: 'iv-bolus', eventId: bolusEventId(row.key), time, amount: { value: amount.value, unit: amount.unit } })
+/**
+ * Practical ceiling on the number of doses one row can expand to. It is a
+ * guard against pathological input (e.g. a repeat count of 1e12), not a
+ * scientific limit; the time horizon bounds every real regimen long before
+ * this ceiling is reached.
+ */
+const MAX_REPEAT_COUNT = 100_000
+
+/** One expanded dose, ready for the editor's "expanded schedule" preview. */
+export interface ExpandedDose {
+  readonly rowKey: number
+  readonly kind: 'bolus' | 'infusion'
+  /** 1-based dose number within the row (1 when there is no repeat). */
+  readonly doseNumber: number
+  /** Engine event ids this dose expands to (1 for a bolus, 2 for an infusion). */
+  readonly eventIds: readonly string[]
+  /** Bolus time, or infusion start time (hours). */
+  readonly time: number
+  /** Infusion stop time (hours); present only for infusions. */
+  readonly stopTime?: number
+  /** Declared bolus amount (present only for boluses). */
+  readonly amount?: { readonly value: number; readonly unit: string }
+  /** Declared infusion rate (present only for infusions). */
+  readonly rate?: { readonly value: number; readonly unit: string }
+  /** Infusion duration = stop − start (hours); present only for infusions. */
+  readonly duration?: number
+}
+
+/** The expanded dosing schedule: flat events plus their display records. */
+export interface ExpandedSchedule {
+  readonly doses: readonly ExpandedDose[]
+  readonly events: readonly DosingEvent[]
+  readonly errors: readonly DraftError[]
+}
+
+interface RepeatSpec {
+  readonly count: number
+  readonly interval: number
+}
+
+/**
+ * Read a row's optional repeat. `repeatCount` is the total number of doses
+ * (blank or `1` = a single dose); `repeatInterval` is hours between successive
+ * doses and is required (and must be positive) whenever the dose is repeated.
+ */
+function readRepeatSpec(errors: DraftError[], fieldBase: string, row: EventRow): RepeatSpec {
+  const countText = (row.repeatCount ?? '').trim()
+  const intervalText = (row.repeatInterval ?? '').trim()
+
+  let count = 1
+  if (countText !== '') {
+    const parsed = parseNumericText(countText)
+    if (parsed === null) {
+      errors.push({
+        code: 'NOT_A_NUMBER',
+        field: `${fieldBase}.repeatCount`,
+        message: `Must be a finite number (got "${countText}").`,
+      })
+    } else if (!Number.isInteger(parsed) || parsed < 1) {
+      errors.push({
+        code: 'OUT_OF_RANGE',
+        field: `${fieldBase}.repeatCount`,
+        message: `Must be a positive whole number (got ${countText}).`,
+      })
+    } else if (parsed > MAX_REPEAT_COUNT) {
+      errors.push({
+        code: 'OUT_OF_RANGE',
+        field: `${fieldBase}.repeatCount`,
+        message: `At most ${MAX_REPEAT_COUNT} doses per row are supported (got ${countText}).`,
+      })
     } else {
-      const start = readNumber(errors, `events.${row.key}.startTime`, row.startTime)
-      const stop = readNumber(errors, `events.${row.key}.stopTime`, row.stopTime)
-      const rate = readQuantity(errors, `events.${row.key}.rate.value`, row.rate, 'mg/h')
-      if (start === undefined || stop === undefined || rate.value === undefined) continue
-      if (!checkInfusionOrder(errors, row, start, stop)) continue
-      const infusionId = infusionIdOf(row.key)
-      events.push(
-        { type: 'infusion-start', eventId: infusionStartEventId(row.key), infusionId, time: start, rate: { value: rate.value, unit: rate.unit } },
-        { type: 'infusion-stop', eventId: infusionStopEventId(row.key), infusionId, time: stop },
-      )
+      count = parsed
     }
   }
-  return events
+
+  let interval = 0
+  if (count > 1) {
+    if (intervalText === '') {
+      errors.push({
+        code: 'REQUIRED',
+        field: `${fieldBase}.repeatInterval`,
+        message: 'A repeat interval is required when a dose is repeated.',
+      })
+    } else {
+      const parsed = parseNumericText(intervalText)
+      if (parsed === null) {
+        errors.push({
+          code: 'NOT_A_NUMBER',
+          field: `${fieldBase}.repeatInterval`,
+          message: `Must be a finite number (got "${intervalText}").`,
+        })
+      } else if (parsed <= 0) {
+        errors.push({
+          code: 'OUT_OF_RANGE',
+          field: `${fieldBase}.repeatInterval`,
+          message: `Must be greater than 0 (got ${intervalText}).`,
+        })
+      } else {
+        interval = parsed
+      }
+    }
+  }
+  // A repeat interval on a single dose is harmless and ignored.
+
+  return { count, interval }
+}
+
+/**
+ * Expand editor rows into the engine's flat `DosingEvent[]`, applying each
+ * row's optional repeat. This is the single place a regimen (with repeats) is
+ * turned into an explicit event schedule, and it is pure: no side effects, no
+ * engine call, no mutation of the input rows.
+ *
+ * Event ids stay deterministic: a single dose keeps the historical id
+ * (`bolus-<key>`, `infusion-<key>-start/-stop`); a repeated dose appends the
+ * 1-based dose number (`bolus-<key>-2`, `infusion-<key>-2-start`, …).
+ */
+export function expandEventRows(rows: readonly EventRow[]): ExpandedSchedule {
+  const errors: DraftError[] = []
+  const events: DosingEvent[] = []
+  const doses: ExpandedDose[] = []
+
+  for (const row of rows) {
+    const fieldBase = `events.${row.key}`
+    if (row.kind === 'bolus') {
+      const time = readNumber(errors, `${fieldBase}.time`, row.time)
+      const amount = readQuantity(errors, `${fieldBase}.amount.value`, row.amount, 'mg')
+      if (time === undefined || amount.value === undefined) continue
+      const repeat = readRepeatSpec(errors, fieldBase, row)
+      for (let k = 1; k <= repeat.count; k += 1) {
+        const doseTime = time + (k - 1) * repeat.interval
+        const eventId = repeat.count === 1 ? bolusEventId(row.key) : `${bolusEventId(row.key)}-${k}`
+        events.push({ type: 'iv-bolus', eventId, time: doseTime, amount: { value: amount.value, unit: amount.unit } })
+        doses.push({
+          rowKey: row.key,
+          kind: 'bolus',
+          doseNumber: k,
+          eventIds: [eventId],
+          time: doseTime,
+          amount: { value: amount.value, unit: amount.unit },
+        })
+      }
+    } else {
+      const start = readNumber(errors, `${fieldBase}.startTime`, row.startTime)
+      const stop = readNumber(errors, `${fieldBase}.stopTime`, row.stopTime)
+      const rate = readQuantity(errors, `${fieldBase}.rate.value`, row.rate, 'mg/h')
+      if (start === undefined || stop === undefined || rate.value === undefined) continue
+      if (!checkInfusionOrder(errors, row, start, stop)) continue
+      const duration = stop - start
+      const repeat = readRepeatSpec(errors, fieldBase, row)
+      // A repeated session whose interval is shorter than its own duration
+      // would overlap itself; reject rather than silently summing the rate.
+      if (repeat.count > 1 && repeat.interval < duration) {
+        errors.push({
+          code: 'OUT_OF_RANGE',
+          field: `${fieldBase}.repeatInterval`,
+          message: `Repeated infusion sessions would overlap: the interval (${repeat.interval} h) is shorter than the session duration (${duration} h).`,
+        })
+      }
+      for (let k = 1; k <= repeat.count; k += 1) {
+        const offset = (k - 1) * repeat.interval
+        const base = repeat.count === 1 ? infusionIdOf(row.key) : `${infusionIdOf(row.key)}-${k}`
+        const startEventId = `${base}-start`
+        const stopEventId = `${base}-stop`
+        events.push(
+          { type: 'infusion-start', eventId: startEventId, infusionId: base, time: start + offset, rate: { value: rate.value, unit: rate.unit } },
+          { type: 'infusion-stop', eventId: stopEventId, infusionId: base, time: stop + offset },
+        )
+        doses.push({
+          rowKey: row.key,
+          kind: 'infusion',
+          doseNumber: k,
+          eventIds: [startEventId, stopEventId],
+          time: start + offset,
+          stopTime: stop + offset,
+          rate: { value: rate.value, unit: rate.unit },
+          duration,
+        })
+      }
+    }
+  }
+
+  return { doses, events, errors }
+}
+
+/** Engine events from editor rows; a row with unparseable fields yields errors. */
+function compileEvents(errors: DraftError[], rows: readonly EventRow[]): readonly DosingEvent[] {
+  const expanded = expandEventRows(rows)
+  errors.push(...expanded.errors)
+  return expanded.events
 }
 
 /**

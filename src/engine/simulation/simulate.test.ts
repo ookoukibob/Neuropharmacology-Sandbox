@@ -556,3 +556,92 @@ describe('simulate — determinism and immutability', () => {
     expect(JSON.stringify(scenario)).toBe(snapshot)
   })
 })
+
+describe('simulate — dosing regimens (phase 49)', () => {
+  // Q = 0 keeps the system to one compartment, so every expectation is the
+  // closed-form solution, not the implementation's own output.
+  const zeroInitial = { centralAmount: 0, peripheralAmount: 0 }
+
+  it('agrees with the analytical constant-infusion solution, including post-infusion decay', () => {
+    // One-compartment (Q = 0), V_c = 10 L, CL = 2 L/h → k = 0.2 h⁻¹.
+    // R = 20 mg/h over [0, 5]: Css = R/CL = 10 mg/L.
+    const result = expectOk(
+      simulate(
+        baseScenario({
+          initialState: zeroInitial,
+          endTime: 10,
+          outputTimes: [0, 1, 2, 3, 4, 5, 6, 8, 10],
+          events: [start('s1', 'A', 0, 20), stop('t1', 'A', 5)],
+        }),
+      ),
+    )
+    const k = 0.2
+    const css = 10
+    const cAt = (t: number): number => {
+      if (t <= 5) return css * (1 - Math.exp(-k * t))
+      return css * (1 - Math.exp(-k * 5)) * Math.exp(-k * (t - 5))
+    }
+    // At the infusion stop (t = 5) the amount is continuous: both the
+    // pre-event and post-event samples read the same concentration.
+    for (const sample of result.samples) {
+      expect(sample.centralConcentration).toBeCloseTo(cAt(sample.time), 5)
+    }
+    // The infusion stops exactly at its scheduled end: the rate is 20 mg/h
+    // just before the stop and 0 just after it.
+    expect(result.infusionRates.find((p) => p.time === 5 && p.side === 'pre-event')?.totalRate).toBe(20)
+    expect(result.infusionRates.find((p) => p.time === 5 && p.side === 'post-event')?.totalRate).toBe(0)
+  })
+
+  it('agrees with the superposition of time-shifted single bolus responses', () => {
+    const D = 100
+    const k = 0.2 // CL/V_c = 2/10
+    const single = (doseTime: number) =>
+      expectOk(
+        simulate(baseScenario({ initialState: zeroInitial, outputTimes: [0, 3, 6, 9, 12, 15, 18, 21, 24], events: [bolus('d1', doseTime, D)] })),
+      )
+    const triple = expectOk(
+      simulate(
+        baseScenario({
+          initialState: zeroInitial,
+          outputTimes: [0, 3, 6, 9, 12, 15, 18, 21, 24],
+          events: [bolus('d1', 6, D), bolus('d2', 12, D), bolus('d3', 18, D)],
+        }),
+      ),
+    )
+    // Keep the post-event value at dose times (the last sample at that time).
+    const lastByTime = (result: ReturnType<typeof expectOk>): Map<number, number> => {
+      const map = new Map<number, number>()
+      for (const sample of result.samples) map.set(sample.time, sample.centralAmount)
+      return map
+    }
+    const a = lastByTime(single(6))
+    const b = lastByTime(single(12))
+    const c = lastByTime(single(18))
+    const sum = lastByTime(triple)
+    // Every single-dose response also matches its own closed form. The
+    // pre-event sample at the dose time is the state BEFORE the jump, so it is
+    // excluded (its post-event twin carries the closed-form value).
+    for (const sample of single(6).samples) {
+      if (sample.side === 'pre-event') continue
+      const expected = sample.time >= 6 ? D * Math.exp(-k * (sample.time - 6)) : 0
+      expect(sample.centralAmount).toBeCloseTo(expected, 5)
+    }
+    for (const time of [0, 3, 6, 9, 12, 15, 18, 21, 24]) {
+      const expectedSum = (a.get(time) ?? 0) + (b.get(time) ?? 0) + (c.get(time) ?? 0)
+      expect(sum.get(time)).toBeCloseTo(expectedSum, 6)
+    }
+  })
+
+  it('stays stable and mass-balanced across closely spaced repeated doses', () => {
+    // Ten boluses 0.5 h apart: a densely evented schedule on a 24 h horizon.
+    const D = 10
+    const events = Array.from({ length: 10 }, (_, i) => bolus(`d${i + 1}`, 1 + i * 0.5, D))
+    const result = expectOk(
+      simulate(baseScenario({ initialState: zeroInitial, outputTimes: [0, 1, 3, 6, 12, 24], events })),
+    )
+    expect(result.massBalance.ok).toBe(true)
+    expect(result.samples.every((s) => Number.isFinite(s.centralConcentration))).toBe(true)
+    // Cumulative input counts each of the ten doses exactly once.
+    expect(result.samples.at(-1)?.cumulativeInput).toBeCloseTo(10 * D, 6)
+  })
+})
