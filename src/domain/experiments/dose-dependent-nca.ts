@@ -836,9 +836,9 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
   const summary =
     administration.route === 'extravascular'
       ? fRecorded
-        ? 'Single-dose extravascular dataset with a recorded F: absolute CL/Vz and apparent CL/F/Vz/F are reported; the terminal volume remains conditional because absorption may limit the terminal phase.'
-        : 'Single-dose extravascular dataset without a recorded F: only the apparent CL/F and Vz/F are reported.'
-      : `Single-dose ${ROUTE_LABEL[administration.route]} dataset: CL and Vz are derived from the recorded dose and the complete AUC(0→∞).`
+        ? 'Single-dose extravascular dataset with a recorded F. Absolute and apparent parameters are assessed independently; terminal volumes may be conditional because absorption can limit the terminal phase.'
+        : 'Single-dose extravascular dataset without a recorded F. Apparent parameters may be available; absolute CL and Vz require a recorded F. Each parameter has its own status.'
+      : `Single-dose ${ROUTE_LABEL[administration.route]} dataset. Each parameter is assessed independently; clearance requires a complete AUC(0→∞), while terminal volumes additionally require a usable λ_z and an interpretable terminal phase.`
 
   return {
     status,
