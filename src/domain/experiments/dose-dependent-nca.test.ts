@@ -120,6 +120,21 @@ describe('dose-dependent NCA — IV bolus and infusion', () => {
     expect(report.warnings.some((warning) => /does not depend on the input rate/i.test(warning))).toBe(true)
   })
 
+  it('does not claim an empty infusion record contains duration or rate', () => {
+    const report = run(
+      administration({
+        route: 'iv-infusion',
+        timeReference: 'infusion-start',
+        infusion: {},
+      }),
+    )
+    expect(report.parameters.cl.status).toBe('available')
+    expect(
+      report.preconditions.find((condition) => condition.id === 'infusion')?.message,
+    ).toMatch(/no infusion duration or rate is recorded/i)
+    expect(report.parameters.vz.status).toBe('conditional')
+  })
+
   it('requires every terminal-regression observation to be after the infusion end', () => {
     const baseTerminal = nca().terminalPhase
     if (baseTerminal.status !== 'available') throw new Error('fixture')
