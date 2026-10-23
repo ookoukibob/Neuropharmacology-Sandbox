@@ -536,9 +536,12 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
     // NCA selectedTimes are expressed in the dataset's declared time unit,
     // while durationHours is normalised to hours. Convert before comparing;
     // otherwise minute/day datasets can be misclassified by unit scale alone.
-    const lastTerminalTimeHours =
+    // Every point used in the terminal regression must be after infusion
+    // end. Checking only the latest point can incorrectly accept a regression
+    // that mixes observations during infusion with post-infusion observations.
+    const firstTerminalTimeHours =
       nca.terminalPhase.status === 'available' && nca.terminalPhase.selectedTimes.length > 0
-        ? Math.max(...nca.terminalPhase.selectedTimes) * timeToH
+        ? Math.min(...nca.terminalPhase.selectedTimes) * timeToH
         : null
     if (durationHours === null) {
       infusionTerminalConfirmed = false
@@ -548,18 +551,18 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
         message:
           'The infusion end time is not recorded, so it cannot be confirmed that the terminal phase follows the end of the infusion.',
       })
-    } else if (lastTerminalTimeHours === null || lastTerminalTimeHours <= durationHours) {
+    } else if (firstTerminalTimeHours === null || firstTerminalTimeHours <= durationHours) {
       infusionTerminalConfirmed = false
       preconditions.push({
         id: 'infusion-terminal-phase',
         status: 'not-met',
-        message: `The last terminal observation (${exact(lastTerminalTimeHours ?? 0)} h) does not extend beyond the infusion end (${exact(durationHours)} h), so the slope may reflect the input rather than elimination.`,
+        message: `The earliest terminal observation (${exact(firstTerminalTimeHours ?? 0)} h) is not after the infusion end (${exact(durationHours)} h), so the selected regression may include the infusion input phase rather than elimination alone.`,
       })
     } else {
       preconditions.push({
         id: 'infusion-terminal-phase',
         status: 'met',
-        message: `The terminal observations extend beyond the infusion end (${exact(durationHours)} h).`,
+        message: `All terminal regression observations occur after the infusion end (${exact(durationHours)} h).`,
       })
     }
   }
