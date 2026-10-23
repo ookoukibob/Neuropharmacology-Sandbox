@@ -487,5 +487,8 @@ describe('SimulationView — repeat regimens', () => {
     fireEvent.change(screen.getByTestId('repeat-1-count'), { target: { value: '3' } })
     expect(screen.getByTestId('repeat-1-interval')).toHaveAttribute('aria-invalid', 'true')
     expect(screen.getAllByText(/repeat interval is required/i).length).toBeGreaterThan(0)
+    // An invalid repeat must not be presented as a runnable expanded schedule.
+    expect(screen.queryByTestId('expanded-schedule')).not.toBeInTheDocument()
+    expect(screen.getByTestId('expanded-schedule-invalid')).toHaveTextContent(/resolve the invalid or incomplete/i)
   })
 })
