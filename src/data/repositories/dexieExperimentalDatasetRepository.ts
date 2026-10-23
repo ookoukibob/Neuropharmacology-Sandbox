@@ -25,7 +25,9 @@ import {
   normalizeSampleId,
   timeUnitIssue,
   concentrationUnitIssue,
+  validateAdministration,
   toDatasetSummary,
+  type AdministrationMetadata,
   type ExperimentalDataset,
   type ExperimentalDatasetInput,
   type ExperimentalMeasurement,
@@ -138,6 +140,15 @@ export class DexieExperimentalDatasetRepository implements ExperimentalDatasetRe
     const concentrationUnit = declaredUnit(input.concentrationUnit)
     const concentrationIssue = concentrationUnitIssue(concentrationUnit)
     if (concentrationIssue !== null) return failure('VALIDATION', concentrationIssue)
+    if (input.administration !== undefined) {
+      const issues = validateAdministration(input.administration)
+      if (issues.length > 0) {
+        return failure(
+          'VALIDATION',
+          `Administration metadata is invalid: ${issues.map((entry) => `${entry.field}: ${entry.message}`).join(' ')}`,
+        )
+      }
+    }
     if (input.measurements.length === 0) {
       return failure('VALIDATION', 'A dataset must contain at least one measurement.')
     }
@@ -180,6 +191,7 @@ export class DexieExperimentalDatasetRepository implements ExperimentalDatasetRe
       measurements,
       provenance: input.provenance,
       ...(notes.notes === undefined ? {} : { notes: notes.notes }),
+      ...(input.administration === undefined ? {} : { administration: input.administration }),
     }
     const validated = experimentalDatasetRecordSchema.safeParse(candidate)
     if (!validated.success) {
@@ -203,8 +215,9 @@ export class DexieExperimentalDatasetRepository implements ExperimentalDatasetRe
   ): Promise<ExperimentalDatasetOutcome> {
     const hasName = changes.name !== undefined
     const hasNotes = hasOwn(changes, 'notes')
-    if (!hasName && !hasNotes) {
-      return failure('VALIDATION', 'Choose a name or notes value to update.')
+    const hasAdministration = hasOwn(changes, 'administration')
+    if (!hasName && !hasNotes && !hasAdministration) {
+      return failure('VALIDATION', 'Choose a name, notes or administration value to update.')
     }
     let nextName: string | undefined
     if (hasName) {
@@ -217,6 +230,22 @@ export class DexieExperimentalDatasetRepository implements ExperimentalDatasetRe
       const normalized = normalizeDatasetNotes(changes.notes)
       if (!normalized.ok) return failure('VALIDATION', normalized.message)
       nextNotes = normalized.notes
+    }
+    let nextAdministration: AdministrationMetadata | undefined | null = null
+    if (hasAdministration) {
+      if (changes.administration === undefined) {
+        // explicit clear
+        nextAdministration = undefined
+      } else {
+        const issues = validateAdministration(changes.administration)
+        if (issues.length > 0) {
+          return failure(
+            'VALIDATION',
+            `Administration metadata is invalid: ${issues.map((entry) => `${entry.field}: ${entry.message}`).join(' ')}`,
+          )
+        }
+        nextAdministration = changes.administration
+      }
     }
 
     try {
@@ -239,6 +268,13 @@ export class DexieExperimentalDatasetRepository implements ExperimentalDatasetRe
           delete candidate.notes
         } else {
           candidate.notes = nextNotes
+        }
+        if (nextAdministration === null) {
+          // keep the stored administration untouched
+        } else if (nextAdministration === undefined) {
+          delete candidate.administration
+        } else {
+          candidate.administration = nextAdministration as unknown as ExperimentalDatasetRecord['administration']
         }
         const validated = experimentalDatasetRecordSchema.safeParse(candidate)
         if (!validated.success) return { kind: 'invalid' as const, error: validated.error }

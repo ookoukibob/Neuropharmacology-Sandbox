@@ -26,6 +26,8 @@ import {
   MAX_SAMPLE_ID_LENGTH,
   concentrationUnitIssue,
   timeUnitIssue,
+  validateAdministration,
+  type AdministrationMetadata,
 } from '../../domain/experiments/experimental-dataset'
 
 const isoDateTime = z
@@ -71,6 +73,64 @@ const baseFields = {
 
 const provenanceSchema = z.looseObject(provenanceFields)
 
+// ---------------------------------------------------------------------------
+// Administration metadata (phase 50A)
+// ---------------------------------------------------------------------------
+
+const administrationQuantityFields = {
+  value: z.number().finite('must be a finite number'),
+  unit: z.string().min(1, 'a unit is required'),
+}
+
+const administrationFields = {
+  route: z.enum(['iv-bolus', 'iv-infusion', 'extravascular', 'other', 'unknown']),
+  dose: z.looseObject(administrationQuantityFields).optional(),
+  infusion: z
+    .looseObject({
+      duration: z.looseObject(administrationQuantityFields).optional(),
+      rate: z.looseObject(administrationQuantityFields).optional(),
+    })
+    .optional(),
+  regimen: z.enum(['single-dose', 'repeated-dose', 'repeated-dose-steady-state', 'unknown']),
+  dosingInterval: z.looseObject(administrationQuantityFields).optional(),
+  timeReference: z.enum(['dose-time', 'infusion-start', 'first-observation', 'other', 'unknown']),
+  bioavailability: z.number().finite('must be a finite number').optional(),
+}
+
+/** Loose (stored/CSV-facing) administration metadata: forward-compatible. */
+const administrationMetadataSchema = z.looseObject(administrationFields)
+
+/** Strict (`.npex`) administration metadata: unknown keys are rejected. */
+const administrationMetadataNpexSchema = z.strictObject({
+  route: z.enum(['iv-bolus', 'iv-infusion', 'extravascular', 'other', 'unknown']),
+  dose: z.strictObject(administrationQuantityFields).optional(),
+  infusion: z
+    .strictObject({
+      duration: z.strictObject(administrationQuantityFields).optional(),
+      rate: z.strictObject(administrationQuantityFields).optional(),
+    })
+    .optional(),
+  regimen: z.enum(['single-dose', 'repeated-dose', 'repeated-dose-steady-state', 'unknown']),
+  dosingInterval: z.strictObject(administrationQuantityFields).optional(),
+  timeReference: z.enum(['dose-time', 'infusion-start', 'first-observation', 'other', 'unknown']),
+  bioavailability: z.number().finite('must be a finite number').optional(),
+})
+
+/** Semantic administration rules (unit dimensions, infusion XOR, F range). */
+function validateAdministrationField(value: unknown, ctx: z.RefinementCtx): void {
+  if (value === undefined || value === null) return
+  // The structural schema already narrowed the shape; the domain validator owns
+  // the scientific rules. The cast bridges zod's `| undefined` optionals and
+  // the domain's exact-optional typing (the same gap `toDataset` bridges).
+  for (const issue of validateAdministration(value as AdministrationMetadata)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['administration', ...issue.field.split('.')],
+      message: issue.message,
+    })
+  }
+}
+
 /** Measurement as supplied by an import (no local identity yet). */
 export const experimentalMeasurementInputSchema = z.looseObject(measurementFields)
 
@@ -114,8 +174,12 @@ export const experimentalDatasetInputSchema = z
     ...baseFields,
     provenance: provenanceSchema,
     measurements: measurementsInputSchema,
+    administration: administrationMetadataSchema.optional(),
   })
-  .superRefine(validateUnits)
+  .superRefine((value, ctx) => {
+    validateUnits(value, ctx)
+    validateAdministrationField(value.administration, ctx)
+  })
 
 /**
  * `.npex` dataset shape: unknown keys are rejected, so a typo or an unsupported
@@ -133,8 +197,12 @@ export const experimentalDatasetNpexSchema = z
         MAX_DATASET_MEASUREMENTS,
         `a dataset may contain at most ${MAX_DATASET_MEASUREMENTS} measurements`,
       ),
+    administration: administrationMetadataNpexSchema.optional(),
   })
-  .superRefine(validateUnits)
+  .superRefine((value, ctx) => {
+    validateUnits(value, ctx)
+    validateAdministrationField(value.administration, ctx)
+  })
 
 /** The persisted record shape (keyed by `id` in `experimentDatasets`). */
 export const experimentalDatasetRecordSchema = z
@@ -145,9 +213,11 @@ export const experimentalDatasetRecordSchema = z
     updatedAt: isoDateTime,
     provenance: provenanceSchema,
     measurements: measurementsRecordSchema,
+    administration: administrationMetadataSchema.optional(),
   })
   .superRefine((value, ctx) => {
     validateUnits(value, ctx)
+    validateAdministrationField(value.administration, ctx)
     const seen = new Set<string>()
     value.measurements.forEach((measurement, index) => {
       if (seen.has(measurement.id)) {

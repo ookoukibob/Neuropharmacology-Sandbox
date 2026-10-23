@@ -1479,3 +1479,75 @@ The formulas are standard NCA definitions implemented independently (see
 source was copied, because AGPL-3.0 cannot be combined with this repository's
 PolyForm Noncommercial license without a license change. Intentional
 differences from PKNCA are listed in the notices file.
+
+## 17. Administration metadata (Phase 50A)
+
+A dataset may carry an optional `administration` record describing how the drug
+was given. It is the data-contract foundation for dose-dependent NCA
+parameters (`CL`, `CL/F`, `Vz`, `Vz/F`), which are **not** computed in this
+phase.
+
+### 17.1 The contract
+
+| Field | Meaning | When present |
+| --- | --- | --- |
+| `route` | `iv-bolus`, `iv-infusion`, `extravascular`, `other`, `unknown` | always (explicit `unknown` is the honest value) |
+| `dose` | amount + mass unit | only when the dose is known |
+| `infusion` | `duration` (time unit) **or** `rate` (mass-flow unit), never both | only for an IV infusion, and only when known |
+| `regimen` | `single-dose`, `repeated-dose`, `repeated-dose-steady-state`, `unknown` | always |
+| `dosingInterval` | τ + time unit | only for a repeated regimen, when known |
+| `timeReference` | `dose-time`, `infusion-start`, `first-observation`, `other`, `unknown` | always |
+| `bioavailability` | F in (0, 1] | only when explicitly supplied |
+
+Nothing is ever inferred from the measurements. A repeated-dose dataset is not
+treated as a single-dose curve extending to infinity, and steady state is never
+inferred from a visually flat curve — it must be stated.
+
+### 17.2 Time origin
+
+The stored measurement times keep their source meaning; `timeReference` records
+what those times are relative to. Time zero is therefore **not** assumed to be
+a dose time: `first-observation` is the physical default, and `dose-time` /
+`infusion-start` claim an administration anchor only when the analyst states
+it. For a repeated regimen, the recorded times are relative to the stated
+reference (typically the first dose), and `dosingInterval` τ relates them to
+the administration schedule — the measurements themselves are never
+re-expressed.
+
+### 17.3 Validation
+
+- route/regimen/timeReference must be one of the listed values;
+- dose amount is finite and positive with a **mass** unit;
+- infusion duration is positive with a **time** unit; infusion rate is positive
+  with a **mass-flow-rate** unit; both together is rejected;
+- dosing interval τ is positive with a **time** unit;
+- bioavailability F is finite and in (0, 1];
+- units are validated against the catalog dimension and are never converted or
+  relabelled.
+
+### 17.4 Compatibility
+
+The field is optional, so datasets created before this phase remain valid and
+load with no administration metadata (shown as unknown). `.npex` advances to
+`1.1.0`: files without the key (≤ 1.0.x) still import, and 1.1.0 files carry
+the metadata losslessly. The independent version rule is unchanged (same major,
+file minor ≤ reader minor).
+
+### 17.5 Prerequisites for dose-dependent NCA (a later phase)
+
+Computing `CL`, `CL/F`, `Vz` or `Vz/F` will require, and must not proceed
+without:
+
+1. a known dose amount and route, and the exposure interval the parameters
+   refer to;
+2. the correct area — a full-curve `AUC(0→∞)` for single-dose IV, versus an
+   interval-specific `AUCτ` at steady state for repeated dosing;
+3. an explicit time origin, and a clear single-dose vs multiple-dose /
+   steady-state distinction;
+4. bioavailability assumptions for extravascular administration;
+5. a positive, usable terminal elimination estimate where the parameter needs
+   one.
+
+A repeated-dose dataset must not automatically be treated as a single-dose
+concentration curve extending to infinity, and steady state must not be
+inferred from appearance.

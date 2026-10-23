@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type {
+  AdministrationMetadata,
   ExperimentalDataset,
   ExperimentalDatasetInput,
 } from '../../domain/experiments/experimental-dataset'
@@ -189,6 +190,82 @@ describe('DexieExperimentalDatasetRepository', () => {
     const stale = await repo.update(created.dataset.id, { name: 'Stale' }, first.dataset.updatedAt)
     expect(stale.ok).toBe(false)
     if (!stale.ok) expect(stale.code).toBe('CONFLICT')
+  })
+
+  it('creates with administration metadata and loads datasets without it unchanged', async () => {
+    const admin = {
+      route: 'iv-bolus',
+      regimen: 'single-dose',
+      timeReference: 'dose-time',
+      dose: { value: 100, unit: 'mg' },
+    } as const
+    const withAdmin = await repo.create(input({ administration: admin }))
+    if (!withAdmin.ok) throw new Error(withAdmin.message)
+    expect(withAdmin.dataset.administration).toEqual(admin)
+
+    const withoutAdmin = await repo.create(input())
+    if (!withoutAdmin.ok) throw new Error(withoutAdmin.message)
+    expect(withoutAdmin.dataset.administration).toBeUndefined()
+    const read = await repo.get(withoutAdmin.dataset.id)
+    if (!read.ok) throw new Error(read.message)
+    expect(read.dataset.administration).toBeUndefined()
+  })
+
+  it('rejects invalid administration metadata and writes nothing', async () => {
+    const bad = await repo.create(
+      input({
+        administration: {
+          route: 'iv-bolus',
+          regimen: 'single-dose',
+          timeReference: 'dose-time',
+          dose: { value: 100, unit: 'mg/L' },
+        } as unknown as AdministrationMetadata,
+      }),
+    )
+    expect(bad.ok).toBe(false)
+    if (!bad.ok) expect(bad.code).toBe('VALIDATION')
+    expect(await db.experimentDatasets.count()).toBe(0)
+  })
+
+  it('updates and clears administration without touching measurements', async () => {
+    const created = await repo.create(input())
+    if (!created.ok) throw new Error('setup')
+    const before = created.dataset
+
+    const admin = {
+      route: 'iv-infusion',
+      regimen: 'single-dose',
+      timeReference: 'infusion-start',
+      infusion: { duration: { value: 2, unit: 'h' } },
+    } as const
+    const updated = await repo.update(before.id, { administration: admin }, before.updatedAt)
+    if (!updated.ok) throw new Error(updated.message)
+    expect(updated.dataset.administration).toEqual(admin)
+    expect(updated.dataset.measurements).toEqual(before.measurements)
+    expect(updated.dataset.provenance).toEqual(before.provenance)
+
+    const cleared = await repo.update(
+      before.id,
+      { administration: undefined },
+      updated.dataset.updatedAt,
+    )
+    if (!cleared.ok) throw new Error(cleared.message)
+    expect(cleared.dataset.administration).toBeUndefined()
+    expect(cleared.dataset.measurements).toEqual(before.measurements)
+  })
+
+  it('keeps administration unchanged when the update does not mention it', async () => {
+    const admin = {
+      route: 'iv-bolus',
+      regimen: 'single-dose',
+      timeReference: 'dose-time',
+      dose: { value: 100, unit: 'mg' },
+    } as const
+    const created = await repo.create(input({ administration: admin }))
+    if (!created.ok) throw new Error('setup')
+    const renamed = await repo.update(created.dataset.id, { name: 'Only renamed' }, created.dataset.updatedAt)
+    if (!renamed.ok) throw new Error(renamed.message)
+    expect(renamed.dataset.administration).toEqual(admin)
   })
 
   it('deletes only under the current token and reports a stale delete', async () => {

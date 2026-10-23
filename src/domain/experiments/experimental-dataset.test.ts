@@ -7,6 +7,8 @@ import {
   normalizeSampleId,
   timeUnitIssue,
   toDatasetSummary,
+  validateAdministration,
+  type AdministrationMetadata,
   type ExperimentalDataset,
 } from './experimental-dataset'
 
@@ -83,5 +85,97 @@ describe('experimental dataset domain', () => {
       provenance: dataset().provenance,
     })
     expect('measurements' in summary).toBe(false)
+  })
+})
+
+describe('administration metadata validation', () => {
+  const base = (): AdministrationMetadata => ({
+    route: 'iv-bolus',
+    regimen: 'single-dose',
+    timeReference: 'dose-time',
+  })
+
+  it('accepts a complete, well-formed bolus context', () => {
+    expect(
+      validateAdministration({ ...base(), dose: { value: 100, unit: 'mg' } }),
+    ).toEqual([])
+  })
+
+  it('accepts an infusion duration and an infusion rate separately', () => {
+    expect(
+      validateAdministration({
+        route: 'iv-infusion',
+        regimen: 'single-dose',
+        timeReference: 'infusion-start',
+        infusion: { duration: { value: 2, unit: 'h' } },
+      }),
+    ).toEqual([])
+    expect(
+      validateAdministration({
+        route: 'iv-infusion',
+        regimen: 'single-dose',
+        timeReference: 'infusion-start',
+        infusion: { rate: { value: 10, unit: 'mg/h' } },
+      }),
+    ).toEqual([])
+  })
+
+  it('accepts a repeated-dose context with an interval and bioavailability', () => {
+    expect(
+      validateAdministration({
+        route: 'extravascular',
+        regimen: 'repeated-dose',
+        timeReference: 'first-observation',
+        dose: { value: 50, unit: 'mg' },
+        dosingInterval: { value: 12, unit: 'h' },
+        bioavailability: 0.8,
+      }),
+    ).toEqual([])
+  })
+
+  it('rejects a dose with the wrong dimension or a non-positive value', () => {
+    expect(validateAdministration({ ...base(), dose: { value: 100, unit: 'mg/L' } })[0]?.field).toBe(
+      'dose.unit',
+    )
+    expect(validateAdministration({ ...base(), dose: { value: 0, unit: 'mg' } })[0]?.field).toBe(
+      'dose.value',
+    )
+  })
+
+  it('rejects an infusion that declares both a duration and a rate', () => {
+    const issues = validateAdministration({
+      route: 'iv-infusion',
+      regimen: 'single-dose',
+      timeReference: 'infusion-start',
+      infusion: { duration: { value: 2, unit: 'h' }, rate: { value: 10, unit: 'mg/h' } },
+    })
+    expect(issues.some((issue) => issue.field === 'infusion')).toBe(true)
+  })
+
+  it('rejects an interval with the wrong unit or a non-positive value', () => {
+    expect(
+      validateAdministration({ ...base(), dosingInterval: { value: 12, unit: 'mg' } })[0]?.field,
+    ).toBe('dosingInterval.unit')
+    expect(
+      validateAdministration({ ...base(), dosingInterval: { value: 0, unit: 'h' } })[0]?.field,
+    ).toBe('dosingInterval.value')
+  })
+
+  it('rejects bioavailability outside (0, 1] and non-finite values', () => {
+    expect(validateAdministration({ ...base(), bioavailability: 0 })[0]?.field).toBe(
+      'bioavailability',
+    )
+    expect(validateAdministration({ ...base(), bioavailability: 1.5 })[0]?.field).toBe(
+      'bioavailability',
+    )
+    expect(validateAdministration({ ...base(), bioavailability: Number.NaN })[0]?.field).toBe(
+      'bioavailability',
+    )
+  })
+
+  it('rejects unknown enum values', () => {
+    const bad = { route: 'oral', regimen: 'steady', timeReference: 'clock' } as unknown as AdministrationMetadata
+    const issues = validateAdministration(bad)
+    expect(issues.map((issue) => issue.field).sort()).toEqual(['regimen', 'route', 'timeReference'])
   })
 })
