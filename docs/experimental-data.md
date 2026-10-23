@@ -1521,7 +1521,9 @@ re-expressed.
 - infusion duration is positive with a **time** unit; infusion rate is positive
   with a **mass-flow-rate** unit; both together is rejected;
 - dosing interval τ is positive with a **time** unit;
-- bioavailability F is finite and in (0, 1];
+- bioavailability F is finite and in (0, 1]; when an IV route is recorded,
+  an explicitly supplied F must equal 1;
+- infusion duration/rate metadata requires the IV-infusion route;
 - units are validated against the catalog dimension and are never converted or
   relabelled.
 
