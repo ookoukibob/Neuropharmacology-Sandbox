@@ -615,7 +615,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
           value: clFValue,
           unit: 'L/h',
           formula: formulas.clF,
-          substitution: `${exact(dose.value)} ${dose.unit} ÷ ${exact(aucValue)} ${aucUnit} = ${exact(clFValue)} L/h`,
+          substitution: `${exact(doseInG)} g ÷ ${exact(aucBase)} g·h/L = ${exact(clFValue)} L/h`,
           inputs,
           assumptions: [
             ...unitAssumptions,
@@ -637,7 +637,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
       value: clValue,
       unit: 'L/h',
       formula: formulas.cl,
-      substitution: `${exact(dose.value)} ${dose.unit} ÷ ${exact(aucValue)} ${aucUnit} = ${exact(clValue)} L/h`,
+      substitution: `${exact(doseInG)} g ÷ ${exact(aucBase)} g·h/L = ${exact(clValue)} L/h`,
       inputs,
       assumptions: [
         ...unitAssumptions,
@@ -655,7 +655,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
       value: clValue,
       unit: 'L/h',
       formula: formulas.clWithF,
-      substitution: `${exact(f as number)} × ${exact(dose.value)} ${dose.unit} ÷ ${exact(aucValue)} ${aucUnit} = ${exact(clValue)} L/h`,
+      substitution: `${exact(f as number)} × ${exact(doseInG)} g ÷ ${exact(aucBase)} g·h/L = ${exact(clValue)} L/h`,
       inputs,
       assumptions: [
         ...unitAssumptions,
@@ -730,7 +730,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
       value,
       unit: 'L',
       formula: formulas.vzF,
-      substitution: `${exact(clFValue)} L/h ÷ ${exact(lambdaZ.value)} ${lambdaZ.unit} = ${exact(value)} L`,
+      substitution: `${exact(clFValue)} L/h ÷ ${exact(lambdaZBase)} h⁻¹ = ${exact(value)} L`,
       inputs,
       assumptions: [
         ...unitAssumptions,
@@ -807,7 +807,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
       value,
       unit: 'L',
       formula: formulas.vz,
-      substitution: `${exact(clValue)} L/h ÷ ${exact(lambdaZ.value)} ${lambdaZ.unit} = ${exact(value)} L`,
+      substitution: `${exact(clValue)} L/h ÷ ${exact(lambdaZBase)} h⁻¹ = ${exact(value)} L`,
       inputs,
       assumptions: [
         ...unitAssumptions,
