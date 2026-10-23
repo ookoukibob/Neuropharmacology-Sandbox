@@ -533,9 +533,12 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
             const factor = baseFactor(duration.unit, 'time')
             return factor === null ? null : duration.value * factor
           })()
-    const lastTerminalTime =
+    // NCA selectedTimes are expressed in the dataset's declared time unit,
+    // while durationHours is normalised to hours. Convert before comparing;
+    // otherwise minute/day datasets can be misclassified by unit scale alone.
+    const lastTerminalTimeHours =
       nca.terminalPhase.status === 'available' && nca.terminalPhase.selectedTimes.length > 0
-        ? Math.max(...nca.terminalPhase.selectedTimes)
+        ? Math.max(...nca.terminalPhase.selectedTimes) * timeToH
         : null
     if (durationHours === null) {
       infusionTerminalConfirmed = false
@@ -545,12 +548,12 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
         message:
           'The infusion end time is not recorded, so it cannot be confirmed that the terminal phase follows the end of the infusion.',
       })
-    } else if (lastTerminalTime === null || lastTerminalTime <= durationHours) {
+    } else if (lastTerminalTimeHours === null || lastTerminalTimeHours <= durationHours) {
       infusionTerminalConfirmed = false
       preconditions.push({
         id: 'infusion-terminal-phase',
         status: 'not-met',
-        message: `The last terminal observation (${exact(lastTerminalTime ?? 0)} h) does not extend beyond the infusion end (${exact(durationHours)} h), so the slope may reflect the input rather than elimination.`,
+        message: `The last terminal observation (${exact(lastTerminalTimeHours ?? 0)} h) does not extend beyond the infusion end (${exact(durationHours)} h), so the slope may reflect the input rather than elimination.`,
       })
     } else {
       preconditions.push({
