@@ -235,14 +235,17 @@ interface ComputedParameterInput {
 }
 
 function computedParameter(input: ComputedParameterInput): DoseDependentParameter {
-  if (!Number.isFinite(input.value)) {
+  // All four parameters are ratios/products of strictly positive finite
+  // quantities. A zero or negative result can only arise from invalid
+  // arithmetic or floating-point underflow, not from a valid scientific input.
+  if (!Number.isFinite(input.value) || input.value <= 0) {
     return unavailableParameter(
       input.parameter,
       input.label,
       input.basis,
       input.formula,
       'NUMERICAL_FAILURE',
-      'The computed value is not finite; the inputs may be outside the representable range.',
+      'The computed value is not a positive finite number; unit conversion or arithmetic may have overflowed or underflowed.',
       input.inputs,
       input.assumptions,
     )
