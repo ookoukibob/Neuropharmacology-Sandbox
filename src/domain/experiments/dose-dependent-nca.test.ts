@@ -340,6 +340,7 @@ describe('dose-dependent NCA — units', () => {
   it('converts a mass unit before dividing (µg dose, mg/L·h AUC)', () => {
     const report = run(administration({ dose: { value: 100_000, unit: 'µg' } }))
     expect(report.parameters.cl.value).toBeCloseTo(0.5, 12)
+    expect(report.parameters.cl.substitution).toBe('0.1 g ÷ 0.2 g·h/L = 0.5 L/h')
   })
 
   it('converts a mass-concentration unit (µg/mL) and a time unit (min)', () => {
@@ -354,6 +355,9 @@ describe('dose-dependent NCA — units', () => {
     })
     expect(report.parameters.cl.value).toBeCloseTo(30, 10)
     expect(report.parameters.vz.value).toBeCloseTo(1, 10)
+    expect(report.parameters.cl.substitution).toContain('g ÷')
+    expect(report.parameters.cl.substitution).toContain('g·h/L =')
+    expect(report.parameters.vz.substitution).toContain('h⁻¹ =')
   })
 
   it('refuses a molar concentration with a mass dose (no molecular weight is invented)', () => {
