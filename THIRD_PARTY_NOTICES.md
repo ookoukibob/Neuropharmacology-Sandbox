@@ -69,6 +69,30 @@ copied from them.
   positive terminal-phase end; a trailing non-positive observation makes the
   extrapolated AUC unavailable, rather than silently back-filling.
 
+### Dose-dependent parameters (Phase 50B) — comparison only
+
+PKNCA's public documentation on dose-dependent parameter conditions was
+reviewed to check that this project's independent implementation does not miss
+a material precondition: the need for a dose and route, the distinction between
+a complete `AUC(0→∞)` for single-dose clearance and an interval-specific
+`AUCτ` at steady state, the bioavailability assumption for extravascular
+administration, and the requirement for a usable terminal estimate for the
+volume parameters. **No PKNCA source code was copied, translated or adapted**,
+and no GPL/AGPL dependency was added; the implementation lives in
+`src/domain/experiments/dose-dependent-nca.ts` and was written from the
+formulas documented in `docs/experimental-data.md` §18.
+
+Intentional differences from PKNCA in this phase:
+
+- repeated-dose and steady-state datasets are refused entirely (no `AUCτ` is
+  computed) rather than partially supported;
+- absolute and apparent parameters are separate, explicitly labelled results,
+  and the apparent twins are `not-applicable` for an IV route;
+- every unmet precondition carries its own structured refusal code, rather than
+  a single generic failure;
+- a molar concentration with a mass dose is refused instead of converting via
+  a molecular weight.
+
 ## Dosing regimens and IV infusion (event-driven dosing)
 
 ### Reference studied: mrgsolve

@@ -1318,10 +1318,44 @@ describe('noncompartmental analysis (phase 48)', () => {
     expect(screen.getByTestId('nca-auc-last')).toHaveTextContent(/mg\/L·h/)
     expect(screen.getByTestId('nca-lambda-z')).toHaveTextContent(/h⁻¹/)
     expect(screen.getByTestId('nca-terminal')).toHaveTextContent(/source rows 4, 5, 6/)
+    // No administration metadata recorded: the dose-dependent parameters are
+    // absent, with an explicit reason (never a fabricated dose).
+    expect(screen.getByTestId('dose-dependent-unavailable')).toHaveTextContent(/ADMINISTRATION_MISSING/)
     // Derived analysis never writes.
     expect(repository.createCalls).toHaveLength(0)
     expect(repository.updateCalls).toHaveLength(0)
     expect(repository.deleteCalls).toHaveLength(0)
+  })
+
+  it('derives dose-dependent parameters from the recorded administration', async () => {
+    await select(
+      storedDataset({
+        id: 'nca-3',
+        name: 'NCA dose study',
+        administration: {
+          route: 'iv-bolus',
+          regimen: 'single-dose',
+          timeReference: 'dose-time',
+          dose: { value: 100, unit: 'mg' },
+        },
+        measurements: [
+          row('b1', 1, 0, 100),
+          row('b2', 2, 1, 60.653),
+          row('b3', 3, 2, 36.788),
+          row('b4', 4, 3, 22.313),
+          row('b5', 5, 4, 13.534),
+          row('b6', 6, 5, 8.208),
+        ],
+      }),
+    )
+
+    expect(screen.getByTestId('dose-dependent-nca')).toBeInTheDocument()
+    expect(screen.getByTestId('dose-dependent-cl')).toHaveTextContent(/L\/h/)
+    expect(screen.getByTestId('dose-dependent-cl-status')).toHaveTextContent('available')
+    expect(screen.getByTestId('dose-dependent-vz')).toHaveTextContent(/ L$/)
+    expect(screen.getByTestId('dose-dependent-inputs')).toHaveTextContent('100 mg')
+    // Derived analysis never writes back to the dataset.
+    expect(repository.updateCalls).toHaveLength(0)
   })
 
   it('reports an unavailable metric for duplicate sampling times', async () => {

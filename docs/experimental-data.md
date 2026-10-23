@@ -1539,10 +1539,9 @@ load with no administration metadata (shown as unknown). `.npex` advances to
 the metadata losslessly. The independent version rule is unchanged (same major,
 file minor ≤ reader minor).
 
-### 17.5 Prerequisites for dose-dependent NCA (a later phase)
+### 17.5 Prerequisites for dose-dependent NCA
 
-Computing `CL`, `CL/F`, `Vz` or `Vz/F` will require, and must not proceed
-without:
+Computing `CL`, `CL/F`, `Vz` or `Vz/F` requires, and must not proceed without:
 
 1. a known dose amount and route, and the exposure interval the parameters
    refer to;
@@ -1556,4 +1555,97 @@ without:
 
 A repeated-dose dataset must not automatically be treated as a single-dose
 concentration curve extending to infinity, and steady state must not be
-inferred from appearance.
+inferred from appearance. The single-dose implementation of these prerequisites
+is documented in §18; repeated-dose (`AUCτ`) remains deferred.
+
+## 18. Dose-dependent noncompartmental analysis (Phase 50B)
+
+Combines the §17 administration metadata with the §16 NCA result. It is
+**single-dose only**; repeated-dose and steady-state datasets are refused with a
+structured reason. All values are derived and ephemeral — nothing is persisted,
+and no measurement, unit, provenance or administration field is modified.
+
+### 18.1 Formulas
+
+For a single dose with a complete `AUC(0→∞)`:
+
+| Parameter | Formula | Basis |
+| --- | --- | --- |
+| `CL/F` | `Dose / AUC(0→∞)` | apparent (extravascular only) |
+| `CL` | `F × Dose / AUC(0→∞)`; `F = 1` for an IV route by definition | absolute |
+| `Vz/F` | `(CL/F) / λ_z` | apparent (extravascular only) |
+| `Vz` | `CL / λ_z` | absolute |
+
+For an IV bolus or IV infusion, `F = 1` is a property of the route, not a
+recorded value, so `CL/F` and `Vz/F` are reported as **not applicable** rather
+than duplicating the absolute parameters. For an extravascular dose without a
+recorded `F`, only `CL/F` and `Vz/F` are available.
+
+### 18.2 Preconditions (all must hold)
+
+| Condition | Refusal when it fails |
+| --- | --- |
+| an administration record exists | `ADMINISTRATION_MISSING` |
+| route is `iv-bolus`, `iv-infusion` or `extravascular` | `ROUTE_UNKNOWN` / `ROUTE_OTHER` |
+| regimen is `single-dose` | `REGIMEN_UNKNOWN` / `REGIMEN_NOT_SINGLE_DOSE` |
+| a positive mass dose is recorded | `DOSE_MISSING` / `DOSE_NOT_POSITIVE` / `DOSE_UNIT_INCOMPATIBLE` |
+| time reference matches the route (`dose-time` for bolus/extravascular, `infusion-start` for infusion) | `TIME_REFERENCE_MISMATCH` |
+| infusion metadata is consistent with the route | `INFUSION_METADATA_INCONSISTENT` |
+| the NCA produced a **complete** `AUC(0→∞)` | `AUC_NOT_COMPLETE` / `AUC_UNAVAILABLE` |
+| a usable `λ_z` (volume parameters only) | `LAMBDA_Z_UNAVAILABLE` |
+| `F` recorded (absolute parameters for an extravascular dose) | `BIOAVAILABILITY_MISSING` |
+| concentration is a **mass** concentration | `CONCENTRATION_UNIT_INCOMPATIBLE` |
+
+`AUC(first→∞)` is never substituted for `AUC(0→∞)`, even when it is
+numerically available. A molar concentration with a mass dose is refused
+because converting it would require a molecular weight that is not recorded;
+none is invented.
+
+### 18.3 Units
+
+Dose, concentration and time are converted through the **existing unit
+catalog's base factors** (mass → g, mass-concentration → g/L, time → h) before
+division. Clearance is therefore reported in `L/h` and volume in `L`. No second
+conversion table exists in the UI or in this module, and the molar/mass
+distinction is never crossed implicitly.
+
+### 18.4 Statuses
+
+Each parameter is independent and carries one of four states:
+
+- `available` — all conditions met, no material caveat;
+- `conditional` — computed, but a recorded caveat applies: more than 20 % of
+  `AUC(0→∞)` is extrapolated, the terminal regression `R² < 0.8` (volume only),
+  or the dose is extravascular (absorption may limit the terminal phase —
+  flip-flop);
+- `unavailable` — a structured code and message explain why;
+- `not-applicable` — the route makes the parameter meaningless (`F = 1` for IV).
+
+### 18.5 Audit trail
+
+Every result carries the dose, the `AUC(0→∞)` value/unit/name, `λ_z`, `F` (when
+used), the symbolic formula, the substituted values, and the list of
+preconditions checked. The calculation engine is the only source of these
+numbers; the UI only renders them.
+
+### 18.6 Not implemented
+
+- Repeated-dose and steady-state dose-dependent NCA (an `AUCτ` at a declared
+  dosing interval) — deferred to a candidate Phase 50C. τ is never treated as
+  the analysis interval.
+- Deriving a dose from an infusion rate × duration (the §17 contract records at
+  most one of duration/rate, so the total dose must be stated explicitly).
+- Any clinical dose recommendation, population PK, PBPK or multi-compartment
+  fitting.
+
+### 18.7 Relationship to PKNCA
+
+PKNCA's public documentation on dose-dependent parameter conditions (single vs
+multiple dose, `AUCτ` at steady state, the bioavailability assumption, and the
+need for a complete AUC for `CL`) was reviewed for comparison. The
+implementation here is independent: no PKNCA source is copied or translated
+(AGPL-3.0 versus this repository's PolyForm Noncommercial licence — see
+`THIRD_PARTY_NOTICES.md`). Intentional differences: this phase refuses repeated
+dosing entirely rather than computing `AUCτ`; it reports absolute and apparent
+parameters as separate, explicitly labelled results; and it exposes a structured
+refusal code for every unmet precondition rather than a single failure state.

@@ -125,6 +125,14 @@ export interface NcaAnalysis {
    * first observation is after time zero (the interval before it is excluded).
    */
   readonly aucInf: NcaMetric
+  /**
+   * The interval the extrapolated AUC actually covers, or `null` when it is
+   * unavailable. `zero-to-infinity` is a complete AUC(0→∞) and the ONLY
+   * interval valid for dose-dependent parameters; `first-to-infinity` is a
+   * partial interval and is never substituted for it. This is an explicit
+   * discriminant, so consumers do not have to parse the display name.
+   */
+  readonly aucInfInterval: 'zero-to-infinity' | 'first-to-infinity' | null
   /** (AUC∞ − AUClast) / AUC∞, as a fraction (0–1). */
   readonly extrapolatedFraction: NcaMetric
   readonly lambdaZ: NcaMetric
@@ -712,6 +720,12 @@ export function analyzeNca(
     tmax: tmaxMetric,
     aucLast,
     aucInf,
+    aucInfInterval:
+      aucInf.status === 'available'
+        ? startsAtZero
+          ? 'zero-to-infinity'
+          : 'first-to-infinity'
+        : null,
     extrapolatedFraction,
     lambdaZ: lambdaZMetric,
     halfLife: halfLifeMetric,
