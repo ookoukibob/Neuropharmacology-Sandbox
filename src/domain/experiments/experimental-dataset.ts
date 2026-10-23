@@ -232,7 +232,25 @@ export function validateAdministration(
         field: 'bioavailability',
         message: 'Bioavailability must be greater than 0 and at most 1.',
       })
+    } else if (
+      (administration.route === 'iv-bolus' || administration.route === 'iv-infusion') &&
+      f !== 1
+    ) {
+      // Absolute bioavailability for an intravenous route is 1 by definition.
+      // Do not let contradictory metadata become an input to later dose-based
+      // calculations; retain an explicitly supplied F=1 if the user records it.
+      issues.push({
+        field: 'bioavailability',
+        message: 'Bioavailability for intravenous administration is 1; a different F conflicts with the recorded route.',
+      })
     }
+  }
+
+  if (administration.infusion !== undefined && administration.route !== 'iv-infusion') {
+    issues.push({
+      field: 'infusion',
+      message: 'Infusion duration/rate metadata requires the IV-infusion route.',
+    })
   }
 
   return issues
