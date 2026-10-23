@@ -1506,13 +1506,17 @@ inferred from a visually flat curve — it must be stated.
 ### 17.2 Time origin
 
 The stored measurement times keep their source meaning; `timeReference` records
-what those times are relative to. Time zero is therefore **not** assumed to be
-a dose time: `first-observation` is the physical default, and `dose-time` /
-`infusion-start` claim an administration anchor only when the analyst states
-it. For a repeated regimen, the recorded times are relative to the stated
-reference (typically the first dose), and `dosingInterval` τ relates them to
-the administration schedule — the measurements themselves are never
-re-expressed.
+what those times are relative to. Time zero is **not** assumed to be the dose
+time or the first observation: `first-observation`, `dose-time` and
+`infusion-start` are explicit claims selected only when supported by the source
+record. If the reference is not known, use `unknown`; if it uses a non-standard
+anchor, use `other` and document the meaning in the dataset notes.
+
+For a repeated regimen, `dose-time` must refer to the dose anchor actually used
+by the source time axis. This enum does not identify a dose number or a specific
+steady-state interval. If that detail is unknown or ambiguous, document the
+limitation and do not infer an interval start from the dosing interval τ alone.
+The recorded measurements are never re-expressed.
 
 ### 17.3 Validation
 
