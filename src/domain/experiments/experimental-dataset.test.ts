@@ -173,6 +173,29 @@ describe('administration metadata validation', () => {
     )
   })
 
+  it('rejects infusion details when the recorded route is not IV infusion', () => {
+    const issues = validateAdministration({
+      ...base(),
+      infusion: { duration: { value: 2, unit: 'h' } },
+    })
+    expect(issues.some((issue) => issue.field === 'infusion' && /requires the IV-infusion route/i.test(issue.message))).toBe(true)
+  })
+
+  it('requires F = 1 for an explicitly intravenous route', () => {
+    for (const route of ['iv-bolus', 'iv-infusion'] as const) {
+      const issues = validateAdministration({
+        route,
+        regimen: 'single-dose',
+        timeReference: route === 'iv-bolus' ? 'dose-time' : 'infusion-start',
+        bioavailability: 0.8,
+      })
+      expect(issues.some((issue) => issue.field === 'bioavailability' && /intravenous administration is 1/i.test(issue.message))).toBe(true)
+    }
+
+    // Explicitly recording F = 1 is consistent with IV administration.
+    expect(validateAdministration({ ...base(), bioavailability: 1 })).toEqual([])
+  })
+
   it('rejects unknown enum values', () => {
     const bad = { route: 'oral', regimen: 'steady', timeReference: 'clock' } as unknown as AdministrationMetadata
     const issues = validateAdministration(bad)
