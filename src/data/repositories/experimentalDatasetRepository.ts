@@ -9,6 +9,7 @@
  * write, so a stale screen cannot overwrite newer changes silently.
  */
 import type {
+  AdministrationMetadata,
   ExperimentalDataset,
   ExperimentalDatasetId,
   ExperimentalDatasetInput,
@@ -51,11 +52,15 @@ export type ExperimentalDatasetDeleteOutcome =
 
 /**
  * Partial metadata update. Absent `name` keeps the current name; `notes`
- * distinguishes absent (keep) from explicit `undefined` (clear).
+ * distinguishes absent (keep) from explicit `undefined` (clear). The same
+ * rule applies to `administration`: absent keeps it, `undefined` clears it,
+ * and a value replaces it. Measurements, units and provenance are never
+ * touched by this operation.
  */
 export interface ExperimentalDatasetChanges {
   readonly name?: string
   readonly notes?: string | undefined
+  readonly administration?: AdministrationMetadata | undefined
 }
 
 export interface ExperimentalDatasetRepository {

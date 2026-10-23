@@ -988,6 +988,57 @@ phase omit the fields and load as single doses.
 
 ---
 
+## ADR-30 · Administration metadata is optional, explicitly-unknown, and never inferred
+
+**Context.** Phase 50A adds dosing/administration context to experimental
+datasets, as the foundation for later dose-dependent NCA parameters. The
+dataset already records measured time/concentration pairs with explicit units
+and provenance; adding administration must not silently imply a dose, route or
+time origin, and must not break datasets created before the field existed.
+
+**Decision.**
+
+- **The whole record is optional.** `administration` is absent on datasets
+  created before this phase; absent means "no administration metadata", shown
+  as unknown, never as an invented dose or route.
+- **Unknown is an explicit value, not a fallback.** `route`, `regimen` and
+  `timeReference` are enums with an `unknown` member; `dose`, `infusion`,
+  `dosingInterval` and `bioavailability` are optional and appear only when
+  known. Nothing is inferred from the measurements, and steady state is never
+  inferred from a flat-looking curve.
+- **Units stay explicit and dimension-checked.** Dose is a mass, infusion
+  duration a time, infusion rate a mass-flow rate, and the dosing interval a
+  time; the unit catalog validates the dimension and no value is converted or
+  relabelled. An infusion records either a duration or a rate, never both.
+- **Time origin is declared, not assumed.** `timeReference` states what the
+  recorded times are relative to (`dose-time`, `infusion-start`,
+  `first-observation`, `other`, `unknown`); time zero is not assumed to be a
+  dose time.
+- **Editing metadata never touches measurements.** The repository's `update`
+  adds `administration` with the same keep/clear/replace semantics as `notes`;
+  measurements, units and provenance are unchanged by a metadata edit.
+- **Versioned interchange.** `.npex` advances to 1.1.0. Files without the key
+  (≤ 1.0.x) still import; the independent version rule (same major, file
+  minor ≤ reader minor) is unchanged, so an older reader rejects a 1.1.0 file
+  rather than silently dropping the new field.
+- **No dose-dependent parameters here.** CL, CL/F, Vz and Vz/F are explicitly
+  out of scope; their prerequisites are documented, not implemented.
+
+**Rejected alternatives.** *Making administration mandatory* — it would break
+every existing dataset and force invented values. *Inferring route/regimen
+from the data* — a flat curve is not evidence of steady state, and a spike is
+not evidence of a bolus. *Storing a bare dose number without a unit* — a
+dimensionless dose cannot support later CL/Vz without a hidden conversion.
+*Encoding infusion as "amount + duration" only* — a rate is equally valid and
+must be stored without deriving one from the other.
+
+**Consequences.** Dose-dependent NCA can later be gated on explicit metadata
+rather than on heuristics. Existing datasets keep working, `.npex` 1.1.0 is
+backward-compatible in one direction, and the UI renders known, partially
+known and unknown contexts without inventing information.
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

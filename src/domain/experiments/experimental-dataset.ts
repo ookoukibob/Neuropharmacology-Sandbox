@@ -29,6 +29,236 @@ export type ExperimentalMeasurementId = string
 /** Where the dataset's content came from. */
 export type DatasetSourceKind = 'csv' | 'npex'
 
+// ---------------------------------------------------------------------------
+// Administration metadata (phase 50A)
+// ---------------------------------------------------------------------------
+
+/**
+ * How the drug was administered. `other` covers any administration not listed;
+ * `unknown` is the honest value when the route is not recorded — it is never a
+ * fallback that assumes a route.
+ */
+export type AdministrationRoute =
+  | 'iv-bolus'
+  | 'iv-infusion'
+  | 'extravascular'
+  | 'other'
+  | 'unknown'
+
+/**
+ * The study regimen. `repeated-dose` means repeated dosing NOT at steady
+ * state; `repeated-dose-steady-state` means repeated dosing at steady state.
+ * A visually flat-looking curve never implies steady state — it must be stated.
+ */
+export type AdministrationRegimen =
+  | 'single-dose'
+  | 'repeated-dose'
+  | 'repeated-dose-steady-state'
+  | 'unknown'
+
+/**
+ * What the recorded measurement times are relative to. A dataset's time zero
+ * is NOT assumed to be a dose time or the first observation without evidence.
+ * `first-observation`, `dose-time` and `infusion-start` are explicit claims
+ * about the source time axis; `other`/`unknown` decline to claim a standard
+ * anchor. For repeated dosing, the specific reference dose/interval must be
+ * documented in the dataset notes or source metadata; this enum alone does
+ * not identify a dose number.
+ */
+export type AdministrationTimeReference =
+  | 'dose-time'
+  | 'infusion-start'
+  | 'first-observation'
+  | 'other'
+  | 'unknown'
+
+/** A quantity as the analyst stated it: number + explicit unit, never bare. */
+export interface AdministrationQuantity {
+  readonly value: number
+  readonly unit: string
+}
+
+/**
+ * Infusion specifics for an IV-infusion dataset. At most one of `duration` and
+ * `rate` may be present; both absent means "route is infusion but no
+ * duration/rate was recorded". Neither value is derived from the other.
+ */
+export interface AdministrationInfusion {
+  readonly duration?: AdministrationQuantity
+  readonly rate?: AdministrationQuantity
+}
+
+/**
+ * Optional administration context for a dataset. If this record exists, the
+ * route, regimen and time reference must be explicitly supplied (including an
+ * explicit `unknown` where necessary). Optional quantities are absent when
+ * they were not recorded. Nothing is inferred from measurements. Dose-dependent
+ * parameters (CL, CL/F, Vz, Vz/F) are NOT computed from this metadata in this phase.
+ */
+export interface AdministrationMetadata {
+  readonly route: AdministrationRoute
+  /** Dose amount with a mass unit, present only when known. */
+  readonly dose?: AdministrationQuantity
+  /** Infusion duration or rate, present only for an IV infusion. */
+  readonly infusion?: AdministrationInfusion
+  readonly regimen: AdministrationRegimen
+  /** Dosing interval τ with a time unit, present only when applicable. */
+  readonly dosingInterval?: AdministrationQuantity
+  readonly timeReference: AdministrationTimeReference
+  /** Bioavailability F in (0, 1], present only when explicitly supplied. */
+  readonly bioavailability?: number
+}
+
+export const ADMINISTRATION_ROUTES: readonly AdministrationRoute[] = [
+  'iv-bolus',
+  'iv-infusion',
+  'extravascular',
+  'other',
+  'unknown',
+]
+
+export const ADMINISTRATION_REGIMENS: readonly AdministrationRegimen[] = [
+  'single-dose',
+  'repeated-dose',
+  'repeated-dose-steady-state',
+  'unknown',
+]
+
+export const ADMINISTRATION_TIME_REFERENCES: readonly AdministrationTimeReference[] = [
+  'dose-time',
+  'infusion-start',
+  'first-observation',
+  'other',
+  'unknown',
+]
+
+/** One administration-field problem, identified by a dotted field path. */
+export interface AdministrationIssue {
+  readonly field: string
+  readonly message: string
+}
+
+function quantityIssue(
+  quantity: AdministrationQuantity,
+  dimension: DimensionId,
+  allowZero: boolean,
+  field: string,
+  label: string,
+): AdministrationIssue[] {
+  const issues: AdministrationIssue[] = []
+  if (typeof quantity.value !== 'number' || !Number.isFinite(quantity.value)) {
+    issues.push({ field: `${field}.value`, message: `${label} must be a finite number.` })
+  } else if (allowZero ? quantity.value < 0 : quantity.value <= 0) {
+    issues.push({
+      field: `${field}.value`,
+      message: `${label} must be ${allowZero ? 'zero or greater' : 'greater than zero'}.`,
+    })
+  }
+  const unit = typeof quantity.unit === 'string' ? quantity.unit.trim() : ''
+  if (unit === '') {
+    issues.push({ field: `${field}.unit`, message: `A unit is required for ${label.toLowerCase()}.` })
+  } else {
+    const def = unitCatalog.get(unit)
+    if (def === undefined) {
+      issues.push({ field: `${field}.unit`, message: `Unit "${unit}" is not in the unit catalog.` })
+    } else if (def.dimension !== dimension) {
+      issues.push({
+        field: `${field}.unit`,
+        message: `Unit "${unit}" is a ${def.dimension} unit, not a ${dimension} unit.`,
+      })
+    }
+  }
+  return issues
+}
+
+/**
+ * Validate the administration metadata's scientific rules (unit dimensions,
+ * positivity, infusion duration XOR rate, bioavailability range). Structural
+ * shape (enums, object types) is the schema's job; this owns only what the
+ * schema cannot decide without the unit catalog.
+ */
+export function validateAdministration(
+  administration: AdministrationMetadata,
+): readonly AdministrationIssue[] {
+  const issues: AdministrationIssue[] = []
+
+  if (!ADMINISTRATION_ROUTES.includes(administration.route)) {
+    issues.push({ field: 'route', message: `Unknown administration route "${String(administration.route)}".` })
+  }
+  if (!ADMINISTRATION_REGIMENS.includes(administration.regimen)) {
+    issues.push({ field: 'regimen', message: `Unknown regimen "${String(administration.regimen)}".` })
+  }
+  if (!ADMINISTRATION_TIME_REFERENCES.includes(administration.timeReference)) {
+    issues.push({
+      field: 'timeReference',
+      message: `Unknown time reference "${String(administration.timeReference)}".`,
+    })
+  }
+
+  if (administration.dose !== undefined) {
+    issues.push(...quantityIssue(administration.dose, 'mass', false, 'dose', 'Dose amount'))
+  }
+
+  if (administration.infusion !== undefined) {
+    const hasDuration = administration.infusion.duration !== undefined
+    const hasRate = administration.infusion.rate !== undefined
+    if (hasDuration && hasRate) {
+      issues.push({
+        field: 'infusion',
+        message: 'An infusion records either a duration or a rate, not both.',
+      })
+    }
+    if (hasDuration) {
+      issues.push(
+        ...quantityIssue(administration.infusion.duration, 'time', false, 'infusion.duration', 'Infusion duration'),
+      )
+    }
+    if (hasRate) {
+      issues.push(
+        ...quantityIssue(administration.infusion.rate, 'mass-flow-rate', false, 'infusion.rate', 'Infusion rate'),
+      )
+    }
+  }
+
+  if (administration.dosingInterval !== undefined) {
+    issues.push(
+      ...quantityIssue(administration.dosingInterval, 'time', false, 'dosingInterval', 'Dosing interval'),
+    )
+  }
+
+  if (administration.bioavailability !== undefined) {
+    const f = administration.bioavailability
+    if (typeof f !== 'number' || !Number.isFinite(f)) {
+      issues.push({ field: 'bioavailability', message: 'Bioavailability must be a finite number.' })
+    } else if (f <= 0 || f > 1) {
+      issues.push({
+        field: 'bioavailability',
+        message: 'Bioavailability must be greater than 0 and at most 1.',
+      })
+    } else if (
+      (administration.route === 'iv-bolus' || administration.route === 'iv-infusion') &&
+      f !== 1
+    ) {
+      // Absolute bioavailability for an intravenous route is 1 by definition.
+      // Do not let contradictory metadata become an input to later dose-based
+      // calculations; retain an explicitly supplied F=1 if the user records it.
+      issues.push({
+        field: 'bioavailability',
+        message: 'Bioavailability for intravenous administration is 1; a different F conflicts with the recorded route.',
+      })
+    }
+  }
+
+  if (administration.infusion !== undefined && administration.route !== 'iv-infusion') {
+    issues.push({
+      field: 'infusion',
+      message: 'Infusion duration/rate metadata requires the IV-infusion route.',
+    })
+  }
+
+  return issues
+}
+
 /**
  * Provenance as supplied by the import the dataset came from. `fileName` is
  * optional because a future non-file creation path has no file; this phase
@@ -73,6 +303,12 @@ export interface ExperimentalDataset {
   readonly provenance: DatasetProvenance
   /** Optional descriptive notes. */
   readonly notes?: string
+  /**
+   * Optional administration context (phase 50A). Absent (records created
+   * before this phase) means no administration metadata was recorded; the UI
+   * shows it as unknown, never as an invented dose or route.
+   */
+  readonly administration?: AdministrationMetadata
 }
 
 /** A measurement before storage assigns its local identity. */
@@ -92,6 +328,7 @@ export interface ExperimentalDatasetInput {
   readonly measurements: readonly ExperimentalMeasurementInput[]
   readonly provenance: DatasetProvenance
   readonly notes?: string
+  readonly administration?: AdministrationMetadata
 }
 
 /** List row: metadata only, no measurements. */

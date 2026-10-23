@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import type {
+  AdministrationMetadata,
   ExperimentalDataset,
   ExperimentalDatasetInput,
   ExperimentalDatasetSummary,
@@ -37,6 +38,11 @@ export interface DatasetLibraryApi {
   clearSelection(): void
   importDataset(input: ExperimentalDatasetInput): Promise<ExperimentalDataset | null>
   rename(id: string, name: string, expectedUpdatedAt: string): Promise<boolean>
+  setAdministration(
+    id: string,
+    administration: AdministrationMetadata | undefined,
+    expectedUpdatedAt: string,
+  ): Promise<boolean>
   remove(id: string, expectedUpdatedAt: string): Promise<boolean>
 }
 
@@ -197,6 +203,36 @@ export function useExperimentalDatasetLibrary(
     [repository, refresh],
   )
 
+  const setAdministration = useCallback(
+    async (
+      id: string,
+      administration: AdministrationMetadata | undefined,
+      expectedUpdatedAt: string,
+    ): Promise<boolean> => {
+      setBusy(true)
+      try {
+        const outcome = await repository.update(id, { administration }, expectedUpdatedAt)
+        if (!outcome.ok) {
+          setFeedback({ kind: 'error', message: outcome.message })
+          return false
+        }
+        setSelected(outcome.dataset)
+        setFeedback({ kind: 'success', message: 'Administration metadata saved.' })
+        await refresh()
+        return true
+      } catch (error) {
+        setFeedback({
+          kind: 'error',
+          message: `The administration metadata could not be saved: ${messageOf(error)}`,
+        })
+        return false
+      } finally {
+        setBusy(false)
+      }
+    },
+    [repository, refresh],
+  )
+
   return {
     status,
     summaries,
@@ -209,6 +245,7 @@ export function useExperimentalDatasetLibrary(
     clearSelection,
     importDataset,
     rename,
+    setAdministration,
     remove,
   }
 }

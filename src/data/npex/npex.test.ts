@@ -88,17 +88,65 @@ describe('.npex experimental dataset format', () => {
     expect(parsed.dataset.measurements).toEqual(input.measurements)
   })
 
+  it('round-trips administration metadata and accepts files without it', () => {
+    const withAdmin: ExperimentalDataset = {
+      ...stored(),
+      administration: {
+        route: 'iv-bolus',
+        regimen: 'single-dose',
+        timeReference: 'dose-time',
+        dose: { value: 100, unit: 'mg' },
+      },
+    }
+    const built = buildNpexFile(withAdmin, EXPORTED_AT)
+    if (!built.ok) throw new Error(JSON.stringify(built.issues))
+    const parsed = parseNpexText(built.text)
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.issues))
+    expect(parsed.dataset.administration).toEqual({
+      route: 'iv-bolus',
+      regimen: 'single-dose',
+      timeReference: 'dose-time',
+      dose: { value: 100, unit: 'mg' },
+    })
+
+    // A pre-50A file (no administration key) still parses and yields no
+    // administration metadata — nothing is invented.
+    const legacy = buildNpexFile(stored(), EXPORTED_AT)
+    if (!legacy.ok) throw new Error('setup')
+    const parsedLegacy = parseNpexText(legacy.text)
+    if (!parsedLegacy.ok) throw new Error('setup')
+    expect(parsedLegacy.dataset.administration).toBeUndefined()
+  })
+
+  it('rejects malformed administration metadata without producing a dataset', () => {
+    const built = buildNpexFile(stored(), EXPORTED_AT)
+    if (!built.ok) throw new Error('setup')
+    const base = JSON.parse(built.text) as { dataset: Record<string, unknown> }
+    base.dataset.administration = {
+      route: 'iv-bolus',
+      regimen: 'single-dose',
+      timeReference: 'dose-time',
+      dose: { value: 100, unit: 'mg/L' }, // mass concentration, not a mass
+    }
+    const parsed = parseNpexText(JSON.stringify(base))
+    expect(parsed.ok).toBe(false)
+    if (parsed.ok) return
+    expect(parsed.issues.some((entry) => entry.code === 'NPEX_VALIDATION')).toBe(true)
+    expect(parsed.issues.some((entry) => entry.path === 'dataset.administration.dose.unit')).toBe(true)
+  })
+
   it('uses an independent semantic-version compatibility rule', () => {
     expect(checkNpexVersion('1.0.0').ok).toBe(true)
     expect(checkNpexVersion('1.0.99').ok).toBe(true)
-    expect(checkNpexVersion('1.1.0').ok).toBe(false)
+    expect(checkNpexVersion('1.1.0').ok).toBe(true)
+    expect(checkNpexVersion('1.2.0').ok).toBe(false)
     expect(checkNpexVersion('2.0.0').ok).toBe(false)
     expect(checkNpexVersion('1.0').ok).toBe(false)
 
     const built = buildNpexFile(stored(), EXPORTED_AT)
     if (!built.ok) throw new Error('setup')
     const doc = JSON.parse(built.text) as Record<string, unknown>
-    doc['formatVersion'] = '1.1.0'
+    doc['formatVersion'] = '1.2.0'
     const parsed = parseNpexText(JSON.stringify(doc))
     expect(parsed.ok).toBe(false)
     if (parsed.ok) return

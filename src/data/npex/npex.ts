@@ -34,13 +34,14 @@ import {
   type ExperimentalDataset,
   type ExperimentalDatasetInput,
   type ExperimentalMeasurementInput,
+  type AdministrationMetadata,
 } from '../../domain/experiments/experimental-dataset'
 import { experimentalDatasetNpexSchema } from '../schemas/experimentalDatasets'
 import { scanDuplicateJsonKeys } from '../recovery/duplicateKeys'
 import { exceedsUtf8ByteLimit } from '../recovery/fidelity'
 
 export const NPEX_FORMAT_ID = 'npex'
-export const NPEX_VERSION = '1.0.0'
+export const NPEX_VERSION = '1.1.0'
 export const NPEX_EXTENSION = '.npex'
 export const NPEX_MIME_TYPE = 'application/json;charset=utf-8'
 export const MAX_NPEX_BYTES = 10 * 1024 * 1024
@@ -280,6 +281,9 @@ export function parseNpexText(text: string): NpexParseResult {
           ? {}
           : { fileName: dataset.data.provenance.fileName }),
       },
+      ...(dataset.data.administration === undefined
+        ? {}
+        : { administration: dataset.data.administration as unknown as AdministrationMetadata }),
       measurements,
     },
   }
@@ -291,6 +295,7 @@ function datasetInputFromStored(dataset: ExperimentalDataset): ExperimentalDatas
     timeUnit: dataset.timeUnit,
     concentrationUnit: dataset.concentrationUnit,
     ...(dataset.notes === undefined ? {} : { notes: dataset.notes }),
+    ...(dataset.administration === undefined ? {} : { administration: dataset.administration }),
     provenance: dataset.provenance,
     measurements: dataset.measurements.map((measurement) => ({
       sourceRow: measurement.sourceRow,

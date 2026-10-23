@@ -119,7 +119,7 @@ test('CSV → chart → .npex round trip, rename, reload, delete and narrow layo
     }
   }
   expect(npex.formatId).toBe('npex')
-  expect(npex.formatVersion).toBe('1.0.0')
+  expect(npex.formatVersion).toBe('1.1.0')
   expect(npex.dataset.name).toBe('Synthetic 47A measured study')
   expect(npex.dataset.timeUnit).toBe('h')
   expect(npex.dataset.concentrationUnit).toBe('mg/L')
@@ -637,4 +637,34 @@ test('runs noncompartmental analysis on the selected dataset', async ({ page }) 
 
   // The measured rows are untouched by the analysis.
   await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(6)
+})
+
+test('records and displays administration metadata without touching measurements', async ({ page }) => {
+  await page.goto('/experiments')
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+
+  await importTwoColumnCsv(page, {
+    fileName: 'synthetic-admin.csv',
+    csv: 'time,concentration\n0,100\n1,60.653\n2,36.788\n',
+    name: 'Synthetic administration study',
+  })
+
+  // A freshly imported CSV dataset has no administration metadata, shown as unknown.
+  await expect(page.getByTestId('administration-unknown')).toContainText(/unknown/i)
+
+  // Add an explicit IV-bolus context.
+  await page.getByTestId('administration-edit').click()
+  await page.getByTestId('administration-route').selectOption('iv-bolus')
+  await page.getByTestId('administration-regimen').selectOption('single-dose')
+  await page.getByTestId('administration-time-reference').selectOption('dose-time')
+  await page.getByTestId('administration-dose').fill('100')
+  await page.getByTestId('administration-save').click()
+
+  // The summary shows the known context, and the measurement rows are untouched.
+  const summary = page.getByTestId('administration-summary')
+  await expect(summary).toBeVisible()
+  await expect(summary).toContainText('IV bolus')
+  await expect(summary).toContainText('100 mg')
+  await expect(summary).toContainText('Dose administration time')
+  await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(3)
 })

@@ -50,6 +50,8 @@ import {
   type ProportionalVarianceFitSuccess,
 } from '@/domain/experiments/proportional-variance-fit'
 import { formatNumber } from '@/engine/numeric/decimal'
+import type { AdministrationMetadata } from '@/domain/experiments/experimental-dataset'
+import { AdministrationSection } from './AdministrationSection'
 import {
   AlertTriangle,
   Database,
@@ -178,6 +180,7 @@ export function ExperimentalDatasetsView({ repository }: ExperimentalDatasetsVie
               dataset={library.selected}
               busy={library.busy}
               onRename={library.rename}
+              onSetAdministration={library.setAdministration}
               onDelete={library.remove}
             />
           )}
@@ -288,10 +291,15 @@ interface DatasetDetailProps {
     name: string,
     expectedUpdatedAt: string,
   ) => Promise<boolean>
+  readonly onSetAdministration: (
+    id: string,
+    administration: AdministrationMetadata | undefined,
+    expectedUpdatedAt: string,
+  ) => Promise<boolean>
   readonly onDelete: (id: string, expectedUpdatedAt: string) => Promise<boolean>
 }
 
-function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps) {
+function DatasetDetail({ dataset, busy, onRename, onSetAdministration, onDelete }: DatasetDetailProps) {
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState(dataset.name)
   const [deleting, setDeleting] = useState(false)
@@ -541,6 +549,14 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
               </div>
             )}
           </dl>
+
+          <AdministrationSection
+            administration={dataset.administration}
+            busy={busy}
+            onSave={(administration) =>
+              onSetAdministration(dataset.id, administration, dataset.updatedAt)
+            }
+          />
 
           {deleting ? (
             <div
