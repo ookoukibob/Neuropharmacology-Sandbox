@@ -1,13 +1,13 @@
 # Experimental concentration–time datasets
 
-**Status: Phases 47A and 47B plus three Phase 47C slices — implemented.** This document is the
-contract for measured-dataset import, validation, local storage, inspection and
-`.npex` interchange, the optional one-compartment mono-exponential decay fit
-(§10), raw-residual/RMSE diagnostics (§11), the practical identifiability
-screen (§12), the two-candidate comparison with a conditional AICc (§13), and
-residual-structure diagnostics with a residual-spread screen (§14). Formal
-uncertainty estimation and any model set beyond those two candidates are not
-implemented.
+**Status: Phases 47A and 47B plus the Phase 47C work listed in §15.8 — implemented.**
+This document is the contract for measured-dataset import, validation, local
+storage, inspection and `.npex` interchange, the optional one-compartment
+mono-exponential decay fit (§10), raw-residual/RMSE diagnostics (§11), the
+practical identifiability screen (§12), the two-candidate comparison with a
+conditional common-variance AICc (§13), residual-structure diagnostics with a
+residual-spread screen (§14), and the opt-in proportional-variance likelihood
+path (§15). Phase 47 is **not** complete: §15.8 lists what remains deferred.
 
 All examples below are synthetic test data, not pharmacological information.
 
@@ -500,13 +500,15 @@ browser-local state, use `.npsb`.
   explicit confirmation, through the repository, in validated transactions.
 - **Derived analysis never rewrites evidence.** Phase 47B fitting (§10), the
   Phase 47C residual/RMSE diagnostics (§11), the objective profile (§12), the
-  two-candidate comparison with its conditional AICc (§13) and the residual
-  structure views (§14) are temporary derived views; imports, stored
-  observations, and `.npex` round trips are unchanged.
-  RMSE is descriptive and has no universal pass/fail threshold. AICc is
-  conditional on an explicitly declared error model and ranks only the two
-  configured candidates. Formal identifiability tests and parameter
-  uncertainty estimates still need contracts and assumptions of their own.
+  two-candidate comparison with its conditional AICc (§13), the residual
+  structure views (§14) and the proportional-variance likelihood path (§15)
+  are temporary derived views; imports, stored observations, and `.npex` round
+  trips are unchanged.
+  RMSE is descriptive and has no universal pass/fail threshold. Each AICc is
+  conditional on its own explicitly declared error model, the two criteria are
+  never compared with each other, and each ranks only the two configured
+  candidates. Formal identifiability tests and parameter uncertainty estimates
+  still need contracts and assumptions of their own.
 
 ---
 
@@ -514,14 +516,14 @@ browser-local state, use `.npsb`.
 
 | Layer | Representative files | Coverage |
 | --- | --- | --- |
-| Domain | `src/domain/experiments/experimental-dataset.test.ts`, `src/domain/experiments/mono-exponential-fit.test.ts`, `src/domain/experiments/mono-exponential-fit-diagnostics.test.ts`, `src/domain/experiments/mono-exponential-profile.test.ts`, `src/domain/experiments/mono-exponential-baseline-fit.test.ts`, `src/domain/experiments/mono-exponential-model-comparison.test.ts` | dataset contract, bounded fit/failures, raw residuals/RMSE, row fidelity and limited data-support notes, the objective profile (localized/broad/boundary/sparse/invalid/degenerate cases), constrained M1 recovery/boundaries/degeneracy, and the comparison with the AICc formula, parameter counts and every unavailability gate |
+| Domain | `src/domain/experiments/experimental-dataset.test.ts`, `src/domain/experiments/mono-exponential-fit.test.ts`, `src/domain/experiments/mono-exponential-fit-diagnostics.test.ts`, `src/domain/experiments/mono-exponential-profile.test.ts`, `src/domain/experiments/mono-exponential-baseline-fit.test.ts`, `src/domain/experiments/mono-exponential-model-comparison.test.ts`, `src/domain/experiments/proportional-variance-fit.test.ts`, `src/domain/experiments/proportional-variance-comparison.test.ts` | dataset contract, bounded fit/failures, raw residuals/RMSE, row fidelity and limited data-support notes, the objective profile, constrained M1 recovery/boundaries/degeneracy, the common-variance comparison with its AICc gates, and the proportional-variance likelihood: closed-form profile arithmetic against independent values, likelihood-vs-weighted-SSE separation, parameter recovery, unit scaling, zero-observation rejection, degenerate dispersion, boundary labels, parameter counts and every AICc gate |
 | Schemas | `src/data/schemas/experimentalDatasets.test.ts` | input/record/`.npex` shapes, limits, negative/non-finite rejection, units, duplicate measurement ids |
 | CSV | `src/features/experiments/csvDataset.test.ts` | explicit mapping, RFC 4180 reuse, row-specific errors, qualifiers, duplicates/order, all-or-nothing |
 | `.npex` | `src/data/npex/npex.test.ts` | envelope/version rules, strict shape, duplicate keys, depth/size, round trip, local identity absent |
 | Repository | `src/data/repositories/dexieExperimentalDatasetRepository.test.ts` | CRUD, validation on read/write, corruption reporting, atomicity, optimistic tokens, immutable science, strict timestamp ordering |
 | Database/recovery | `src/data/db/database.test.ts`, `experimentalDatasetRecovery.test.ts`, `archive.test.ts` | v5→v6 preservation, all-store snapshot/restore, legacy absent-store warnings/clearing, rollback |
-| UI | `src/features/experiments/*.test.tsx`, `src/components/charts/experimentalDatasetAdapter.test.ts`, `src/components/charts/ExperimentalFitResidualChart.test.tsx`, `src/components/charts/ExperimentalFitResidualVsFittedChart.test.tsx`, `src/components/charts/ExperimentalFitProfileChart.test.tsx` | import/preview/confirm, table, observed/fitted chart, residual plots against time and fitted value, RMSE and screening states, residual-spread states, objective-profile chart labelling and empty/invalid-candidate states, comparison table/parameter counts, AICc gating on the declared assumption, unavailable/insufficient/zero-variance states, rename/delete/export/error states |
-| Browser | `e2e/experimentalDatasets.spec.ts`, `e2e/a11y.spec.ts` | real Chromium CSV→chart→`.npex`→re-import, persistence, recovery, fit overlay, residual plot/RMSE/data-support screen, objective profile after fitting plus its sparse-data and stale-fit states, comparison with AICc unavailable→declared and an undersized sample, residual structure for both models with real-Plotly axis titles, marker counts and duplicate-timestamp disclosure, narrow layout and axe scans |
+| UI | `src/features/experiments/*.test.tsx`, `src/components/charts/experimentalDatasetAdapter.test.ts`, `src/components/charts/ExperimentalFitResidualChart.test.tsx`, `src/components/charts/ExperimentalFitResidualVsFittedChart.test.tsx`, `src/components/charts/ExperimentalFitProfileChart.test.tsx` | import/preview/confirm, table, observed/fitted chart, residual plots against time and fitted value, RMSE and screening states, residual-spread states, objective-profile chart labelling and empty/invalid-candidate states, comparison table/parameter counts, AICc gating on the declared assumption, unavailable/insufficient/zero-variance states, the second error model's own declaration and re-fitted table, degenerate and small-sample states, declaration reset on dataset change, rename/delete/export/error states |
+| Browser | `e2e/experimentalDatasets.spec.ts`, `e2e/a11y.spec.ts` | real Chromium CSV→chart→`.npex`→re-import, persistence, recovery, fit overlay, residual plot/RMSE/data-support screen, objective profile after fitting plus its sparse-data and stale-fit states, comparison with AICc unavailable→declared and an undersized sample, residual structure for both models with real-Plotly axis titles, marker counts and duplicate-timestamp disclosure, the proportional-variance declaration gate and its re-fitted table, narrow layout and axe scans |
 
 The full matrix and gate commands are maintained in
 [`docs/testing.md`](testing.md).
@@ -1138,3 +1140,247 @@ description naming both axes, the units, the zero line and the fact that
 markers are not connected. The section adds no persistence: no residual, fitted
 value, screen status or ordering note is written to the dataset, its
 measurements, IndexedDB, `.npex` or `.npsb`.
+
+## 15. A second error model: variance proportional to the mean (Phase 47)
+
+The comparison in §13 is conditional on one variance assumption. A residual
+spread pattern (§14) may raise concern about it, but the application must never
+silently switch models. This section adds a **separate, opt-in** likelihood
+path with its own declaration, its own fits and its own criterion. It is never
+mixed with the common-variance results.
+
+### 15.1 The statistical contract
+
+    Y_i | t_i  ~  Normal( μ_i , φ · μ_i ),   independent across i
+    μ_i = μ(t_i; θ) > 0,   φ > 0
+
+`φ` carries the **concentration unit**: the variance φ·μ then has units of
+concentration squared, as it must. It is a dispersion parameter of the variance
+function, not the residual variance of the common-variance model.
+
+The mean models are unchanged:
+
+| Id | Mean model | Mean parameters |
+| --- | --- | --- |
+| M0 | `C(t) = A · exp(−k · (t − t_ref))` | `A`, `k` |
+| M1 | `C(t) = B + A · exp(−k · (t − t_ref))` | `A`, `B`, `k` |
+
+The complete log-likelihood for one candidate is
+
+    −2 lnL = n·ln(2π) + Σ_i ln(φ μ_i) + Σ_i (y_i − μ_i)² / (φ μ_i)
+
+For fixed mean parameters the maximiser over φ is closed-form,
+
+    φ̂ = (1/n) Σ_i (y_i − μ_i)² / μ_i,
+
+and substituting it gives the profile quantity this implementation optimises:
+
+    −2 lnL̂ = n·ln(2π) + n·ln(φ̂) + Σ_i ln μ_i + n.
+
+**The log-variance term is not optional.** Minimising Σ (y−μ)²/μ alone is a
+different objective: it omits `Σ ln μ_i`, which depends on the mean parameters.
+Every fit here maximises the likelihood above, and every reported criterion is
+computed from `−2 lnL̂` — never from a weighted sum of squares.
+
+**Parameter counting.** From the statistical model, not from the optimizer:
+
+| Candidate | Mean parameters | Dispersion | Total `K` |
+| --- | --- | --- | --- |
+| M0 | 2 (`A`, `k`) | 1 (`φ`) | **3** |
+| M1 | 3 (`A`, `B`, `k`) | 1 (`φ`) | **4** |
+
+M0's amplitude is obtained from a closed form at each trial rate and M1's from a
+closed form at each `(rate, λ)`; both are still estimated model parameters.
+
+### 15.2 Valid domain and degeneracies
+
+#### Zero observations
+
+A zero observed concentration is **valid**. For any strictly positive
+prediction its Gaussian density is finite, with contribution
+`ln(φμ) + μ/φ`; the contribution diverges only as μ → 0. Whether that makes the
+*joint* likelihood unbounded depends on the mean model and on the other rows, so
+the two candidates are analysed separately.
+
+**M0** (`μ_i = A·exp(−q·u_i)`). Driving one observation's prediction to zero
+requires `q → ∞`, because `A` is pinned by the positive rows. That also drives
+every other `u > 0` prediction to zero:
+
+- If **any** observation after the first time is positive, its residual term
+  grows like `y²/μ` and the deviance diverges to `+∞`. That rules out the
+  unbounded-tail sequence as `q → ∞`, but not every degeneracy: exact-fit
+  degeneracy, where the dispersion tends to zero, is handled separately below.
+  Example (used as a test): `100, 20, 0`
+  at times `0, 1, 2` has its maximum at `q ≈ 3.674`, `A ≈ 101.294`,
+  `φ ≈ 1.171`, `lnL ≈ −8.6649` — verified against an independent numerical
+  reference.
+- If **every** observation after the first time is exactly zero, nothing
+  constrains the tail: `φ̂` tends to a finite value while `Σ ln μ_i → −∞`, so
+  the deviance diverges to `−∞` and the likelihood increases without bound. No
+  finite MLE exists.
+
+**M1** (`μ_i = B + A·exp(−q·u_i)`). With `B > 0` every prediction is `≥ B > 0`,
+so no single contribution can diverge. The unbounded configuration appears only
+along `B → 0` with `q → ∞`, which reduces to the M0 case. The criterion is
+therefore identical for both candidates.
+
+The implementation rejects exactly that configuration, with
+`UNBOUNDED_LIKELIHOOD`. It is not reported as a boundary fit at the numerical
+rate cap, and it is not rescued with a variance floor, a clamped prediction or
+an epsilon. Every other dataset containing zeros is fitted normally. A zero at
+the reference time with positive rows later is also valid: the later rows pin
+the amplitude, so the rate may collapse to `q = 0`, which is a reported
+boundary.
+
+#### Other domain constraints
+
+- **Every predicted concentration must be strictly positive and finite.** A
+  candidate that cannot satisfy this fails with `NON_POSITIVE_PREDICTION`
+  rather than being clamped.
+- **A numerically zero dispersion is a failure.** If a candidate reproduces the
+  observations to floating-point resolution, φ̂ is at machine precision and the
+  likelihood has no finite maximum. The fit fails with
+  `DEGENERATE_DISPERSION`; nothing is substituted for the missing variance.
+- Underflow, non-finite intermediates and a non-representable rate are
+  structured failures, never published numbers.
+
+The all-zero dataset is rejected earlier by the shared validation
+(`ALL_ZERO_CONCENTRATIONS`), and an empty or single-time dataset is rejected
+with the same codes the production fit uses.
+
+### 15.3 How the two candidates are fitted
+
+**M0.** At a fixed dimensionless rate `q = k·span`, with `g_i = exp(−q u_i)`,
+the profile likelihood is maximised exactly at
+
+    A = Σ y_i / Σ g_i.
+
+The implementation then searches `q ∈ [0, 50]` with a deterministic coarse scan,
+golden-section refinement inside the bracket of the best scanned point, and an
+explicit comparison against both endpoints. A coarse-grid value is never
+published.
+
+**M1.** Write `μ_i = m·h_i` with `h_i = (1−λ) + λ g_i`, `m = A + B > 0` and
+`λ = A/(A+B) ∈ [0, 1]`. At fixed `(q, λ)` the profile is maximised exactly at
+
+    m = Σ y_i / Σ h_i,
+
+leaving a one-dimensional profile in λ. The implementation runs a global
+two-dimensional coarse scan over `(q, λ)`, refines with golden-section searches
+along each coordinate until the objective stops improving (capped), and then
+re-solves λ conditionally at the published rate. Both endpoints λ = 0 (constant
+mean) and λ = 1 (no baseline) are always evaluated, as are q = 0 and q = 50.
+A coarse-grid value is never published as an estimate.
+
+Both models are built from the shared preparation used by the production fit,
+so they use the same rows, `t_ref = min(t)`, observed span, concentration
+scaling and source order. Nothing is sorted, averaged, deduplicated, excluded
+or mutated, and replicates remain independent observations.
+
+Both searches also assume that the coarse grid brackets the basin containing the
+optimum. The implemented coarse grids are **step 0.5 in `q`** (101 points over
+[0, 50], `RATE_COARSE_STEPS = 100`) and **step 0.125 in λ** (9 points,
+`LAMBDA_COARSE_STEPS = 8`); local refinement is golden-section inside the
+bracketing cell, and the admissible rate range is bounded at `q = 50`. A
+maximum narrower than a coarse cell can still be missed, and refinement only
+searches inside the selected bracket. The grids are a numerical resolution
+choice, not a statistical claim, and the reported point is always the best
+evaluated one.
+
+### 15.4 Conditional AICc
+
+    AIC  = −2·lnL̂ + 2K
+    AICc = AIC + 2K(K+1) / (n − K − 1)
+
+The criterion is **unavailable**, with a structured reason, when:
+
+| Condition | Reason |
+| --- | --- |
+| The analyst has not declared this error model | `ASSUMPTION_NOT_DECLARED` |
+| That candidate has no successful fit | `FIT_UNAVAILABLE` |
+| `lnL̂`, the deviance or φ̂ is not finite | `NON_FINITE_LIKELIHOOD` |
+| φ̂ is not strictly positive | `ZERO_DISPERSION` |
+| `n − K − 1 ≤ 0` | `INSUFFICIENT_OBSERVATIONS` |
+
+The per-model gate matters: with five observations, M0 (`K = 3`) still has one
+residual degree of freedom while M1 (`K = 4`) does not.
+
+**Criteria from the two error models are never compared.** The common-variance
+AICc (§13) and this one answer different questions under different assumptions.
+Neither is substituted for the other, and the interface never ranks them
+together.
+
+### 15.5 What this model does not establish
+
+- Declaring the variance function is an **assumption, not evidence**. Nothing
+  here tests whether the variance really is proportional to the fitted
+  concentration, nor whether errors are independent or Gaussian.
+- A smaller AICc is relative support **within these two mean models under this
+  variance function**. It is not proof of a mechanism and says nothing about a
+  model outside the pair.
+- Boundary estimates and nonlinear fitting weaken the regularity assumptions
+  behind information criteria; boundary warnings are shown and the comparison
+  is explicitly less reliable when they appear.
+- The coarse search can miss a likelihood maximum narrower than a grid cell, and
+  the M1 refinement is coordinate-based; it is a numerical search, not a proof
+  that the global maximum was found.
+- No model weight, probability, confidence interval, standard error, hypothesis
+  test or winner classification is produced, and no threshold is applied.
+- A residual-spread pattern (§14) never selects or activates this model. The
+  declaration is always the analyst's.
+
+### 15.6 Numerical behaviour
+
+Rates are found by a bounded, deterministic search; the mixing fraction by the
+coordinate refinement described above. The reported values are re-evaluated at
+the final parameters. The cost is `O(n)` per objective evaluation and grows with
+the number of trial rates; on this implementation a 500-row dataset completes
+both fits in about 50 ms and a 25,000-row dataset (the storage limit) in about
+one second. The computation happens only after the declaration.
+
+### 15.7 Interface and boundaries
+
+The section is its own card, placed after the common-variance comparison, and
+appears only after a successful production fit. It contains:
+
+- the declaration, starting unchecked, with the assumption statement and the
+  caveat that declaring is not evidence;
+- before declaration, an explicit statement that nothing has been computed;
+- after declaration, a table with model identity, equation, `A`, `B`, `k`, the
+  dispersion φ (in concentration units), the maximised log-likelihood, the total
+  parameter count `K` and AICc;
+- the `AICc(M1) − AICc(M0)` difference as arithmetic only;
+- per-model reasons whenever a criterion is unavailable, fit warnings and the
+  standing limitations of this comparison.
+
+The declaration is local to the card and the card is keyed by dataset, so
+switching datasets resets it. Nothing is persisted: no fit, dispersion,
+likelihood, declaration or criterion is written to the dataset, its
+measurements, IndexedDB, `.npex` or `.npsb`.
+
+### 15.8 Phase 47 completion audit
+
+Implemented across Phases 47A–47C:
+
+- measured-dataset import, validation, ordered storage and `.npex` interchange;
+- the one-compartment mono-exponential fit and its failure/boundary contract;
+- observation-level residuals, RMSE, residual degrees of freedom and the
+  preliminary data-support screen;
+- the practical identifiability profile of the fit's own objective;
+- the two-candidate comparison with a conditional common-variance AICc;
+- residual-structure views and the conservative spread screen;
+- maximum-likelihood fits for both candidates under the proportional-variance
+  model, with its own conditional AICc.
+
+Still deferred, and not claimed by this increment:
+
+- a third candidate model (for example a bi-exponential decay);
+- formal parameter uncertainty: confidence intervals, standard errors,
+  covariance or profile-based intervals;
+- general hypothesis tests or model weights;
+- error models beyond the two implemented here (for example a weighted variant
+  with an estimated variance function other than φ·μ);
+- structural-identifiability analysis;
+- any persistence or export of derived fits and criteria.
+
+Phase 47 is therefore **not complete** after this increment.

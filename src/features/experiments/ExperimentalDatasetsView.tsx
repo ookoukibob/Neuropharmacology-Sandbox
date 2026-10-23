@@ -35,6 +35,20 @@ import {
   type ConditionalAicc,
   type MonoExponentialModelComparisonResult,
 } from '@/domain/experiments/mono-exponential-model-comparison'
+import {
+  buildProportionalVarianceCriterion,
+  compareProportionalVarianceModels,
+  type ProportionalVarianceAicc,
+  type ProportionalVarianceComparisonResult,
+} from '@/domain/experiments/proportional-variance-comparison'
+import {
+  PROPORTIONAL_VARIANCE_CAVEAT,
+  PROPORTIONAL_VARIANCE_MODEL_FORMULAS,
+  PROPORTIONAL_VARIANCE_MODEL_LABELS,
+  PROPORTIONAL_VARIANCE_STATEMENT,
+  type ProportionalVarianceFitResult,
+  type ProportionalVarianceFitSuccess,
+} from '@/domain/experiments/proportional-variance-fit'
 import { formatNumber } from '@/engine/numeric/decimal'
 import {
   AlertTriangle,
@@ -61,7 +75,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import type { ExperimentalDataset } from '@/domain/experiments/experimental-dataset'
+import type {
+  ExperimentalDataset,
+  ExperimentalMeasurement,
+} from '@/domain/experiments/experimental-dataset'
 import type { ExperimentalDatasetRepository } from '@/data/repositories/experimentalDatasetRepository'
 import { buildNpexFile, NPEX_EXTENSION, NPEX_MIME_TYPE } from '@/data/npex/npex'
 import { downloadTextFile, safeFileName } from '@/features/import-export/fileIo'
@@ -120,7 +137,9 @@ export function ExperimentalDatasetsView({ repository }: ExperimentalDatasetsVie
           candidate rates: it is a heuristic screening aid, not a proof of structural
           identifiability and not a confidence region. A two-candidate comparison (decay versus
           decay with an additive baseline) reports descriptive metrics, and a conditional AICc
-          that becomes available only after you explicitly declare the supported error assumption.
+          that becomes available only after you explicitly declare the error model it depends on.
+          A second, optional error model — variance proportional to the fitted concentration — can
+          then re-fit both candidates and report its own criterion, kept separate from the first.
           No other model-selection metric and no formal uncertainty estimate is provided.
         </p>
       </header>
@@ -771,6 +790,15 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
             <ModelComparisonCard
               comparison={modelComparison}
               spreadConcern={spreadConcern}
+              timeUnit={dataset.timeUnit}
+              concentrationUnit={dataset.concentrationUnit}
+            />
+          )}
+
+          {modelComparison !== null && (
+            <ProportionalVarianceComparisonCard
+              key={dataset.id}
+              measurements={dataset.measurements}
               timeUnit={dataset.timeUnit}
               concentrationUnit={dataset.concentrationUnit}
             />
@@ -1517,5 +1545,322 @@ function ResidualStructureBlock({
         </ul>
       </div>
     </section>
+  )
+}
+
+interface ProportionalVarianceComparisonCardProps {
+  readonly measurements: readonly ExperimentalMeasurement[]
+  readonly timeUnit: string
+  readonly concentrationUnit: string
+}
+
+/**
+ * Two-candidate comparison under a SECOND, explicit error model:
+ * Var(Y) = φ·μ.
+ *
+ * Both candidates are re-fitted under this likelihood only after the analyst
+ * declares the assumption, so no criterion and no alternative fit can appear
+ * from an implicit assumption. The declaration is local state and the card is
+ * keyed by dataset, so switching datasets resets it.
+ */
+function ProportionalVarianceComparisonCard({
+  measurements,
+  timeUnit,
+  concentrationUnit,
+}: ProportionalVarianceComparisonCardProps) {
+  const [declared, setDeclared] = useState(false)
+  // Nothing is fitted until the analyst asks for this model.
+  const comparison = useMemo<ProportionalVarianceComparisonResult | null>(
+    () => (declared ? compareProportionalVarianceModels(measurements) : null),
+    [declared, measurements],
+  )
+  const criterion = useMemo(
+    () => (comparison !== null && comparison.ok ? buildProportionalVarianceCriterion(comparison, declared) : null),
+    [comparison, declared],
+  )
+
+  const proportionalModelLabel = (index: 0 | 1): string => {
+    if (comparison === null || !comparison.ok) return ''
+    const model = comparison.models[index]
+    return model.ok ? model.label : PROPORTIONAL_VARIANCE_MODEL_LABELS[index === 0 ? 'M0' : 'M1']
+  }
+
+  const proportionalModelFormula = (index: 0 | 1): string => {
+    if (comparison === null || !comparison.ok) return ''
+    const model = comparison.models[index]
+    return model.ok ? model.formula : PROPORTIONAL_VARIANCE_MODEL_FORMULAS[index === 0 ? 'M0' : 'M1']
+  }
+
+  if (!declared || comparison === null) {
+    return (
+      <Card data-testid="proportional-comparison">
+        <CardHeader>
+          <CardTitle headingLevel={3}>Comparison under a second error model</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            The comparison above assumes one common variance. This section offers a different assumption —
+            variance proportional to the fitted concentration — and fits both candidate models again under
+            that likelihood. It is a separate analysis: nothing is computed until you declare the assumption,
+            and its numbers are never ranked against, or substituted for, the common-variance results.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-2 rounded-md border p-3 text-sm">
+            <h4 className="font-medium">Alternative error-model assumption</h4>
+            <p className="text-xs text-muted-foreground">{PROPORTIONAL_VARIANCE_STATEMENT}</p>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4"
+                checked={declared}
+                data-testid="proportional-assumption"
+                onChange={(event) => setDeclared(event.target.checked)}
+              />
+              <span>I declare this error assumption and want both models re-fitted under it.</span>
+            </label>
+            <p className="text-xs text-muted-foreground" data-testid="proportional-caveat">
+              {PROPORTIONAL_VARIANCE_CAVEAT}
+            </p>
+            <p className="text-xs text-muted-foreground" data-testid="proportional-gate">
+              This analysis stays unavailable until the assumption is declared. The fits and the comparison
+              above do not depend on it.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (!comparison.ok) {
+    return (
+      <Card data-testid="proportional-comparison">
+        <CardHeader>
+          <CardTitle headingLevel={3}>Comparison under a second error model</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p role="alert" className="text-sm text-destructive" data-testid="proportional-error">
+            {comparison.message} The fits and comparison above are unaffected.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const parameterText = (
+    model: ProportionalVarianceFitResult,
+    key: 'A' | 'B' | 'k',
+  ): string => {
+    if (!model.ok) return '—'
+    if (key === 'A') return `${formatNumber(model.amplitude)} ${concentrationUnit}`
+    if (key === 'B') {
+      return model.baseline === null ? 'not a parameter of M0' : `${formatNumber(model.baseline)} ${concentrationUnit}`
+    }
+    return `${formatNumber(model.k)} ${timeUnit}⁻¹`
+  }
+
+  const fitMetric = (
+    model: ProportionalVarianceFitResult,
+    pick: (fitted: ProportionalVarianceFitSuccess) => string,
+  ): string => (model.ok ? pick(model) : '—')
+
+  const aiccText = (result: ProportionalVarianceAicc | undefined): string =>
+    result === undefined ? '—' : result.ok ? formatNumber(result.aicc) : 'unavailable'
+
+  const warnings: string[] = []
+  comparison.models.forEach((model, index) => {
+    const id = index === 0 ? 'M0' : 'M1'
+    const messages = model.ok ? model.warnings.map((warning) => warning.message) : [model.message]
+    for (const message of messages) warnings.push(`${id}: ${message}`)
+  })
+  const hasBoundary = comparison.models.some((model) => model.ok && model.hasBoundaryEstimate)
+
+  return (
+    <Card data-testid="proportional-comparison">
+      <CardHeader>
+        <CardTitle headingLevel={3}>Comparison under a second error model</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Both mean models are re-fitted by maximum likelihood under the declared variance function. The
+          amplitude and rate are therefore new estimates, not the least-squares values shown above. A lower
+          criterion here means relative support within these two candidates under this assumption only.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2 rounded-md border p-3 text-sm">
+          <h4 className="font-medium">Declared error-model assumption</h4>
+          <p className="text-xs text-muted-foreground">{PROPORTIONAL_VARIANCE_STATEMENT}</p>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4"
+              checked={declared}
+              data-testid="proportional-assumption"
+              onChange={(event) => setDeclared(event.target.checked)}
+            />
+            <span>I declare this error assumption and want both models re-fitted under it.</span>
+          </label>
+          <p className="text-xs text-muted-foreground" data-testid="proportional-caveat">
+            {PROPORTIONAL_VARIANCE_CAVEAT}
+          </p>
+        </div>
+
+        <Table data-testid="proportional-table">
+          <TableCaption>
+            Maximum-likelihood comparison of M0 and M1 under variance φ·μ, on {comparison.observationCount}{' '}
+            observations ({comparison.distinctTimeCount} distinct times). The parameter count K includes the
+            dispersion. These values are not comparable with the common-variance criterion above.
+          </TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">Quantity</TableHead>
+              <TableHead scope="col">M0 · decay</TableHead>
+              <TableHead scope="col">M1 · decay + baseline</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow>
+              <TableHead scope="row">Model</TableHead>
+              <TableCell className="text-xs">
+                {proportionalModelLabel(0)}
+                {comparison.models[0].ok ? '' : ' · fit unavailable'}
+              </TableCell>
+              <TableCell className="text-xs">
+                {proportionalModelLabel(1)}
+                {comparison.models[1].ok ? '' : ' · fit unavailable'}
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableHead scope="row">Equation</TableHead>
+              <TableCell className="font-mono text-xs">{proportionalModelFormula(0)}</TableCell>
+              <TableCell className="font-mono text-xs">{proportionalModelFormula(1)}</TableCell>
+            </TableRow>
+            <TableRow>
+              <TableHead scope="row">A (amplitude)</TableHead>
+              <TableCell className="font-mono text-xs" data-testid="proportional-m0-amplitude">
+                {parameterText(comparison.models[0], 'A')}
+              </TableCell>
+              <TableCell className="font-mono text-xs" data-testid="proportional-m1-amplitude">
+                {parameterText(comparison.models[1], 'A')}
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableHead scope="row">B (baseline)</TableHead>
+              <TableCell className="text-xs text-muted-foreground">
+                {parameterText(comparison.models[0], 'B')}
+              </TableCell>
+              <TableCell className="font-mono text-xs" data-testid="proportional-m1-baseline">
+                {parameterText(comparison.models[1], 'B')}
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableHead scope="row">k (decay rate)</TableHead>
+              <TableCell className="font-mono text-xs">
+                {parameterText(comparison.models[0], 'k')}
+              </TableCell>
+              <TableCell className="font-mono text-xs">{parameterText(comparison.models[1], 'k')}</TableCell>
+            </TableRow>
+            <TableRow>
+              <TableHead scope="row">φ (dispersion)</TableHead>
+              <TableCell className="font-mono text-xs" data-testid="proportional-m0-dispersion">
+                {fitMetric(comparison.models[0], (model) =>
+                  `${formatNumber(model.dispersion)} ${concentrationUnit}`,
+                )}
+              </TableCell>
+              <TableCell className="font-mono text-xs" data-testid="proportional-m1-dispersion">
+                {fitMetric(comparison.models[1], (model) =>
+                  `${formatNumber(model.dispersion)} ${concentrationUnit}`,
+                )}
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableHead scope="row">Maximised log-likelihood</TableHead>
+              <TableCell className="font-mono text-xs" data-testid="proportional-m0-loglikelihood">
+                {fitMetric(comparison.models[0], (model) => formatNumber(model.logLikelihood))}
+              </TableCell>
+              <TableCell className="font-mono text-xs" data-testid="proportional-m1-loglikelihood">
+                {fitMetric(comparison.models[1], (model) => formatNumber(model.logLikelihood))}
+              </TableCell>
+            </TableRow>
+            <TableRow>
+              <TableHead scope="row">Total parameters K (incl. dispersion)</TableHead>
+              <TableCell className="font-mono text-xs">{comparison.models[0].ok ? comparison.models[0].totalParameterCount : '—'}</TableCell>
+              <TableCell className="font-mono text-xs">{comparison.models[1].ok ? comparison.models[1].totalParameterCount : '—'}</TableCell>
+            </TableRow>
+            <TableRow>
+              <TableHead scope="row">AICc</TableHead>
+              <TableCell className="font-mono text-xs" data-testid="proportional-m0-aicc">
+                {aiccText(criterion?.m0)}
+              </TableCell>
+              <TableCell className="font-mono text-xs" data-testid="proportional-m1-aicc">
+                {aiccText(criterion?.m1)}
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+
+        <p className="text-xs text-muted-foreground">
+          Dispersion φ carries the concentration unit: Var(Y) = φ · μ, so φ · μ has units of concentration
+          squared. A larger φ means more scatter around the fitted curve under this assumption.
+        </p>
+
+        {criterion !== null && criterion.difference !== null && (
+          <p className="text-xs text-muted-foreground" data-testid="proportional-difference">
+            AICc difference (M1 − M0):{' '}
+            <span className="font-mono" data-testid="proportional-difference-value">
+              {formatNumber(criterion.difference)}
+            </span>
+            . This is arithmetic only: no threshold, model weight, probability or verdict is applied.
+          </p>
+        )}
+
+        {criterion !== null && (!criterion.m0.ok || !criterion.m1.ok) && (
+          <div
+            className="space-y-1 rounded-md border p-3 text-xs text-muted-foreground"
+            role="note"
+            data-testid="proportional-aicc-reasons"
+          >
+            <h4 className="font-medium text-foreground">Why AICc is unavailable</h4>
+            <ul className="list-disc space-y-1 pl-4">
+              {!criterion.m0.ok && <li>M0: {criterion.m0.message}</li>}
+              {!criterion.m1.ok && <li>M1: {criterion.m1.message}</li>}
+            </ul>
+          </div>
+        )}
+
+        {warnings.length > 0 && (
+          <div
+            className="space-y-1 rounded-md border border-amber-500/40 p-3 text-xs text-amber-700"
+            role="status"
+            data-testid="proportional-warnings"
+          >
+            <h4 className="font-medium">Fit warnings from the re-fitted models</h4>
+            <ul className="list-disc space-y-1 pl-4">
+              {warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {hasBoundary && (
+          <p className="text-xs text-muted-foreground" data-testid="proportional-boundary-note">
+            At least one estimate sits on a constraint boundary or is unresolved. Constrained estimates
+            weaken the regularity assumptions behind information criteria, so treat any value shown here as
+            less reliable than the number suggests.
+          </p>
+        )}
+
+        <div
+          className="space-y-1 rounded-md border p-3 text-xs text-muted-foreground"
+          role="note"
+          data-testid="proportional-notes"
+        >
+          <h4 className="font-medium text-foreground">Standing limitations of this comparison</h4>
+          <ul className="list-disc space-y-1 pl-4">
+            {comparison.notes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
