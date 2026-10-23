@@ -1,5 +1,6 @@
 import { Plus, Trash2 } from 'lucide-react'
 import { AlertCircle } from 'lucide-react'
+import { useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import {
@@ -11,7 +12,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import type { DraftError, EventRow } from '../draft'
+import {
+  expandEventRows,
+  type DraftError,
+  type EventRow,
+  type EventRowPatch,
+  type ExpandedDose,
+  type ExpandedSchedule,
+} from '../draft'
 import { QuantityField } from './fields'
 
 /**
@@ -23,7 +31,7 @@ import { QuantityField } from './fields'
 export interface EventEditorProps {
   readonly rows: readonly EventRow[]
   readonly errors: readonly DraftError[]
-  readonly onChange: (key: number, patch: Partial<Omit<EventRow, 'kind' | 'key'>>) => void
+  readonly onChange: (key: number, patch: EventRowPatch) => void
   readonly onRemove: (key: number) => void
   readonly onAddBolus: () => void
   readonly onAddInfusion: () => void
@@ -33,6 +41,7 @@ const errorFor = (errors: readonly DraftError[], fieldPath: string): string | un
   errors.find((error) => error.field === fieldPath)?.message
 
 export function EventEditor({ rows, errors, onChange, onRemove, onAddBolus, onAddInfusion }: EventEditorProps) {
+  const expanded = useMemo(() => expandEventRows(rows), [rows])
   return (
     <section aria-labelledby="events-heading" className="flex flex-col gap-3" data-testid="event-editor">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -42,7 +51,7 @@ export function EventEditor({ rows, errors, onChange, onRemove, onAddBolus, onAd
           </h2>
           <p className="text-xs text-muted-foreground">
             Times in hours. An infusion is one session here and becomes a start and a stop event
-            for the engine at the same times.
+            for the engine at the same times. A repeat count repeats the dose at the given interval.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -87,6 +96,8 @@ export function EventEditor({ rows, errors, onChange, onRemove, onAddBolus, onAd
         </div>
       )}
 
+      <ExpandedSchedulePreview expanded={expanded} />
+
       {rows.length === 0 ? null : (
         <Table className="sr-only">
           <TableCaption>Summary of the dosing rows above</TableCaption>
@@ -114,8 +125,135 @@ interface RowViewProps<T extends EventRow> {
   readonly row: T
   readonly index: number
   readonly errors: readonly DraftError[]
-  readonly onChange: (key: number, patch: Partial<Omit<EventRow, 'kind' | 'key'>>) => void
+  readonly onChange: (key: number, patch: EventRowPatch) => void
   readonly onRemove: (key: number) => void
+}
+
+/** Display-only number formatting for the preview (no engine/chart coupling). */
+function previewNumber(value: number): string {
+  if (!Number.isFinite(value)) return '—'
+  if (value === 0) return '0'
+  return String(Number(value.toPrecision(6)))
+}
+
+function sortDoses(doses: readonly ExpandedDose[]): readonly ExpandedDose[] {
+  return doses.slice().sort((a, b) => {
+    if (a.time !== b.time) return a.time - b.time
+    if (a.rowKey !== b.rowKey) return a.rowKey - b.rowKey
+    return a.doseNumber - b.doseNumber
+  })
+}
+
+/**
+ * Read-only preview of the explicit event schedule a regimen expands to. It
+ * uses the same pure `expandEventRows` the compiler uses, so what the user
+ * sees is exactly what the engine will receive (nothing is recomputed twice).
+ */
+function ExpandedSchedulePreview({ expanded }: { readonly expanded: ExpandedSchedule }) {
+  const doses = useMemo(() => sortDoses(expanded.doses), [expanded.doses])
+  if (expanded.doses.length === 0) return null
+  return (
+    <div className="rounded-md border p-3 text-sm" data-testid="expanded-schedule">
+      <h3 className="text-sm font-medium">Expanded dosing schedule</h3>
+      <p className="mb-2 text-xs text-muted-foreground">
+        The explicit events the engine will integrate, in time order. A repeat count turns one row
+        into several doses.
+      </p>
+      <Table>
+        <TableCaption>Expanded dosing schedule before simulation</TableCaption>
+        <TableHeader>
+          <TableRow>
+            <TableHead scope="col">#</TableHead>
+            <TableHead scope="col">Type</TableHead>
+            <TableHead scope="col">Start (h)</TableHead>
+            <TableHead scope="col">Stop (h)</TableHead>
+            <TableHead scope="col">Duration (h)</TableHead>
+            <TableHead scope="col">Amount / rate</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {doses.map((dose) => (
+            <TableRow key={`${dose.rowKey}-${dose.doseNumber}`} data-testid={`expanded-dose-${dose.rowKey}-${dose.doseNumber}`}>
+              <TableCell>{dose.doseNumber}</TableCell>
+              <TableCell>{dose.kind === 'bolus' ? 'IV bolus' : 'IV infusion'}</TableCell>
+              <TableCell className="font-mono">{previewNumber(dose.time)}</TableCell>
+              <TableCell className="font-mono">
+                {dose.stopTime === undefined ? '—' : previewNumber(dose.stopTime)}
+              </TableCell>
+              <TableCell className="font-mono">
+                {dose.duration === undefined ? '—' : previewNumber(dose.duration)}
+              </TableCell>
+              <TableCell className="font-mono">
+                {dose.kind === 'bolus'
+                  ? `${previewNumber(dose.amount?.value ?? Number.NaN)} ${dose.amount?.unit ?? ''}`
+                  : `${previewNumber(dose.rate?.value ?? Number.NaN)} ${dose.rate?.unit ?? ''}`}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+/** The two repeat inputs shared by bolus and infusion rows. */
+function RepeatFields({
+  row,
+  errors,
+  onChange,
+}: {
+  readonly row: EventRow
+  readonly errors: readonly DraftError[]
+  readonly onChange: (key: number, patch: EventRowPatch) => void
+}) {
+  const countField = `events.${row.key}.repeatCount`
+  const intervalField = `events.${row.key}.repeatInterval`
+  return (
+    <>
+      <div className="grid gap-1.5" data-field-path={countField}>
+        <Label htmlFor={`repeat-${row.key}-count`} className="text-sm">
+          Repeat count
+        </Label>
+        <input
+          id={`repeat-${row.key}-count`}
+          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          value={row.repeatCount ?? ''}
+          onChange={(event) => onChange(row.key, { repeatCount: event.target.value })}
+          inputMode="numeric"
+          placeholder="1"
+          aria-invalid={errorFor(errors, countField) === undefined ? 'false' : 'true'}
+          aria-describedby={errorFor(errors, countField) === undefined ? undefined : `repeat-${row.key}-count-error`}
+          data-testid={`repeat-${row.key}-count`}
+        />
+        {errorFor(errors, countField) === undefined ? null : (
+          <p id={`repeat-${row.key}-count-error`} className="text-xs text-destructive" role="alert">
+            {errorFor(errors, countField)}
+          </p>
+        )}
+      </div>
+      <div className="grid gap-1.5" data-field-path={intervalField}>
+        <Label htmlFor={`repeat-${row.key}-interval`} className="text-sm">
+          Repeat interval (h)
+        </Label>
+        <input
+          id={`repeat-${row.key}-interval`}
+          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          value={row.repeatInterval ?? ''}
+          onChange={(event) => onChange(row.key, { repeatInterval: event.target.value })}
+          inputMode="decimal"
+          placeholder="—"
+          aria-invalid={errorFor(errors, intervalField) === undefined ? 'false' : 'true'}
+          aria-describedby={errorFor(errors, intervalField) === undefined ? undefined : `repeat-${row.key}-interval-error`}
+          data-testid={`repeat-${row.key}-interval`}
+        />
+        {errorFor(errors, intervalField) === undefined ? null : (
+          <p id={`repeat-${row.key}-interval-error`} className="text-xs text-destructive" role="alert">
+            {errorFor(errors, intervalField)}
+          </p>
+        )}
+      </div>
+    </>
+  )
 }
 
 function RowShell({
@@ -174,7 +312,13 @@ function RowShell({
 function BolusRowView({ row, index, errors, onChange, onRemove }: RowViewProps<Extract<EventRow, { kind: 'bolus' }>>) {
   const timeField = `events.${row.key}.time`
   const amountField = `events.${row.key}.amount.value`
-  const hasError = errorFor(errors, timeField) !== undefined || errorFor(errors, amountField) !== undefined
+  const countField = `events.${row.key}.repeatCount`
+  const intervalField = `events.${row.key}.repeatInterval`
+  const hasError =
+    errorFor(errors, timeField) !== undefined ||
+    errorFor(errors, amountField) !== undefined ||
+    errorFor(errors, countField) !== undefined ||
+    errorFor(errors, intervalField) !== undefined
   return (
     <RowShell
       title={`Event ${index + 1}`}
@@ -218,6 +362,7 @@ function BolusRowView({ row, index, errors, onChange, onRemove }: RowViewProps<E
         onChange={(value) => onChange(row.key, { amount: { value, unit: row.amount.unit } })}
         onUnitChange={(unit) => onChange(row.key, { amount: { value: row.amount.value, unit } })}
       />
+      <RepeatFields row={row} errors={errors} onChange={onChange} />
     </RowShell>
   )
 }
@@ -226,10 +371,14 @@ function InfusionRowView({ row, index, errors, onChange, onRemove }: RowViewProp
   const startField = `events.${row.key}.startTime`
   const stopField = `events.${row.key}.stopTime`
   const rateField = `events.${row.key}.rate.value`
+  const countField = `events.${row.key}.repeatCount`
+  const intervalField = `events.${row.key}.repeatInterval`
   const hasError =
     errorFor(errors, startField) !== undefined ||
     errorFor(errors, stopField) !== undefined ||
-    errorFor(errors, rateField) !== undefined
+    errorFor(errors, rateField) !== undefined ||
+    errorFor(errors, countField) !== undefined ||
+    errorFor(errors, intervalField) !== undefined
   return (
     <RowShell
       title={`Event ${index + 1}`}
@@ -293,6 +442,7 @@ function InfusionRowView({ row, index, errors, onChange, onRemove }: RowViewProp
         onChange={(value) => onChange(row.key, { rate: { value, unit: row.rate.unit } })}
         onUnitChange={(unit) => onChange(row.key, { rate: { value: row.rate.value, unit } })}
       />
+      <RepeatFields row={row} errors={errors} onChange={onChange} />
     </RowShell>
   )
 }

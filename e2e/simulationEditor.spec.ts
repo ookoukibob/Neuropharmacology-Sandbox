@@ -178,4 +178,40 @@ test.describe('simulation scenario editor', () => {
     // The error is attributed to the field it concerns.
     await expect(page.getByTestId('central-volume-value')).toHaveAttribute('aria-invalid', 'true')
   })
+
+  test('expands a repeated dose into the schedule preview and runs it', async ({ page }) => {
+    await page.goto('/simulation')
+    for (const [testId, value] of [
+      ['central-volume-value', '10'],
+      ['peripheral-volume-value', '20'],
+      ['clearance-value', '2'],
+      ['q-value', '0'],
+      ['initial-central-value', '0'],
+      ['initial-peripheral-value', '0'],
+      ['start-time-value', '0'],
+      ['end-time-value', '24'],
+      ['output-interval-value', '1'],
+    ] as const) {
+      await page.getByTestId(testId).fill(value)
+    }
+    await page.getByTestId('add-bolus').click()
+    await page.getByTestId('bolus-1-time').fill('2')
+    await page.getByTestId('bolus-1-amount').fill('10')
+    await page.getByTestId('repeat-1-count').fill('3')
+    await page.getByTestId('repeat-1-interval').fill('6')
+
+    // The expanded schedule preview lists three doses at 2, 8 and 14 h.
+    await expect(page.getByTestId('expanded-dose-1-1')).toContainText('2')
+    await expect(page.getByTestId('expanded-dose-1-2')).toContainText('8')
+    await expect(page.getByTestId('expanded-dose-1-3')).toContainText('14')
+
+    // Running applies all three bolus events.
+    await page.getByTestId('run-simulation').click()
+    await expect(
+      page.getByTestId('simulation-chart-concentration').locator('.js-plotly-plot'),
+    ).toBeVisible({ timeout: 30_000 })
+    const events = page.getByTestId('event-table')
+    await expect(events).toContainText('IV bolus 10 mg')
+    await expect(events.locator('tbody tr')).toHaveCount(3)
+  })
 })

@@ -929,6 +929,65 @@ changing how those observations are stored or displayed.
 
 ---
 
+## ADR-29 · Repeated dosing is a pure expansion to the existing flat event list
+
+**Context.** Phase 49 adds repeated and mixed dosing regimens. The engine
+already treats dosing as first-class events — instantaneous bolus, zero-order
+infusion with start/stop boundaries, deterministic same-time ordering
+(ADR-24) and one mass-balance reference point (ADR-25) — and integrates in
+segments between event times. Adding a "regimen" must therefore not add a
+second event model or a second integrator; it only needs a way to state
+"repeat this dose" and to expand that statement into the flat `DosingEvent[]`
+the engine already consumes.
+
+**Decision.**
+
+- **Repeat lives on the editor row, not in the engine.** A bolus or infusion
+  row may carry an optional `repeatCount` (total number of doses; blank or `1`
+  = a single dose) and `repeatInterval` (hours between successive doses). The
+  engine contract is unchanged: it still receives a flat, ordered
+  `DosingEvent[]`.
+- **One pure expansion, two consumers.** `expandEventRows(rows)` is the single
+  place a regimen becomes an explicit schedule; both `compileScenario()` and
+  the editor's "expanded dosing schedule" preview call it, so the preview can
+  never disagree with what the engine receives. It is pure and never mutates
+  the rows.
+- **Deterministic ids.** A single dose keeps the historical id
+  (`bolus-<key>`, `infusion-<key>-start/-stop`); a repeated dose appends the
+  1-based dose number (`bolus-<key>-2`, `infusion-<key>-2-start`, …), so every
+  event id is stable, unique and traceable to a row and dose.
+- **Infusion repeat semantics.** Session *k* spans
+  `[start + (k−1)·interval, stop + (k−1)·interval]`, so the duration is
+  constant and the interval is measured between successive starts. A repeat
+  whose interval is shorter than its own duration would overlap itself and is
+  rejected rather than silently summed into a higher rate.
+- **Draft-level validation only for row concerns.** Count must be a positive
+  integer (capped at a documented maximum as a guard, not a scientific limit);
+  interval is required and positive whenever count > 1. Units, horizon bounds,
+  duplicate ids and event sequencing remain the engine's authority, exactly as
+  for a single dose.
+- **No new physics.** A repeated bolus is the same instantaneous state jump as
+  a single bolus (never a short infusion), and a repeated infusion is the same
+  zero-order input bounded by explicit start/stop events. Superposition of
+  time-shifted single-dose responses in the linear model is a test oracle, not
+  a hidden computation.
+
+**Rejected alternatives.** *A parallel "regimen" engine* — two dosing models
+would drift and double the event bookkeeping. *Approximating repeated infusion
+as many small boluses* — that reintroduces the discontinuity misrepresentation
+ADR-24 forbids. *Expanding repeats inside the engine* — the engine already
+owns the flat schedule's ordering and bookkeeping; folding a higher-level
+repeat syntax in would blur the boundary between "what the user stated" and
+"what the integrator consumed".
+
+**Consequences.** The engine, solver and charts are untouched; the only new
+surface is the row-level repeat fields, the pure expansion, and a read-only
+preview. Saved scenarios store the draft (including the repeat fields) and
+thus persist regimens without a new storage path; records saved before this
+phase omit the fields and load as single doses.
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

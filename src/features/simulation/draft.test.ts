@@ -6,6 +6,7 @@ import {
   bolusEventId,
   compileScenario,
   draftFromScenario,
+  expandEventRows,
   infusionIdOf,
   infusionStartEventId,
   infusionStopEventId,
@@ -13,6 +14,7 @@ import {
   newInfusionRow,
   nextRowKey,
   type BolusRow,
+  type EventRow,
   type SimulationDraft,
 } from './draft'
 
@@ -235,5 +237,119 @@ describe('compileScenario — dosing events', () => {
     expect(fromDraft.result.samples.map((s) => s.centralAmount)).toEqual(
       fromExample.result.samples.map((s) => s.centralAmount),
     )
+  })
+})
+
+describe('expandEventRows — repeat regimens', () => {
+  const bolus = (overrides: Partial<BolusRow> = {}): BolusRow => ({
+    kind: 'bolus',
+    key: 1,
+    time: '2',
+    amount: { value: '10', unit: 'mg' },
+    ...overrides,
+  })
+  const infusion = (overrides: Partial<Extract<EventRow, { kind: 'infusion' }>> = {}): Extract<EventRow, { kind: 'infusion' }> => ({
+    kind: 'infusion',
+    key: 2,
+    startTime: '1',
+    stopTime: '3',
+    rate: { value: '5', unit: 'mg/h' },
+    ...overrides,
+  })
+
+  it('expands a repeated bolus into one event per dose at the stated interval', () => {
+    const result = expandEventRows([bolus({ repeatCount: '3', repeatInterval: '6' })])
+    expect(result.errors).toHaveLength(0)
+    expect(result.events).toEqual([
+      { type: 'iv-bolus', eventId: 'bolus-1-1', time: 2, amount: { value: 10, unit: 'mg' } },
+      { type: 'iv-bolus', eventId: 'bolus-1-2', time: 8, amount: { value: 10, unit: 'mg' } },
+      { type: 'iv-bolus', eventId: 'bolus-1-3', time: 14, amount: { value: 10, unit: 'mg' } },
+    ])
+    expect(result.doses.map((d) => d.time)).toEqual([2, 8, 14])
+  })
+
+  it('keeps the historical single-dose id when there is no repeat', () => {
+    const result = expandEventRows([bolus()])
+    expect(result.events).toEqual([
+      { type: 'iv-bolus', eventId: bolusEventId(1), time: 2, amount: { value: 10, unit: 'mg' } },
+    ])
+  })
+
+  it('expands a repeated infusion into start/stop pairs with constant duration', () => {
+    const result = expandEventRows([infusion({ repeatCount: '2', repeatInterval: '8' })])
+    expect(result.errors).toHaveLength(0)
+    expect(result.events).toEqual([
+      { type: 'infusion-start', eventId: 'infusion-2-1-start', infusionId: 'infusion-2-1', time: 1, rate: { value: 5, unit: 'mg/h' } },
+      { type: 'infusion-stop', eventId: 'infusion-2-1-stop', infusionId: 'infusion-2-1', time: 3 },
+      { type: 'infusion-start', eventId: 'infusion-2-2-start', infusionId: 'infusion-2-2', time: 9, rate: { value: 5, unit: 'mg/h' } },
+      { type: 'infusion-stop', eventId: 'infusion-2-2-stop', infusionId: 'infusion-2-2', time: 11 },
+    ])
+    // The preview carries the constant session duration.
+    expect(result.doses.map((d) => d.duration)).toEqual([2, 2])
+  })
+
+  it('expands a mixed bolus + infusion regimen together', () => {
+    const result = expandEventRows([
+      bolus({ repeatCount: '2', repeatInterval: '4' }),
+      infusion({ key: 2 }),
+    ])
+    expect(result.errors).toHaveLength(0)
+    expect(result.events.map((e) => e.type)).toEqual([
+      'iv-bolus',
+      'iv-bolus',
+      'infusion-start',
+      'infusion-stop',
+    ])
+  })
+
+  it('rejects a non-positive, non-integer or excessive repeat count', () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ['0', 'positive whole number'],
+      ['-2', 'positive whole number'],
+      ['1.5', 'positive whole number'],
+      ['100001', 'At most 100000'],
+    ]
+    for (const [count, message] of cases) {
+      const result = expandEventRows([bolus({ repeatCount: count, repeatInterval: '2' })])
+      expect(result.errors.map((e) => e.field)).toContain('events.1.repeatCount')
+      expect(result.errors.some((e) => e.message.includes(message))).toBe(true)
+    }
+  })
+
+  it('requires a positive interval only when the dose is repeated', () => {
+    // A blank interval with a repeat count is required.
+    expect(expandEventRows([bolus({ repeatCount: '3' })]).errors.map((e) => e.code)).toContain('REQUIRED')
+    // A non-positive interval is out of range.
+    expect(
+      expandEventRows([bolus({ repeatCount: '3', repeatInterval: '0' })]).errors.some((e) => e.code === 'OUT_OF_RANGE'),
+    ).toBe(true)
+    // An interval on a single dose is harmless and ignored (still one event).
+    const single = expandEventRows([bolus({ repeatInterval: '9' })])
+    expect(single.errors).toHaveLength(0)
+    expect(single.events).toHaveLength(1)
+  })
+
+  it('rejects a repeated infusion whose sessions would overlap', () => {
+    // duration = 2 h, interval = 1 h → sessions overlap.
+    const result = expandEventRows([infusion({ repeatCount: '3', repeatInterval: '1' })])
+    expect(result.errors.map((e) => e.field)).toContain('events.2.repeatInterval')
+    expect(result.errors.some((e) => /overlap/i.test(e.message))).toBe(true)
+  })
+
+  it('never mutates the input rows', () => {
+    const rows = [bolus({ repeatCount: '3', repeatInterval: '6' })]
+    const snapshot = JSON.stringify(rows)
+    expandEventRows(rows)
+    expect(JSON.stringify(rows)).toBe(snapshot)
+  })
+
+  it('compiles a repeated bolus into the engine scenario', () => {
+    const scenario = ok(
+      compileScenario(
+        withEvents([bolus({ repeatCount: '3', repeatInterval: '6' })]),
+      ),
+    )
+    expect(scenario.events.filter((e) => e.type === 'iv-bolus')).toHaveLength(3)
+    expect(scenario.events.map((e) => e.time)).toEqual([2, 8, 14])
   })
 })

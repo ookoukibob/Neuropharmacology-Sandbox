@@ -22,6 +22,9 @@ const bolusRowSchema = z.object({
   key: z.number().int().nonnegative(),
   time: z.string(),
   amount: quantityDraftSchema,
+  /** Optional repeat (phase 49); absent on records saved before it. */
+  repeatInterval: z.string().optional(),
+  repeatCount: z.string().optional(),
 })
 
 const infusionRowSchema = z.object({
@@ -30,6 +33,9 @@ const infusionRowSchema = z.object({
   startTime: z.string(),
   stopTime: z.string(),
   rate: quantityDraftSchema,
+  /** Optional repeat (phase 49); absent on records saved before it. */
+  repeatInterval: z.string().optional(),
+  repeatCount: z.string().optional(),
 })
 
 const eventRowSchema = z.discriminatedUnion('kind', [bolusRowSchema, infusionRowSchema])
