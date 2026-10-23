@@ -58,10 +58,12 @@ export type AdministrationRegimen =
 
 /**
  * What the recorded measurement times are relative to. A dataset's time zero
- * is NOT assumed to be a dose time without evidence: `first-observation` is
- * the default physical meaning of the stored times, `dose-time` and
- * `infusion-start` state an administration anchor explicitly, and `other`/
- * `unknown` decline to claim one.
+ * is NOT assumed to be a dose time or the first observation without evidence.
+ * `first-observation`, `dose-time` and `infusion-start` are explicit claims
+ * about the source time axis; `other`/`unknown` decline to claim a standard
+ * anchor. For repeated dosing, the specific reference dose/interval must be
+ * documented in the dataset notes or source metadata; this enum alone does
+ * not identify a dose number.
  */
 export type AdministrationTimeReference =
   | 'dose-time'
@@ -87,10 +89,11 @@ export interface AdministrationInfusion {
 }
 
 /**
- * Optional administration context for a dataset. Every field defaults to an
- * explicit `unknown` value; nothing here is ever inferred from the
- * measurements. Dose-dependent parameters (CL, CL/F, Vz, Vz/F) are NOT
- * computed from this metadata in this phase.
+ * Optional administration context for a dataset. If this record exists, the
+ * route, regimen and time reference must be explicitly supplied (including an
+ * explicit `unknown` where necessary). Optional quantities are absent when
+ * they were not recorded. Nothing is inferred from measurements. Dose-dependent
+ * parameters (CL, CL/F, Vz, Vz/F) are NOT computed from this metadata in this phase.
  */
 export interface AdministrationMetadata {
   readonly route: AdministrationRoute
