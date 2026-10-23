@@ -24,14 +24,14 @@ noncommercial static web application (see [LICENSE](LICENSE)).
   published estimate; endpoints are always evaluated and a grid value is never
   published.
 - **An honest domain, derived per model.** A zero observed concentration is
-  valid: its density is finite for any positive prediction. The joint
-  likelihood is unbounded only when *every* observation after the earliest
-  measured time is exactly zero, because then nothing constrains the tail and
-  the likelihood grows without bound as the rate increases. That configuration
-  is rejected as `UNBOUNDED_LIKELIHOOD`; datasets such as `100, 20, 0` at times
-  `0, 1, 2` have a finite interior maximum and are fitted normally. A
-  numerically zero dispersion is a structured failure too. No variance floor,
-  epsilon or clamped prediction is ever substituted.
+  valid: its density is finite for any positive prediction. The unbounded-tail
+  configuration — every observation after the earliest measured time being
+  exactly zero — is rejected as `UNBOUNDED_LIKELIHOOD`, because then nothing
+  constrains the tail and the likelihood grows without bound as the rate
+  increases. Exact-fit degeneracy (a numerically zero dispersion) is a separate
+  structured failure. Datasets such as `100, 20, 0` at times `0, 1, 2` have a
+  finite interior maximum and are fitted normally. No variance floor, epsilon
+  or clamped prediction is ever substituted.
 - **Conditional AICc on the same terms as before.** `AIC = −2lnL̂ + 2K`,
   `AICc = AIC + 2K(K+1)/(n−K−1)`, with `K = 3` for M0 and `4` for M1 (the
   dispersion is counted). Unavailable with a structured reason when the

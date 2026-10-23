@@ -44,19 +44,23 @@
  *   requires q → ∞, because A is pinned by the positive observations. That
  *   drives EVERY u > 0 prediction to zero. If any of those observations is
  *   positive, its residual term grows like y²/μ and the deviance diverges to
- *   +∞, so the likelihood stays bounded and a finite optimum exists. If every
- *   observation after the first measured time is exactly zero, nothing
- *   constrains the tail: φ̂ tends to a finite value while Σ ln μ_i → −∞, so the
- *   likelihood increases without bound and no MLE exists.
+ *   +∞, which rules out this particular sequence (the rate tending to
+ *   infinity) as a source of an unbounded likelihood. It does NOT rule out
+ *   every degeneracy: exact-fit degeneracy, where the dispersion tends to
+ *   zero, is a separate failure mode (below). If every observation after the
+ *   first measured time is exactly zero, nothing constrains the tail: φ̂ tends
+ *   to a finite value while Σ ln μ_i → −∞, so the likelihood increases without
+ *   bound and no MLE exists.
  *
  *   M1 (μ_i = B + A·exp(−q·u_i)). With B > 0 every prediction is ≥ B > 0, so no
  *   single contribution can diverge. The unbounded configuration appears only
  *   along B → 0 with q → ∞, which reduces to the M0 case; the criterion is
  *   therefore identical for both candidates.
  *
- * Only that configuration is rejected (`UNBOUNDED_LIKELIHOOD`); a zero by
- * itself does not invalidate a dataset. For example, 100, 20, 0 at times 0, 1,
- * 2 has a finite interior maximum and is fitted normally.
+ * That zero-related configuration is rejected (`UNBOUNDED_LIKELIHOOD`); a
+ * zero by itself does not invalidate a dataset. For example, 100, 20, 0 at
+ * times 0, 1, 2 has a finite interior maximum (verified in the tests) and is
+ * fitted normally.
  *
  * THE LIKELIHOOD IS ALSO UNBOUNDED WHERE THE FIT IS EXACT. If a candidate can
  * reproduce every observation with μ_i > 0, then φ̂ → 0 and −2 lnL → −∞. That

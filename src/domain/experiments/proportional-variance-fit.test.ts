@@ -276,8 +276,9 @@ describe('proportional-variance fit — data integrity and boundaries', () => {
   it('accepts a zero observation when a positive row constrains the tail', () => {
     // 100, 20, 0 at times 0, 1, 2. As q -> infinity every u > 0 prediction is
     // driven to zero, but the positive row at t = 1 makes the deviance diverge
-    // to +infinity there, so the joint likelihood is bounded and has a finite
-    // interior maximum. Independent reference: q = 3.674, A = 101.294086,
+    // to +infinity there, ruling out that unbounded-tail sequence. This dataset
+    // nevertheless has a finite interior maximum (asserted below).
+    // Independent reference: q = 3.674, A = 101.294086,
     // phi = 1.170784, lnL = -8.664868.
     const data = rows([
       [0, 100],

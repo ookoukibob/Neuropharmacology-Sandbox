@@ -1207,8 +1207,10 @@ requires `q → ∞`, because `A` is pinned by the positive rows. That also driv
 every other `u > 0` prediction to zero:
 
 - If **any** observation after the first time is positive, its residual term
-  grows like `y²/μ` and the deviance diverges to `+∞`; the likelihood is
-  bounded and a finite optimum exists. Example (used as a test): `100, 20, 0`
+  grows like `y²/μ` and the deviance diverges to `+∞`. That rules out the
+  unbounded-tail sequence as `q → ∞`, but not every degeneracy: exact-fit
+  degeneracy, where the dispersion tends to zero, is handled separately below.
+  Example (used as a test): `100, 20, 0`
   at times `0, 1, 2` has its maximum at `q ≈ 3.674`, `A ≈ 101.294`,
   `φ ≈ 1.171`, `lnL ≈ −8.6649` — verified against an independent numerical
   reference.
