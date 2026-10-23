@@ -144,6 +144,44 @@ describe('dose-dependent NCA — IV bolus and infusion', () => {
     const noDuration = run(administration({ route: 'iv-infusion', timeReference: 'infusion-start' }))
     expect(noDuration.parameters.vz.status).toBe('conditional')
   })
+  it('normalises terminal sampling times before comparing them with infusion duration', () => {
+    // Dataset times are minutes, but the recorded infusion duration is hours.
+    // The terminal observations end at 90 min (1.5 h), before a 2 h infusion
+    // finishes. Raw 90 <= 2 is false, so comparing unconverted values would
+    // incorrectly mark Vz as available.
+    const minuteAnalysis = nca({
+      aucInf: metric(200, 'mg/L·min', 'extrapolated', 'AUC(0→∞)'),
+      lambdaZ: metric(0.5, 'min⁻¹'),
+      terminalPhase: {
+        status: 'available',
+        selectedSourceRows: [4, 5, 6],
+        selectedTimes: [30, 60, 90],
+        eligiblePositiveCount: 6,
+        regression: {
+          slope: -0.5,
+          intercept: Math.log(100),
+          lambdaZ: 0.5,
+          halfLife: Math.LN2 / 0.5,
+          rSquared: 0.99,
+          observationCount: 3,
+          fittedConcentrations: [60.65, 36.79, 22.31],
+        },
+      },
+    })
+    const report = run(
+      administration({
+        route: 'iv-infusion',
+        timeReference: 'infusion-start',
+        infusion: { duration: { value: 2, unit: 'h' } },
+      }),
+      minuteAnalysis,
+      { timeUnit: 'min' },
+    )
+    expect(report.parameters.cl.status).toBe('available')
+    expect(report.parameters.vz.status).toBe('conditional')
+    expect(report.parameters.vz.message).toMatch(/end of the infusion/i)
+  })
+
 })
 
 describe('dose-dependent NCA — extravascular and bioavailability', () => {
