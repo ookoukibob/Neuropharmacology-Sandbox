@@ -605,3 +605,36 @@ test('offers a second error model only after its own declaration', async ({ page
   // Measured rows are unchanged throughout.
   await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(8)
 })
+
+test('runs noncompartmental analysis on the selected dataset', async ({ page }) => {
+  await page.goto('/experiments')
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+
+  await importTwoColumnCsv(page, {
+    fileName: 'synthetic-nca.csv',
+    csv:
+      'time,concentration\n' +
+      '0,100\n1,60.653\n2,36.788\n3,22.313\n4,13.534\n5,8.208\n',
+    name: 'Synthetic NCA study',
+  })
+
+  // The NCA card is present without running a fit.
+  const card = page.getByTestId('nca-card')
+  await expect(card).toBeVisible()
+
+  await expect(page.getByTestId('nca-cmax')).toContainText('100')
+  await expect(page.getByTestId('nca-cmax')).toContainText('mg/L')
+  await expect(page.getByTestId('nca-auc-last')).toContainText('mg/L·h')
+  await expect(page.getByTestId('nca-lambda-z')).toContainText('h⁻¹')
+  await expect(page.getByTestId('nca-terminal')).toContainText(/source rows 4, 5, 6/)
+  await expect(page.getByTestId('nca-table')).not.toContainText('NaN')
+
+  // Changing the integration method recomputes the AUC.
+  const before = await page.getByTestId('nca-auc-last').textContent()
+  await page.getByTestId('nca-integration-method').selectOption('linear-up-log-down')
+  const after = await page.getByTestId('nca-auc-last').textContent()
+  expect(after).not.toBe(before)
+
+  // The measured rows are untouched by the analysis.
+  await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(6)
+})

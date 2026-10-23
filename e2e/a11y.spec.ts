@@ -280,6 +280,7 @@ test('a11y: import mapping, import preview and the export view pass the axe scan
 test('a11y: the experimental dataset import, detail and destructive states pass the axe scan', async ({
   page,
 }) => {
+  test.setTimeout(180_000)
   await page.goto('/experiments')
   await expect(
     page.getByRole('heading', { level: 1, name: 'Experimental Datasets' }),
@@ -353,6 +354,10 @@ test('a11y: the experimental dataset import, detail and destructive states pass 
   await expect(page.getByTestId('proportional-table')).toBeVisible()
   await expect(page.getByTestId('proportional-table')).not.toContainText('NaN')
   await scan(page, 'experimental datasets (proportional-variance comparison)')
+
+  // The NCA card is present without a fit and must be accessible.
+  await expect(page.getByTestId('nca-card')).toBeVisible()
+  await scan(page, 'experimental datasets (noncompartmental analysis)')
 
   await page.getByTestId('dataset-rename').click()
   await expect(page.getByTestId('dataset-rename-name')).toBeVisible()
