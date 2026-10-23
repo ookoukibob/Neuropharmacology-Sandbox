@@ -120,16 +120,29 @@ describe('dose-dependent NCA — IV bolus and infusion', () => {
     expect(report.warnings.some((warning) => /does not depend on the input rate/i.test(warning))).toBe(true)
   })
 
-  it('keeps Vz conditional when the sampling may not extend beyond the infusion end', () => {
-    // The fixture's last terminal observation is at t = 3 h.
-    const afterEnd = run(
-      administration({
-        route: 'iv-infusion',
-        timeReference: 'infusion-start',
-        infusion: { duration: { value: 2, unit: 'h' } },
-      }),
-    )
+  it('requires every terminal-regression observation to be after the infusion end', () => {
+    const baseTerminal = nca().terminalPhase
+    if (baseTerminal.status !== 'available') throw new Error('fixture')
+    const postInfusionNca = nca({
+      terminalPhase: {
+        ...baseTerminal,
+        selectedSourceRows: [4, 5, 6],
+        selectedTimes: [3, 4, 5],
+      },
+    })
+    const infusion = administration({
+      route: 'iv-infusion',
+      timeReference: 'infusion-start',
+      infusion: { duration: { value: 2, unit: 'h' } },
+    })
+    const afterEnd = run(infusion, postInfusionNca)
     expect(afterEnd.parameters.vz.status).toBe('available')
+
+    // The last selected point is after 2 h, but earlier regression points
+    // still overlap the infusion. Such a mixed-phase regression is conditional.
+    const straddling = run(infusion, nca())
+    expect(straddling.parameters.vz.status).toBe('conditional')
+    expect(straddling.parameters.vz.message).toMatch(/end of the infusion/i)
 
     const beforeEnd = run(
       administration({
@@ -139,7 +152,6 @@ describe('dose-dependent NCA — IV bolus and infusion', () => {
       }),
     )
     expect(beforeEnd.parameters.vz.status).toBe('conditional')
-    expect(beforeEnd.parameters.vz.message).toMatch(/end of the infusion/i)
 
     const noDuration = run(administration({ route: 'iv-infusion', timeReference: 'infusion-start' }))
     expect(noDuration.parameters.vz.status).toBe('conditional')
