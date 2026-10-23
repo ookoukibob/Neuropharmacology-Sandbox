@@ -60,8 +60,8 @@ export function DoseDependentNcaSection({ report }: { readonly report: DoseDepen
 
       <Table data-testid="dose-dependent-table">
         <TableCaption>
-          Clearance and terminal volume derived from the recorded administration metadata and the NCA result
-          above. A parameter is shown only when its preconditions are met.
+          Clearance and terminal volume derived from recorded administration metadata and the NCA result
+          above. Conditional values include explicit caveats; unavailable parameters show why they were refused.
         </TableCaption>
         <TableHeader>
           <TableRow>
