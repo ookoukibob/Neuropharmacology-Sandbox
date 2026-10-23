@@ -398,6 +398,23 @@ describe('dose-dependent NCA — units', () => {
     expect(report.parameters.cl.code).toBe('DOSE_UNIT_INCOMPATIBLE')
   })
 
+  it('rejects a dose that underflows to zero during base-unit conversion', () => {
+    const report = run(administration({ dose: { value: Number.MIN_VALUE, unit: 'µg' } }))
+    expect(report.parameters.cl.status).toBe('unavailable')
+    expect(report.parameters.cl.code).toBe('NUMERICAL_FAILURE')
+  })
+
+  it('rejects an AUC conversion overflow instead of publishing zero clearance', () => {
+    const report = run(
+      administration(),
+      nca({ aucInf: metric(Number.MAX_VALUE, 'g/L·d', 'extrapolated', 'AUC(0→∞)') }),
+      { timeUnit: 'd', concentrationUnit: 'g/L' },
+    )
+    expect(report.parameters.cl.status).toBe('unavailable')
+    expect(report.parameters.cl.code).toBe('NUMERICAL_FAILURE')
+    expect(report.parameters.cl.message).toMatch(/positive finite number/i)
+  })
+
   it('refuses a non-finite result instead of publishing an infinity', () => {
     const report = run(administration(), nca({ aucInf: metric(Number.MIN_VALUE, 'mg/L·h', 'extrapolated', 'AUC(0→∞)') }))
     expect(report.parameters.cl.status).toBe('unavailable')
