@@ -111,9 +111,31 @@ describe('NcaCard', () => {
   it('marks the extrapolated AUC and its fraction as extrapolated/calculated', () => {
     render(<NcaCard measurements={decaying} timeUnit="h" concentrationUnit="mg/L" />)
     const table = screen.getByTestId('nca-table')
-    const aucInfRow = within(table).getByRole('row', { name: /AUC extrapolated to infinity/i })
+    const aucInfRow = screen.getByTestId('nca-auc-inf').closest('tr') as HTMLElement
+    expect(aucInfRow).toHaveTextContent('AUC(0→∞)')
     expect(aucInfRow).toHaveTextContent(/extrapolated/)
     const fractionRow = within(table).getByRole('row', { name: /Extrapolated fraction/i })
     expect(fractionRow).toHaveTextContent(/calculated/)
+  })
+
+  it('labels the extrapolated AUC by its interval and discloses the partial-interval limitation', () => {
+    render(
+      <NcaCard
+        measurements={rows([
+          [1, 100],
+          [2, 50],
+          [3, 25],
+        ])}
+        timeUnit="h"
+        concentrationUnit="mg/L"
+      />,
+    )
+    // The extrapolated AUC is named for the partial interval, not AUC(0→∞).
+    expect(screen.getByTestId('nca-auc-inf').closest('tr')).toHaveTextContent('AUC(first→∞)')
+    expect(screen.getByTestId('nca-auc-inf').closest('tr')).not.toHaveTextContent('AUC(0→∞)')
+    // An explicit limitation is shown and the warning is scoped to the partial interval.
+    expect(screen.getByTestId('nca-interval-limitation')).toHaveTextContent(/not included/i)
+    expect(screen.getByTestId('nca-interval-limitation')).toHaveTextContent(/not directly interchangeable/i)
+    expect(screen.getByTestId('nca-warnings')).toHaveTextContent(/before the first observation is excluded/i)
   })
 })

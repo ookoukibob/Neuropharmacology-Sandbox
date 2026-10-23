@@ -119,9 +119,13 @@ export interface NcaAnalysis {
   readonly tmax: NcaMetric
   /** Area under the observed curve; named AUC(0→last) only when it starts at 0. */
   readonly aucLast: NcaMetric
-  /** Extrapolated AUC to infinity (when the terminal phase supports it). */
+  /**
+   * Extrapolated AUC to infinity (when the terminal phase supports it): named
+   * AUC(0→∞) when the dataset starts at time zero, or AUC(first→∞) when the
+   * first observation is after time zero (the interval before it is excluded).
+   */
   readonly aucInf: NcaMetric
-  /** (AUCinf − AUClast) / AUCinf, as a fraction (0–1). */
+  /** (AUC∞ − AUClast) / AUC∞, as a fraction (0–1). */
   readonly extrapolatedFraction: NcaMetric
   readonly lambdaZ: NcaMetric
   readonly halfLife: NcaMetric
@@ -425,6 +429,11 @@ export function analyzeNca(
     }))
     .sort((a, b) => a.time - b.time)
 
+  // Whether the curve starts at time zero determines the interval every area
+  // metric actually covers: [0, …] versus [first time, …]. There is always at
+  // least one observation here (empty input returned above).
+  const startsAtZero = (sorted[0] as SortedObservation).time === 0
+
   // --- Cmax / Tmax (computed over every observation) -----------------------
   let cmax = Number.NEGATIVE_INFINITY
   for (const point of sorted) {
@@ -435,6 +444,11 @@ export function analyzeNca(
     .map((point) => point.sourceRow)
   const maxTimes = [...new Set(sorted.filter((point) => point.concentration === cmax).map((point) => point.time))]
   const tmaxValue = maxTimes.length > 0 ? Math.min(...maxTimes) : Number.NaN
+  // Tmax provenance is the observation(s) at the earliest time attaining the
+  // maximum; Cmax provenance is every row attaining the maximum.
+  const tmaxSourceRows = sorted
+    .filter((point) => point.concentration === cmax && point.time === tmaxValue)
+    .map((point) => point.sourceRow)
   const cmaxMetric = available({
     value: cmax,
     unit: concentrationUnit,
@@ -451,7 +465,7 @@ export function analyzeNca(
         value: tmaxValue,
         unit: timeUnit,
         kind: 'observed',
-        contributingSourceRows: maxSourceRows,
+        contributingSourceRows: tmaxSourceRows,
         ...(tmaxNotes.length === 0 ? {} : { notes: tmaxNotes }),
       })
     : unavailable('INSUFFICIENT_OBSERVATIONS', 'Tmax could not be determined.')
@@ -481,8 +495,6 @@ export function analyzeNca(
       aucLast = unavailable('INSUFFICIENT_OBSERVATIONS', 'AUC could not be integrated.')
     } else {
       aucLastValue = area.value
-      const firstTime = sorted[0] as SortedObservation
-      const startsAtZero = firstTime.time === 0
       const aucNotes: string[] = []
       if (!startsAtZero) {
         aucNotes.push(
@@ -634,25 +646,61 @@ export function analyzeNca(
         const extrapolatedArea = lastPoint.concentration / regression.lambdaZ
         const aucInfValue = aucLastValue + extrapolatedArea
         const fraction = extrapolatedArea / aucInfValue
-        aucInf = available({
-          value: aucInfValue,
-          unit: aucUnit,
-          kind: 'extrapolated',
-          name: 'AUC(0→∞)',
-          method: 'AUC(last) + C_last/λ_z',
-          contributingSourceRows: sorted.map((point) => point.sourceRow),
-        })
-        extrapolatedFraction = available({
-          value: fraction,
-          unit: 'fraction',
-          kind: 'calculated',
-          method: '(AUCinf − AUClast) / AUCinf',
-          contributingSourceRows: sorted.map((point) => point.sourceRow),
-        })
-        if (fraction > 0.2) {
+        if (startsAtZero) {
+          aucInf = available({
+            value: aucInfValue,
+            unit: aucUnit,
+            kind: 'extrapolated',
+            name: 'AUC(0→∞)',
+            method: 'AUC(last) + C_last/λ_z',
+            contributingSourceRows: sorted.map((point) => point.sourceRow),
+          })
+          extrapolatedFraction = available({
+            value: fraction,
+            unit: 'fraction',
+            kind: 'calculated',
+            method: '(AUC(0→∞) − AUC(0→last)) / AUC(0→∞)',
+            contributingSourceRows: sorted.map((point) => point.sourceRow),
+          })
+          if (fraction > 0.2) {
+            warnings.push(
+              'More than 20% of the extrapolated AUC is outside the observed interval; this is a quality criterion from regulatory NCA guidance, not proof that the estimate is invalid.',
+            )
+          }
+        } else {
+          // The observed area already excludes the interval before the first
+          // observation, so the derived result is over [first time, ∞), not
+          // [0, ∞). Name it, describe its formula, and never present the
+          // conventional complete-curve criterion as interchangeable.
+          aucInf = available({
+            value: aucInfValue,
+            unit: aucUnit,
+            kind: 'extrapolated',
+            name: 'AUC(first→∞)',
+            method: 'AUC(first→last) + C_last/λ_z',
+            contributingSourceRows: sorted.map((point) => point.sourceRow),
+            notes: [
+              'The interval before the first observation is not included, so this is a partial-interval estimate, not AUC(0→∞); no concentration at time zero was invented.',
+            ],
+          })
+          extrapolatedFraction = available({
+            value: fraction,
+            unit: 'fraction',
+            kind: 'calculated',
+            method: '(AUC(first→∞) − AUC(first→last)) / AUC(first→∞)',
+            contributingSourceRows: sorted.map((point) => point.sourceRow),
+            notes: [
+              'Fraction of the partial-interval AUC(first→∞) attributable to the extrapolated tail beyond the last observation.',
+            ],
+          })
           warnings.push(
-            'More than 20% of the extrapolated AUC is outside the observed interval; this is a quality criterion from regulatory NCA guidance, not proof that the estimate is invalid.',
+            'The dataset does not start at time zero, so the extrapolated result is AUC(first→∞): the interval before the first observation is excluded, and it is not directly interchangeable with a complete AUC(0→∞).',
           )
+          if (fraction > 0.2) {
+            warnings.push(
+              'More than 20% of the partial-interval area is attributable to the extrapolated tail. The conventional ≤20% extrapolation criterion applies to a complete AUC(0→∞) and is not directly interchangeable with the partial AUC(first→∞) reported here.',
+            )
+          }
         }
       }
     }

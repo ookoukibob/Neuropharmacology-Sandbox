@@ -140,7 +140,14 @@ function NcaResults({
       metric: analysis.aucLast,
       testId: 'nca-auc-last',
     },
-    { label: 'AUC extrapolated to infinity', metric: analysis.aucInf, testId: 'nca-auc-inf' },
+    {
+      label:
+        analysis.aucInf.status === 'available' && analysis.aucInf.name
+          ? analysis.aucInf.name
+          : 'AUC extrapolated to infinity',
+      metric: analysis.aucInf,
+      testId: 'nca-auc-inf',
+    },
     { label: 'Extrapolated fraction', metric: analysis.extrapolatedFraction, testId: 'nca-extrapolated-fraction' },
     { label: 'Terminal elimination rate λ_z', metric: analysis.lambdaZ, testId: 'nca-lambda-z' },
     { label: 'Terminal half-life t½', metric: analysis.halfLife, testId: 'nca-half-life' },
@@ -215,6 +222,15 @@ function NcaResults({
             ))}
           </ul>
         </div>
+      ) : null}
+
+      {analysis.aucLast.status === 'available' && analysis.aucLast.name === 'AUC(first→last)' ? (
+        <p className="text-xs text-muted-foreground" data-testid="nca-interval-limitation">
+          The first observation is after time zero, so the area and its extrapolation cover the
+          interval from the first observation onward only; the unobserved interval before it is not
+          included, and the conventional complete-curve (≤20% extrapolated) criterion is not directly
+          interchangeable with this partial interval.
+        </p>
       ) : null}
 
       <p className="text-xs text-muted-foreground">

@@ -1400,10 +1400,10 @@ compartmental model, and it is available on any dataset without a fit.
 | Cmax | maximum observed concentration | concentration | observed |
 | Tmax | earliest sampling time attaining Cmax | time | observed |
 | AUC(last) | trapezoidal area over the observed interval | concentration·time | calculated |
-| AUC(∞) | AUC(last) + C_last/λ_z | concentration·time | extrapolated |
+| AUC(∞) | AUC(last) + C_last/λ_z; named AUC(0→∞) when the dataset starts at time zero, otherwise AUC(first→∞) because the interval before the first observation is excluded | concentration·time | extrapolated |
 | λ_z | −slope of ln(C) on time over the terminal phase | 1/time | calculated |
 | t½ | ln(2)/λ_z | time | calculated |
-| Extrapolated fraction | (AUC∞ − AUClast)/AUC∞ | fraction | calculated |
+| Extrapolated fraction | (AUC∞ − AUClast)/AUC∞; for a partial-interval curve this is the fraction of AUC(first→∞) attributable to the extrapolated tail | fraction | calculated |
 
 Linear trapezoid over `[t1, t2]`: `AUC = (C1 + C2)/2 · (t2 − t1)`.
 
@@ -1441,8 +1441,13 @@ never persisted.
   (`TERMINAL_TAIL_NOT_POSITIVE`).
 - **A dataset that does not start at zero** yields an area named for the
   interval it actually covers (`AUC(first→last)`), never `AUC0-last`; no
-  concentration at time zero is invented or back-extrapolated.
-- **Tied Cmax** reports the earliest time attaining the maximum, with a note.
+  concentration at time zero is invented or back-extrapolated. The extrapolated
+  result is likewise named `AUC(first→∞)` — the interval before the first
+  observation is excluded — and is not presented as equivalent to a complete
+  `AUC(0→∞)`.
+- **Tied Cmax** reports the earliest time attaining the maximum, with a note;
+  its `Tmax` provenance lists only the observation row(s) at that earliest
+  time, while `Cmax` retains every row attaining the maximum.
 - **Non-finite or negative measurements** fail the whole analysis
   (`INVALID_MEASUREMENT`); they are never discarded silently.
 - **A non-negative terminal slope** makes λ_z and t½ unavailable
@@ -1454,6 +1459,9 @@ never persisted.
 
 - Extrapolated fraction > 20% is flagged as a quality concern from regulatory
   NCA guidance. It is a criterion, not a guarantee that the estimate is valid.
+  For a dataset that does not start at time zero, the criterion applies to a
+  complete `AUC(0→∞)` and is **not** directly interchangeable with the partial
+  `AUC(first→∞)` reported; the warning is scoped accordingly.
 - Terminal R² < 0.8 is flagged as a poorly determined terminal phase. It is a
   screening convention, not a proof that the phase is invalid.
 

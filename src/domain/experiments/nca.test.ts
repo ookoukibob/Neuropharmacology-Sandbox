@@ -401,4 +401,130 @@ describe('NCA main analysis', () => {
     expect(metric(analysis, 'lambdaZ').value).toBeCloseTo(Math.LN2, 6)
     expect(metric(analysis, 'halfLife').value).toBeCloseTo(1, 6)
   })
+
+  it('reports AUC(0→∞) when the dataset starts at time zero', () => {
+    // Exact halving from t = 0: λ_z = ln 2, AUC(0→last) = 112.5, C_last = 25.
+    const analysis = analyzeNca(
+      rows([
+        [0, 100],
+        [1, 50],
+        [2, 25],
+      ]),
+      'h',
+      'mg/L',
+      options(),
+    )
+    if (!analysis.ok) throw new Error('expected ok')
+    const aucInf = metric(analysis, 'aucInf')
+    expect(aucInf.name).toBe('AUC(0→∞)')
+    expect(aucInf.method).toBe('AUC(last) + C_last/λ_z')
+    expect(aucInf.value).toBeCloseTo(112.5 + 25 / Math.LN2, 8)
+    // The fraction is named for the complete curve.
+    expect(metric(analysis, 'extrapolatedFraction').method).toBe('(AUC(0→∞) − AUC(0→last)) / AUC(0→∞)')
+    expect(metric(analysis, 'extrapolatedFraction').value).toBeCloseTo((25 / Math.LN2) / (112.5 + 25 / Math.LN2), 8)
+  })
+
+  it('reports AUC(first→∞), not AUC(0→∞), when the dataset starts after time zero', () => {
+    // The same halving curve sampled from t = 1: λ_z = ln 2, AUC(first→last)
+    // = 112.5, C_last = 25.
+    const analysis = analyzeNca(
+      rows([
+        [1, 100],
+        [2, 50],
+        [3, 25],
+      ]),
+      'h',
+      'mg/L',
+      options(),
+    )
+    if (!analysis.ok) throw new Error('expected ok')
+    expect(metric(analysis, 'aucLast').name).toBe('AUC(first→last)')
+    const aucInf = metric(analysis, 'aucInf')
+    expect(aucInf.name).toBe('AUC(first→∞)')
+    expect(aucInf.name).not.toBe('AUC(0→∞)')
+    expect(aucInf.method).toBe('AUC(first→last) + C_last/λ_z')
+    expect(aucInf.value).toBeCloseTo(112.5 + 25 / Math.LN2, 8)
+    // The partial-interval disclosure is carried on the metric itself.
+    expect(aucInf.notes?.some((note) => /before the first observation is not included/.test(note))).toBe(true)
+  })
+
+  it('scopes the extrapolated fraction and warning to the partial interval', () => {
+    const analysis = analyzeNca(
+      rows([
+        [1, 100],
+        [2, 50],
+        [3, 25],
+      ]),
+      'h',
+      'mg/L',
+      options(),
+    )
+    if (!analysis.ok) throw new Error('expected ok')
+    const fraction = metric(analysis, 'extrapolatedFraction')
+    // Fraction of the partial interval attributable to the extrapolated tail.
+    expect(fraction.value).toBeCloseTo((25 / Math.LN2) / (112.5 + 25 / Math.LN2), 8)
+    expect(fraction.method).toBe('(AUC(first→∞) − AUC(first→last)) / AUC(first→∞)')
+    expect(fraction.notes?.some((note) => /partial-interval/.test(note) && /extrapolated tail/.test(note))).toBe(true)
+    // The always-present limitation: the unobserved interval is excluded and
+    // the complete-curve criterion is not directly interchangeable.
+    expect(
+      analysis.warnings.some(
+        (warning) => /before the first observation is excluded/.test(warning) && /not directly interchangeable/.test(warning),
+      ),
+    ).toBe(true)
+    // This dataset's fraction exceeds 20%, so the scoped criterion fires and
+    // refuses to present the complete-curve rule as interchangeable.
+    expect(fraction.value).toBeGreaterThan(0.2)
+    expect(
+      analysis.warnings.some(
+        (warning) => /partial-interval area/.test(warning) && /not directly interchangeable/.test(warning),
+      ),
+    ).toBe(true)
+  })
+
+  it('records only the earliest-time rows for Tmax under a tied Cmax', () => {
+    const analysis = analyzeNca(
+      rows([
+        [0, 100],
+        [1, 50],
+        [2, 100],
+        [3, 25],
+      ]),
+      'h',
+      'mg/L',
+      options(),
+    )
+    if (!analysis.ok) throw new Error('expected ok')
+    // Cmax retains every row attaining the maximum.
+    expect(metric(analysis, 'cmax').value).toBe(100)
+    expect(metric(analysis, 'cmax').contributingSourceRows).toEqual([1, 3])
+    // Tmax is the earliest time, and its provenance is only that earliest-time row.
+    expect(metric(analysis, 'tmax').value).toBe(0)
+    expect(metric(analysis, 'tmax').contributingSourceRows).toEqual([1])
+    expect(analysis.warnings.some((warning) => /tied/i.test(warning))).toBe(true)
+  })
+
+  it('leaves full-curve NCA behaviour unchanged for exact exponential data', () => {
+    // C = 100·e^(−0.5t), t = 0..5. AUC0-inf = C0/k = 200.
+    const concentration = (time: number): number => 100 * Math.exp(-0.5 * time)
+    const data = [0, 1, 2, 3, 4, 5].map((time, index) => ({
+      id: `e${index}`,
+      sourceRow: index + 1,
+      time,
+      concentration: concentration(time),
+    }))
+    const analysis = analyzeNca(data, 'h', 'mg/L', options())
+    if (!analysis.ok) throw new Error('expected ok')
+    expect(metric(analysis, 'lambdaZ').value).toBeCloseTo(0.5, 8)
+    expect(metric(analysis, 'halfLife').value).toBeCloseTo(Math.LN2 / 0.5, 8)
+    const aucInf = metric(analysis, 'aucInf')
+    expect(aucInf.name).toBe('AUC(0→∞)')
+    expect(aucInf.kind).toBe('extrapolated')
+    const aucLast = metric(analysis, 'aucLast').value
+    expect(aucInf.value).toBeCloseTo(aucLast + concentration(5) / 0.5, 3)
+    const fraction = metric(analysis, 'extrapolatedFraction')
+    expect(fraction.value).toBeCloseTo((concentration(5) / 0.5) / aucInf.value, 8)
+    expect(fraction.value).toBeGreaterThan(0)
+    expect(fraction.value).toBeLessThan(0.5)
+  })
 })
