@@ -151,6 +151,21 @@ function sortDoses(doses: readonly ExpandedDose[]): readonly ExpandedDose[] {
  */
 function ExpandedSchedulePreview({ expanded }: { readonly expanded: ExpandedSchedule }) {
   const doses = useMemo(() => sortDoses(expanded.doses), [expanded.doses])
+
+  // Do not present a partial expansion as the runnable schedule when an event
+  // row is invalid or incomplete. The compiler rejects this same draft, so a
+  // populated table here could imply events the engine will never receive.
+  if (expanded.errors.length > 0) {
+    return (
+      <div className="rounded-md border p-3 text-sm" role="status" data-testid="expanded-schedule-invalid">
+        <h3 className="text-sm font-medium">Expanded dosing schedule unavailable</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Resolve the invalid or incomplete dosing-event fields before this preview can represent a runnable schedule.
+        </p>
+      </div>
+    )
+  }
+
   if (expanded.doses.length === 0) return null
   return (
     <div className="rounded-md border p-3 text-sm" data-testid="expanded-schedule">
