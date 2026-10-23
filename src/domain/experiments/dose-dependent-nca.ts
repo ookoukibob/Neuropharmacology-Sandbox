@@ -433,7 +433,12 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
     preconditions.push({ id: 'infusion', status: 'not-met', message })
     return allUnavailable('INFUSION_METADATA_INCONSISTENT', message, { dose: doseInput })
   }
-  if (rule.allowsInfusion && administration.infusion === undefined) {
+  const infusionDetailsRecorded =
+    administration.infusion?.duration !== undefined || administration.infusion?.rate !== undefined
+  if (rule.allowsInfusion && !infusionDetailsRecorded) {
+    // The optional record may be absent or explicitly empty; neither means a
+    // duration/rate was recorded. Clearance can still use the explicit total
+    // dose, while the separate terminal-phase check keeps volume conditional.
     const note =
       'The route is IV infusion but no infusion duration or rate is recorded; the clearance uses the stated total dose, which does not depend on the input rate.'
     reportWarnings.push(note)
@@ -443,7 +448,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
       id: 'infusion',
       status: rule.allowsInfusion ? 'met' : 'not-applicable',
       message: rule.allowsInfusion
-        ? 'Infusion details are recorded.'
+        ? 'Infusion duration or rate is recorded.'
         : 'Infusion details do not apply to this route.',
     })
   }
