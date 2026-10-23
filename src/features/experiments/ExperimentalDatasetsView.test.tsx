@@ -1277,3 +1277,67 @@ describe('proportional-variance error model (phase 47)', () => {
     expect(repository.deleteCalls).toHaveLength(0)
   })
 })
+
+describe('noncompartmental analysis (phase 48)', () => {
+  const row = (id: string, sourceRow: number, time: number, concentration: number) => ({
+    id,
+    sourceRow,
+    time,
+    concentration,
+  })
+
+  const select = async (dataset: ExperimentalDataset): Promise<void> => {
+    repository.rows.set(dataset.id, dataset)
+    renderView()
+    const list = await screen.findByRole('list', { name: 'Saved experimental datasets' })
+    fireEvent.click(within(list).getByRole('button', { name: new RegExp(dataset.name) }))
+    await screen.findByRole('heading', { level: 2, name: dataset.name })
+  }
+
+  it('shows noncompartmental results without requiring a fit', async () => {
+    await select(
+      storedDataset({
+        id: 'nca-1',
+        name: 'NCA study',
+        measurements: [
+          row('a1', 1, 0, 100),
+          row('a2', 2, 1, 60.653),
+          row('a3', 3, 2, 36.788),
+          row('a4', 4, 3, 22.313),
+          row('a5', 5, 4, 13.534),
+          row('a6', 6, 5, 8.208),
+        ],
+      }),
+    )
+
+    // The card is present even though no fit has been run.
+    expect(screen.getByTestId('nca-card')).toBeInTheDocument()
+    expect(screen.queryByTestId('fit-results')).not.toBeInTheDocument()
+
+    expect(screen.getByTestId('nca-cmax')).toHaveTextContent('100 mg/L')
+    expect(screen.getByTestId('nca-auc-last')).toHaveTextContent(/mg\/L·h/)
+    expect(screen.getByTestId('nca-lambda-z')).toHaveTextContent(/h⁻¹/)
+    expect(screen.getByTestId('nca-terminal')).toHaveTextContent(/source rows 4, 5, 6/)
+    // Derived analysis never writes.
+    expect(repository.createCalls).toHaveLength(0)
+    expect(repository.updateCalls).toHaveLength(0)
+    expect(repository.deleteCalls).toHaveLength(0)
+  })
+
+  it('reports an unavailable metric for duplicate sampling times', async () => {
+    await select(
+      storedDataset({
+        id: 'nca-2',
+        name: 'NCA duplicate study',
+        measurements: [
+          row('d1', 1, 0, 100),
+          row('d2', 2, 1, 60),
+          row('d3', 3, 1, 55),
+          row('d4', 4, 2, 30),
+        ],
+      }),
+    )
+    expect(screen.getByTestId('nca-auc-last')).toHaveTextContent('unavailable')
+    expect(screen.getByTestId('nca-unavailable')).toHaveTextContent(/duplicate sampling time/i)
+  })
+})

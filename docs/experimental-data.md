@@ -1,13 +1,13 @@
 # Experimental concentration–time datasets
 
-**Status: Phases 47A and 47B plus the Phase 47C work listed in §15.8 — implemented.**
+**Status: Phases 47A–47C and Phase 48 (noncompartmental analysis) — implemented.**
 This document is the contract for measured-dataset import, validation, local
 storage, inspection and `.npex` interchange, the optional one-compartment
 mono-exponential decay fit (§10), raw-residual/RMSE diagnostics (§11), the
 practical identifiability screen (§12), the two-candidate comparison with a
 conditional common-variance AICc (§13), residual-structure diagnostics with a
-residual-spread screen (§14), and the opt-in proportional-variance likelihood
-path (§15). Phase 47 is **not** complete: §15.8 lists what remains deferred.
+residual-spread screen (§14), the opt-in proportional-variance likelihood
+path (§15), and noncompartmental analysis (§16).
 
 All examples below are synthetic test data, not pharmacological information.
 
@@ -501,9 +501,9 @@ browser-local state, use `.npsb`.
 - **Derived analysis never rewrites evidence.** Phase 47B fitting (§10), the
   Phase 47C residual/RMSE diagnostics (§11), the objective profile (§12), the
   two-candidate comparison with its conditional AICc (§13), the residual
-  structure views (§14) and the proportional-variance likelihood path (§15)
-  are temporary derived views; imports, stored observations, and `.npex` round
-  trips are unchanged.
+  structure views (§14), the proportional-variance likelihood path (§15) and
+  noncompartmental analysis (§16) are temporary derived views; imports, stored
+  observations, and `.npex` round trips are unchanged.
   RMSE is descriptive and has no universal pass/fail threshold. Each AICc is
   conditional on its own explicitly declared error model, the two criteria are
   never compared with each other, and each ranks only the two configured
@@ -516,12 +516,14 @@ browser-local state, use `.npsb`.
 
 | Layer | Representative files | Coverage |
 | --- | --- | --- |
+| Domain — NCA | `src/domain/experiments/nca.test.ts` | linear and logarithmic trapezoids against hand-calculated values; linear-up/log-down per interval direction and its linear fallback; Cmax/Tmax with the earliest-time tie; AUC0-last naming and the not-from-zero case; λ_z / t½ / AUC∞ against exact exponential data; duplicate-time and non-positive-terminal unavailability; a trailing zero; invalid measurements; input-order invariance and non-mutation; terminal selection |
 | Domain | `src/domain/experiments/experimental-dataset.test.ts`, `src/domain/experiments/mono-exponential-fit.test.ts`, `src/domain/experiments/mono-exponential-fit-diagnostics.test.ts`, `src/domain/experiments/mono-exponential-profile.test.ts`, `src/domain/experiments/mono-exponential-baseline-fit.test.ts`, `src/domain/experiments/mono-exponential-model-comparison.test.ts`, `src/domain/experiments/proportional-variance-fit.test.ts`, `src/domain/experiments/proportional-variance-comparison.test.ts` | dataset contract, bounded fit/failures, raw residuals/RMSE, row fidelity and limited data-support notes, the objective profile, constrained M1 recovery/boundaries/degeneracy, the common-variance comparison with its AICc gates, and the proportional-variance likelihood: closed-form profile arithmetic against independent values, likelihood-vs-weighted-SSE separation, parameter recovery, unit scaling, zero-observation rejection, degenerate dispersion, boundary labels, parameter counts and every AICc gate |
 | Schemas | `src/data/schemas/experimentalDatasets.test.ts` | input/record/`.npex` shapes, limits, negative/non-finite rejection, units, duplicate measurement ids |
 | CSV | `src/features/experiments/csvDataset.test.ts` | explicit mapping, RFC 4180 reuse, row-specific errors, qualifiers, duplicates/order, all-or-nothing |
 | `.npex` | `src/data/npex/npex.test.ts` | envelope/version rules, strict shape, duplicate keys, depth/size, round trip, local identity absent |
 | Repository | `src/data/repositories/dexieExperimentalDatasetRepository.test.ts` | CRUD, validation on read/write, corruption reporting, atomicity, optimistic tokens, immutable science, strict timestamp ordering |
 | Database/recovery | `src/data/db/database.test.ts`, `experimentalDatasetRecovery.test.ts`, `archive.test.ts` | v5→v6 preservation, all-store snapshot/restore, legacy absent-store warnings/clearing, rollback |
+| UI — NCA | `src/features/experiments/NcaCard.test.tsx`, `src/features/experiments/ExperimentalDatasetsView.test.tsx` | parameter table with units and kind, interval naming, method/terminal-point switching, duplicate-time and non-positive-slope unavailability, terminal diagnostics, and presence without a fit |
 | UI | `src/features/experiments/*.test.tsx`, `src/components/charts/experimentalDatasetAdapter.test.ts`, `src/components/charts/ExperimentalFitResidualChart.test.tsx`, `src/components/charts/ExperimentalFitResidualVsFittedChart.test.tsx`, `src/components/charts/ExperimentalFitProfileChart.test.tsx` | import/preview/confirm, table, observed/fitted chart, residual plots against time and fitted value, RMSE and screening states, residual-spread states, objective-profile chart labelling and empty/invalid-candidate states, comparison table/parameter counts, AICc gating on the declared assumption, unavailable/insufficient/zero-variance states, the second error model's own declaration and re-fitted table, degenerate and small-sample states, declaration reset on dataset change, rename/delete/export/error states |
 | Browser | `e2e/experimentalDatasets.spec.ts`, `e2e/a11y.spec.ts` | real Chromium CSV→chart→`.npex`→re-import, persistence, recovery, fit overlay, residual plot/RMSE/data-support screen, objective profile after fitting plus its sparse-data and stale-fit states, comparison with AICc unavailable→declared and an undersized sample, residual structure for both models with real-Plotly axis titles, marker counts and duplicate-timestamp disclosure, the proportional-variance declaration gate and its re-fitted table, narrow layout and axe scans |
 
@@ -1384,3 +1386,88 @@ Still deferred, and not claimed by this increment:
 - any persistence or export of derived fits and criteria.
 
 Phase 47 is therefore **not complete** after this increment.
+
+## 16. Noncompartmental analysis (Phase 48)
+
+A noncompartmental summary of the selected concentration–time dataset. It is
+observational: it derives parameters from the measured rows without fitting a
+compartmental model, and it is available on any dataset without a fit.
+
+### 16.1 Definitions and formulas
+
+| Parameter | Definition | Unit | Kind |
+| --- | --- | --- | --- |
+| Cmax | maximum observed concentration | concentration | observed |
+| Tmax | earliest sampling time attaining Cmax | time | observed |
+| AUC(last) | trapezoidal area over the observed interval | concentration·time | calculated |
+| AUC(∞) | AUC(last) + C_last/λ_z | concentration·time | extrapolated |
+| λ_z | −slope of ln(C) on time over the terminal phase | 1/time | calculated |
+| t½ | ln(2)/λ_z | time | calculated |
+| Extrapolated fraction | (AUC∞ − AUClast)/AUC∞ | fraction | calculated |
+
+Linear trapezoid over `[t1, t2]`: `AUC = (C1 + C2)/2 · (t2 − t1)`.
+
+Logarithmic trapezoid over a decreasing interval: `AUC = (C1 − C2)·(t2 − t1) /
+ln(C1/C2)`, defined only when both concentrations are positive and unequal.
+The **linear-up/log-down** method uses the linear trapezoid for an increasing
+or equal interval, the logarithmic trapezoid for a decreasing interval, and
+falls back to the linear trapezoid (reported as a note) when the logarithmic
+form is undefined — the measurement is never dropped.
+
+λ_z is a least-squares regression of `ln(concentration)` on time over the
+selected terminal observations (the last `terminalPointCount` positive
+concentrations; default 3, minimum 2). R² is the coefficient of determination
+of that log-linear fit.
+
+### 16.2 Units, ordering and provenance
+
+All values use the dataset's declared time and concentration units; no unit
+conversion is performed because every row already shares them. AUC is reported
+in `concentration·time`. Input is read only and sorted on a copy: every result
+carries the 1-based source rows it was derived from, so it is traceable to the
+exact observations and analysis settings. Derived results are ephemeral and
+never persisted.
+
+### 16.3 Explicit behaviours
+
+- **Unsorted input** is sorted by time for analysis; the stored order is never
+  changed.
+- **Duplicate sampling times** make AUC and terminal-phase metrics unavailable
+  (`DUPLICATE_SAMPLING_TIMES`) and are reported with their times; observations
+  are never averaged. Cmax and Tmax remain observed facts.
+- **Zero or non-positive concentrations** are valid for Cmax and the linear
+  trapezoid, excluded from logarithmic integration and the terminal regression
+  (reported), and a trailing non-positive observation makes AUC(∞) unavailable
+  (`TERMINAL_TAIL_NOT_POSITIVE`).
+- **A dataset that does not start at zero** yields an area named for the
+  interval it actually covers (`AUC(first→last)`), never `AUC0-last`; no
+  concentration at time zero is invented or back-extrapolated.
+- **Tied Cmax** reports the earliest time attaining the maximum, with a note.
+- **Non-finite or negative measurements** fail the whole analysis
+  (`INVALID_MEASUREMENT`); they are never discarded silently.
+- **A non-negative terminal slope** makes λ_z and t½ unavailable
+  (`NON_POSITIVE_TERMINAL_SLOPE`).
+- **Insufficient positive observations** for the requested terminal count makes
+  the terminal metrics unavailable (`INSUFFICIENT_TERMINAL_POINTS`).
+
+### 16.4 Quality criteria (not validity proofs)
+
+- Extrapolated fraction > 20% is flagged as a quality concern from regulatory
+  NCA guidance. It is a criterion, not a guarantee that the estimate is valid.
+- Terminal R² < 0.8 is flagged as a poorly determined terminal phase. It is a
+  screening convention, not a proof that the phase is invalid.
+
+### 16.5 Dose-dependent parameters — deferred
+
+Clearance and volume of distribution require a dose, route and bioavailability
+assumption. The experimental dataset model carries none of these, and none is
+inferred. `CL/F` and `Vz/F` are therefore **not** computed in this phase; they
+are recorded as a follow-up requiring an explicit dose/route contract.
+
+### 16.6 Source and licensing
+
+The formulas are standard NCA definitions implemented independently (see
+`THIRD_PARTY_NOTICES.md`). PKNCA (AGPL-3.0) was studied as a reference but no
+source was copied, because AGPL-3.0 cannot be combined with this repository's
+PolyForm Noncommercial license without a license change. Intentional
+differences from PKNCA are listed in the notices file.

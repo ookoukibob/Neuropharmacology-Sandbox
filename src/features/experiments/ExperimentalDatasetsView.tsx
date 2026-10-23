@@ -83,6 +83,7 @@ import type { ExperimentalDatasetRepository } from '@/data/repositories/experime
 import { buildNpexFile, NPEX_EXTENSION, NPEX_MIME_TYPE } from '@/data/npex/npex'
 import { downloadTextFile, safeFileName } from '@/features/import-export/fileIo'
 import { CsvDatasetImport } from './CsvDatasetImport'
+import { NcaCard } from './NcaCard'
 import { NpexDatasetImport } from './NpexDatasetImport'
 import {
   useExperimentalDatasetLibrary,
@@ -813,6 +814,12 @@ function DatasetDetail({ dataset, busy, onRename, onDelete }: DatasetDetailProps
               datasetName={dataset.name}
             />
           )}
+
+          <NcaCard
+            measurements={dataset.measurements}
+            timeUnit={dataset.timeUnit}
+            concentrationUnit={dataset.concentrationUnit}
+          />
 
           <div className="max-h-[36rem] overflow-auto rounded-md border">
             <Table data-testid="dataset-measurements">
