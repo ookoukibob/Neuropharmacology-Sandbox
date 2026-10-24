@@ -376,6 +376,9 @@ describe('NcaCard interval exposure summary', () => {
     expect(screen.getAllByText('observed').length).toBeGreaterThanOrEqual(4)
     expect(screen.getAllByText('calculated').length).toBeGreaterThanOrEqual(3)
     expect(screen.getByTestId('exposure-formulas')).toHaveTextContent(/Cavg,ss = AUCτ/)
+    // The scope note keeps the observed-vs-true distinction and makes no bound claim.
+    expect(screen.getByTestId('exposure-scope')).toHaveTextContent(/not the true extremes between samples/)
+    expect(screen.getByTestId('exposure-scope')).toHaveTextContent(/not a guaranteed lower bound/)
   })
 
   it('keeps the observed metrics but refuses the steady-state ones off steady state', () => {

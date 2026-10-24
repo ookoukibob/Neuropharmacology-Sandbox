@@ -1879,9 +1879,15 @@ sampling stopped before the true trough. Nothing is interpolated, extrapolated,
 smoothed or fitted to produce either, and no sample time is automatically
 declared a peak or a trough because it is first or last.
 
-Consequently the fluctuation is a **lower bound** on the true peak-to-trough
-fluctuation: both of its extremes are sampled values and sampling cannot
-overstate the extremes. This is stated in the result's assumptions, not hidden.
+Consequently the fluctuation is an **observed-data-based estimate**, not a
+guarantee: its numerator comes from sampled extremes that may miss the actual
+peak or trough, and its denominator is a trapezoidal `AUCτ` divided by τ, which
+is itself an estimate whose error can point either way. The two errors do not
+cancel, and a smaller observed range does not by itself make the normalized
+percentage a strict lower bound. Without additional assumptions about the
+concentration–time profile between samples and about the integration error, the
+percentage is not guaranteed to bound the true normalized fluctuation. This is
+stated in the result's assumptions, not hidden.
 
 ### 20.3 Ties are structural
 
