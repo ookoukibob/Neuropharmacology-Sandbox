@@ -172,8 +172,18 @@ function routeRule(route: AdministrationRoute): RouteRule | null {
   }
 }
 
-/** Exact shortest round-trip rendering; never rounds a scientific value. */
+/** Exact shortest round-trip rendering for recorded values and status messages. */
 const exact = (value: number): string => String(value)
+
+/**
+ * Readable rendering for arithmetic substitutions only. The calculation and
+ * structured numeric inputs retain their full binary64 values; this rounds
+ * only the human-readable audit equation to 12 significant digits, matching
+ * the application's displayed-result precision and avoiding binary artefacts
+ * such as 0.09999999999999999 g.
+ */
+const auditNumber = (value: number): string =>
+  Number.isFinite(value) ? Number(value.toPrecision(12)).toString() : String(value)
 
 function unavailableParameter(
   parameter: DoseDependentParameterId,
@@ -578,8 +588,8 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
   // --- Conversion to the catalog's base units ------------------------------
   const doseInG = dose.value * doseToG
   const aucBase = aucValue * concToBase * timeToH // g·h/L
-  const doseBaseText = `${exact(dose.value)} ${dose.unit} → ${exact(doseInG)} g`
-  const aucBaseText = `${exact(aucValue)} ${aucUnit} → ${exact(aucBase)} g·h/L`
+  const doseBaseText = `${exact(dose.value)} ${dose.unit} → ${auditNumber(doseInG)} g`
+  const aucBaseText = `${exact(aucValue)} ${aucUnit} → ${auditNumber(aucBase)} g·h/L`
   const conversionNote = `Unit normalisation: ${doseBaseText}; ${aucBaseText}.`
 
   const inputs: DoseDependentInputs = {
@@ -626,7 +636,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
           value: clFValue,
           unit: 'L/h',
           formula: formulas.clF,
-          substitution: `${exact(doseInG)} g ÷ ${exact(aucBase)} g·h/L = ${exact(clFValue)} L/h`,
+          substitution: `${auditNumber(doseInG)} g ÷ ${auditNumber(aucBase)} g·h/L = ${auditNumber(clFValue)} L/h`,
           inputs,
           assumptions: [
             ...unitAssumptions,
@@ -648,7 +658,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
       value: clValue,
       unit: 'L/h',
       formula: formulas.cl,
-      substitution: `${exact(doseInG)} g ÷ ${exact(aucBase)} g·h/L = ${exact(clValue)} L/h`,
+      substitution: `${auditNumber(doseInG)} g ÷ ${auditNumber(aucBase)} g·h/L = ${auditNumber(clValue)} L/h`,
       inputs,
       assumptions: [
         ...unitAssumptions,
@@ -666,7 +676,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
       value: clValue,
       unit: 'L/h',
       formula: formulas.clWithF,
-      substitution: `${exact(f as number)} × ${exact(doseInG)} g ÷ ${exact(aucBase)} g·h/L = ${exact(clValue)} L/h`,
+      substitution: `${auditNumber(f as number)} × ${auditNumber(doseInG)} g ÷ ${auditNumber(aucBase)} g·h/L = ${auditNumber(clValue)} L/h`,
       inputs,
       assumptions: [
         ...unitAssumptions,
@@ -741,7 +751,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
       value,
       unit: 'L',
       formula: formulas.vzF,
-      substitution: `${exact(clFValue)} L/h ÷ ${exact(lambdaZBase)} h⁻¹ = ${exact(value)} L`,
+      substitution: `${auditNumber(clFValue)} L/h ÷ ${auditNumber(lambdaZBase)} h⁻¹ = ${auditNumber(value)} L`,
       inputs,
       assumptions: [
         ...unitAssumptions,
@@ -777,7 +787,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
         value,
         unit: 'L',
         formula: formulas.vz,
-        substitution: `${exact(clFValue)} L/h ÷ ${exact(lambdaZ.value)} ${lambdaZ.unit} = ${exact(value)} L`,
+        substitution: `${auditNumber(clFValue)} L/h ÷ ${auditNumber(lambdaZBase)} h⁻¹ = ${auditNumber(value)} L`,
         inputs,
         assumptions: [
           ...unitAssumptions,
@@ -818,7 +828,7 @@ export function analyzeDoseDependentNca(input: DoseDependentNcaInput): DoseDepen
       value,
       unit: 'L',
       formula: formulas.vz,
-      substitution: `${exact(clValue)} L/h ÷ ${exact(lambdaZBase)} h⁻¹ = ${exact(value)} L`,
+      substitution: `${auditNumber(clValue)} L/h ÷ ${auditNumber(lambdaZBase)} h⁻¹ = ${auditNumber(value)} L`,
       inputs,
       assumptions: [
         ...unitAssumptions,
