@@ -142,7 +142,30 @@ describe('interval exposure metrics', () => {
     expect(report.fluctuation.value).toBeCloseTo(6000 / 70, 10)
     expect(report.fluctuation.unit).toBe('%')
     expect(report.fluctuation.substitution).toContain('70')
-    expect(report.fluctuation.assumptions.join(' ')).toMatch(/lower bound/i)
+    // The observed-extrema caveat stays; no bound is guaranteed.
+    expect(report.fluctuation.assumptions.join(' ')).toMatch(/not guaranteed to be a lower bound/i)
+  })
+
+  it('describes the fluctuation as an observed-data estimate, not a proven lower bound', () => {
+    const report = run()
+    const assumptions = report.fluctuation.assumptions.join(' ')
+
+    // The guarantee is gone: a sampled numerator plus an estimated denominator
+    // cannot bound the true normalized fluctuation without extra assumptions.
+    expect(assumptions).not.toMatch(/is a lower bound on the true one/i)
+    expect(assumptions).toMatch(/not guaranteed to be a lower bound/i)
+    expect(assumptions).toMatch(/observed-data-based estimate/i)
+    // The two error sources are named rather than hand-waved.
+    expect(assumptions).toMatch(/OBSERVED sample extremes/)
+    expect(assumptions).toMatch(/AUCτ-based ESTIMATE/)
+    expect(assumptions).toMatch(/concentration–time profile between samples/i)
+    expect(assumptions).toMatch(/integration error/i)
+
+    // The wording change did not touch the formula or the number.
+    expect(report.fluctuation.formula).toBe('100 × (Cmax,obs − Cmin,obs) / Cavg,ss')
+    expect(report.fluctuation.value).toBeCloseTo(6000 / 70, 10)
+    expect(report.fluctuation.status).toBe('available')
+    expect(report.fluctuation.unit).toBe('%')
   })
 
   it('keeps every observation that attains a tied maximum or minimum', () => {

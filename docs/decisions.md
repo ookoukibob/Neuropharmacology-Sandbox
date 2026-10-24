@@ -1183,6 +1183,14 @@ state.
 - **`Cavg,interval` is never a steady-state average.** It divides `AUCτ` by the
   interval's own duration in the dataset's time unit, so the result stays a
   concentration, and it is labelled as an interval mean.
+- **The fluctuation is an estimate, not a bound.** Its numerator is a sampled
+  range and its denominator an `AUCτ`-based mean: sparse sampling can miss the
+  actual extremes and the trapezoidal area can err in either direction, so a
+  smaller observed range does not make the normalized percentage a strict lower
+  bound. The result is described as an observed-data-based estimate, and no
+  bound is claimed without additional assumptions about the concentration–time
+  profile between samples and the integration error. (An earlier draft of this
+  phase claimed a lower bound; that claim was withdrawn in review.)
 - **The steady-state pair needs a declaration plus the alignment confirmation.**
   `Cavg,ss = AUCτ/τ` and `100·(Cmax,obs − Cmin,obs)/Cavg,ss` exist only for
   `regimen = repeated-dose-steady-state` with the phase-50C interval-to-dose
