@@ -15,7 +15,7 @@
  * never mutated, sorted, averaged or deduplicated — every row contributes
  * independently to the objective, including exact replicates.
  */
-import type { ExperimentalMeasurement } from './experimental-dataset'
+import { censoredRefusalMessage, type ExperimentalMeasurement, type QuantifiedMeasurement } from './experimental-dataset'
 import { goldenSectionMinimize } from './bounded-minimize'
 
 /**
@@ -56,6 +56,7 @@ export type FitFailureCode =
   | 'DEGENERATE_OBJECTIVE'
   | 'NON_CONVERGED'
   | 'NON_FINITE'
+  | 'CENSORED_CONCENTRATION_UNSUPPORTED'
 
 export type MonoExponentialFitFailure = {
   readonly ok: false
@@ -155,6 +156,11 @@ function prepareObjective(
     }
   }
 
+  const censoredRefusal = censoredRefusalMessage(measurements)
+  if (censoredRefusal !== null) {
+    return { ok: false, failure: failure('CENSORED_CONCENTRATION_UNSUPPORTED', censoredRefusal) }
+  }
+
   let tRef = Number.POSITIVE_INFINITY
   let tMax = Number.NEGATIVE_INFINITY
   let maxAbsConcentration = 0
@@ -222,7 +228,7 @@ function prepareObjective(
   // the normal equations; the amplitude is rescaled afterwards.
   const points: NormalizedPoint[] = measurements.map((measurement) => ({
     u: (measurement.time - tRef) / span,
-    c: measurement.concentration / maxAbsConcentration,
+    c: (measurement as QuantifiedMeasurement).concentration / maxAbsConcentration,
   }))
 
   return { ok: true, prepared: { tRef, span, maxAbsConcentration, points } }

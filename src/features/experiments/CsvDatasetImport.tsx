@@ -29,6 +29,7 @@ import type {
   ExperimentalDataset,
   ExperimentalDatasetInput,
 } from '@/domain/experiments/experimental-dataset'
+import { isCensoredMeasurementInput } from '@/domain/experiments/experimental-dataset'
 import { readTextFile } from '@/features/import-export/fileIo'
 import type { CsvTable } from '@/features/import-export/csv/parseCsv'
 import {
@@ -58,6 +59,8 @@ const EMPTY_MAPPING: CsvDatasetMapping = {
   concentrationUnit: '',
   sampleColumn: null,
   noteColumn: null,
+  allowCensored: false,
+  lloqColumn: null,
 }
 
 const TIME_UNITS = unitCatalog.unitsOfDimension('time')
@@ -168,8 +171,9 @@ export function CsvDatasetImport({ busy, onImport }: CsvDatasetImportProps) {
             }}
           />
           <p className="text-xs text-muted-foreground">
-            Maximum {MAX_CSV_BYTES / (1024 * 1024)} MiB and 25,000 data rows. Blank cells,
-            qualifiers such as “&lt;0.1”, “BLQ” and “N/A” are rejected with the row number.
+            Maximum {MAX_CSV_BYTES / (1024 * 1024)} MiB and 25,000 data rows. Blank cells and
+            qualifiers such as “&lt;0.1”, “BLQ” and “N/A” are rejected with the row number unless the
+            below-limit import option is enabled.
           </p>
         </div>
 
@@ -298,7 +302,40 @@ export function CsvDatasetImport({ busy, onImport }: CsvDatasetImportProps) {
                 optional
                 onChange={(value) => updateMapping({ noteColumn: value })}
               />
+              <ColumnSelect
+                id="csv-dataset-lloq-column"
+                label="LLOQ column (optional; for BLQ / <LLOQ markers)"
+                headers={uniqueHeaders}
+                value={mapping.lloqColumn}
+                disabled={disabled}
+                optional
+                onChange={(value) => updateMapping({ lloqColumn: value })}
+              />
             </fieldset>
+
+            <div className="flex items-start gap-2 rounded-md border p-3">
+              <input
+                id="csv-dataset-allow-censored"
+                type="checkbox"
+                className="mt-0.5 size-4 rounded border-input focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                checked={mapping.allowCensored}
+                disabled={disabled}
+                data-testid="csv-dataset-allow-censored"
+                aria-describedby="csv-dataset-allow-censored-help"
+                onChange={(event) => updateMapping({ allowCensored: event.target.checked })}
+              />
+              <div className="grid gap-1">
+                <Label htmlFor="csv-dataset-allow-censored" className="font-medium">
+                  Interpret “&lt;number” as a below-limit (BLQ) observation
+                </Label>
+                <p id="csv-dataset-allow-censored-help" className="text-xs text-muted-foreground">
+                  Off by default: “&lt;0.1”, “BLQ” and “&lt;LLOQ” are rejected. When enabled, a
+                  “&lt;number” cell becomes a left-censored record whose number is the quantification
+                  limit — never a measured concentration. “BLQ”/“&lt;LLOQ” still need an explicit
+                  LLOQ column.
+                </p>
+              </div>
+            </div>
 
             <Button type="button" onClick={onPreview} disabled={disabled} data-testid="csv-dataset-preview">
               <FileUp aria-hidden="true" />
@@ -362,7 +399,11 @@ export function CsvDatasetImport({ busy, onImport }: CsvDatasetImportProps) {
                           <TableRow key={measurement.sourceRow}>
                             <TableCell>{measurement.sourceRow}</TableCell>
                             <TableCell>{measurement.time}</TableCell>
-                            <TableCell>{measurement.concentration}</TableCell>
+                            <TableCell>
+                              {isCensoredMeasurementInput(measurement)
+                                ? `${measurement.rawText} (LLOQ ${measurement.limit} ${preview.dataset?.concentrationUnit ?? ''})`
+                                : measurement.concentration}
+                            </TableCell>
                             <TableCell>{measurement.sampleId ?? '—'}</TableCell>
                             <TableCell>{measurement.note ?? '—'}</TableCell>
                           </TableRow>

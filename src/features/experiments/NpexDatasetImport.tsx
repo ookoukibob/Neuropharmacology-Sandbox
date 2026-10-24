@@ -26,6 +26,7 @@ import type {
   ExperimentalDataset,
   ExperimentalDatasetInput,
 } from '@/domain/experiments/experimental-dataset'
+import { isCensoredMeasurementInput } from '@/domain/experiments/experimental-dataset'
 import { readTextFile } from '@/features/import-export/fileIo'
 import {
   MAX_NPEX_BYTES,
@@ -211,7 +212,11 @@ export function NpexDatasetImport({ busy, onImport }: NpexDatasetImportProps) {
                   <TableRow key={measurement.sourceRow}>
                     <TableCell>{measurement.sourceRow}</TableCell>
                     <TableCell>{measurement.time}</TableCell>
-                    <TableCell>{measurement.concentration}</TableCell>
+                    <TableCell>
+                      {isCensoredMeasurementInput(measurement)
+                        ? `${measurement.rawText} (LLOQ ${measurement.limit} ${preview.dataset.concentrationUnit})`
+                        : measurement.concentration}
+                    </TableCell>
                     <TableCell>{measurement.sampleId ?? '—'}</TableCell>
                     <TableCell>{measurement.note ?? '—'}</TableCell>
                   </TableRow>

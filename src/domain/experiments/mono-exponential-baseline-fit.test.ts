@@ -108,7 +108,7 @@ describe('M1 recovers known parameters', () => {
     for (const data of cases) {
       const m0 = monoFit(data)
       const m1 = baselineFit(data)
-      const scale = Math.max(...data.map((measurement) => measurement.concentration)) ** 2
+      const scale = Math.max(...data.map((measurement) => (measurement as { concentration: number }).concentration)) ** 2
       // B = 0 is inside M1's feasible set, so its objective cannot be higher —
       // checked to numerical resolution at the data's own scale, because on
       // noiseless data both sums of squares are floating-point noise.

@@ -88,9 +88,9 @@ describe('data handling that must not change the evidence', () => {
     const base = synth(100, 0.3, [0, 1, 2, 3])
     // Two exact replicates at t = 1, and a duplicate timestamp at t = 2.
     const withReplicates = rows([
-      ...base.map((m) => [m.time, m.concentration] as const),
-      [1, base[1]?.concentration as number],
-      [2, base[2]?.concentration as number],
+      ...base.map((m) => [m.time, (m as { concentration: number }).concentration] as const),
+      [1, (base[1] as { concentration: number } | undefined)?.concentration as number],
+      [2, (base[2] as { concentration: number } | undefined)?.concentration as number],
     ])
     const plain = okFit(fitMonoExponentialDecay(base))
     const replicated = okFit(fitMonoExponentialDecay(withReplicates))

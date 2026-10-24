@@ -24,7 +24,11 @@
  *
  * Pure domain module: no React, no Plotly, no storage.
  */
-import type { ExperimentalMeasurement } from './experimental-dataset'
+import {
+  censoredRefusalMessage,
+  type ExperimentalMeasurement,
+  type QuantifiedMeasurement,
+} from './experimental-dataset'
 
 /** Trapezoidal methods for area under the curve. */
 export type NcaIntegrationMethod = 'linear' | 'linear-up-log-down'
@@ -60,6 +64,8 @@ export type NcaUnavailableCode =
   | 'TERMINAL_TAIL_NOT_POSITIVE'
   /** A measurement is not a valid finite non-negative pair. */
   | 'INVALID_MEASUREMENT'
+  /** A below-quantification-limit record has no numeric concentration to use. */
+  | 'CENSORED_CONCENTRATION_UNSUPPORTED'
 
 export interface NcaMetricAvailable {
   readonly status: 'available'
@@ -359,15 +365,16 @@ function invalidMeasurements(
 ): readonly { sourceRow: number; reason: string }[] | null {
   const invalid: { sourceRow: number; reason: string }[] = []
   for (const measurement of measurements) {
+    const concentration = (measurement as QuantifiedMeasurement).concentration
     if (
       measurement === null ||
       typeof measurement !== 'object' ||
       typeof measurement.time !== 'number' ||
-      typeof measurement.concentration !== 'number' ||
+      typeof concentration !== 'number' ||
       !Number.isFinite(measurement.time) ||
-      !Number.isFinite(measurement.concentration) ||
+      !Number.isFinite(concentration) ||
       measurement.time < 0 ||
-      measurement.concentration < 0
+      concentration < 0
     ) {
       invalid.push({ sourceRow: measurement?.sourceRow ?? 0, reason: 'non-finite or negative time/concentration' })
     }
@@ -413,6 +420,11 @@ export function analyzeNca(
     }
   }
 
+  const censoredRefusal = censoredRefusalMessage(measurements)
+  if (censoredRefusal !== null) {
+    return { ok: false, code: 'CENSORED_CONCENTRATION_UNSUPPORTED', message: censoredRefusal }
+  }
+
   const invalid = invalidMeasurements(measurements)
   if (invalid !== null) {
     return {
@@ -432,7 +444,7 @@ export function analyzeNca(
   const sorted: SortedObservation[] = measurements
     .map((measurement) => ({
       time: measurement.time,
-      concentration: measurement.concentration,
+      concentration: (measurement as QuantifiedMeasurement).concentration,
       sourceRow: measurement.sourceRow,
     }))
     .sort((a, b) => a.time - b.time)

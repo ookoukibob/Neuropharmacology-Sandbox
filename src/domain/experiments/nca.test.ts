@@ -83,7 +83,7 @@ describe('NCA trapezoidal integration', () => {
         [0, 100],
         [1, 50],
         [2, 25],
-      ]).map((row, index) => ({ time: row.time, concentration: row.concentration, sourceRow: index + 1 })),
+      ]).map((row, index) => ({ time: row.time, concentration: (row as { concentration: number }).concentration, sourceRow: index + 1 })),
       'linear',
     )
     expect(area).not.toBeNull()
@@ -122,7 +122,7 @@ describe('NCA log-linear terminal regression', () => {
         [0, 100],
         [1, 0],
         [2, 10],
-      ]).map((row, index) => ({ time: row.time, concentration: row.concentration, sourceRow: index + 1 })),
+      ]).map((row, index) => ({ time: row.time, concentration: (row as { concentration: number }).concentration, sourceRow: index + 1 })),
     )
     expect(result).toBeNull()
   })

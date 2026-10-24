@@ -402,4 +402,31 @@ describe('DexieExperimentalDatasetRepository', () => {
     expect(deleted.ok).toBe(false)
     if (!deleted.ok) expect(deleted.code).toBe('NOT_FOUND')
   })
+
+  it('preserves below-limit records through create and read-back', async () => {
+    const outcome = await repo.create(
+      input({
+        measurements: [
+          { sourceRow: 1, time: 0, concentration: 5 },
+          { sourceRow: 2, time: 1, censored: true, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 0.1, sampleId: 'A' },
+        ],
+      }),
+    )
+    if (!outcome.ok) throw new Error(outcome.message)
+    expect(outcome.dataset.measurements).toEqual([
+      { id: 'id-2', sourceRow: 1, time: 0, concentration: 5 },
+      { id: 'id-3', sourceRow: 2, time: 1, censored: true, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 0.1, sampleId: 'A' },
+    ])
+
+    const read = await repo.get(outcome.dataset.id)
+    if (!read.ok) throw new Error(read.message)
+    expect(read.dataset.measurements[1]).toMatchObject({
+      censored: true,
+      censoring: 'below-quantification-limit',
+      rawText: '<0.1',
+      limit: 0.1,
+    })
+    // The limit never became a measured concentration.
+    expect(JSON.stringify(read.dataset.measurements)).not.toContain('"concentration":0.1')
+  })
 })

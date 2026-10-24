@@ -1,6 +1,6 @@
 # Experimental concentration–time datasets
 
-**Status: Phases 47A–47C, Phase 48 and Phases 50A–50E — implemented.**
+**Status: Phases 47A–47C, Phase 48 and Phases 50A–50F — implemented.**
 This document is the contract for measured-dataset import, validation, local
 storage, inspection and `.npex` interchange, the optional one-compartment
 mono-exponential decay fit (§10), raw-residual/RMSE diagnostics (§11), the
@@ -8,7 +8,8 @@ practical identifiability screen (§12), the two-candidate comparison with a
 conditional common-variance AICc (§13), residual-structure diagnostics with a
 residual-spread screen (§14), the opt-in proportional-variance likelihood
 path (§15), noncompartmental analysis (§16), administration and dose-dependent
-analyses (§17–§20), and sampling coverage diagnostics (§21).
+analyses (§17–§20), sampling coverage diagnostics (§21), and explicit
+below-quantification-limit observations (§22).
 
 All examples below are synthetic test data, not pharmacological information.
 
@@ -2087,3 +2088,75 @@ bound on true fluctuation.
 All results are ephemeral. No measurement or administration field is written,
 no schema or migration is added, `.npex` remains **1.2.0**, `.npsb` remains
 **1.1.0**, and no dependency or third-party notice changes are needed.
+
+## 22. Below-quantification-limit observations (Phase 50F)
+
+An experimental dataset can now record that a concentration was **below the
+lower limit of quantification** (BLQ). This is a data-representation phase, not
+a BLQ analysis phase: the record is preserved honestly and numeric analyses
+that need a concentration refuse it instead of substituting a value.
+
+### 22.1 Data model
+
+`ExperimentalMeasurement` is a discriminated union:
+
+- **Quantified observation** — an actually recorded, finite, non-negative
+  `concentration`. This is the only shape older readers understood; a record
+  has no `censored` field, so pre-50F data remain quantified with no migration.
+- **Below-quantification-limit observation** — carries `censored: true`,
+  `censoring: 'below-quantification-limit'`, the unchanged original `rawText`,
+  and a numeric `limit` (the LLOQ) in the dataset's declared concentration
+  unit. It has **no** `concentration`.
+
+`limit` is a detection bound, never a substitute value: it is finite and
+strictly positive, and it is never read as a measured concentration. The
+dataset's concentration unit is the unit of every limit — no unit is inferred
+from a file name, header or value magnitude.
+
+### 22.2 CSV import
+
+`<number` (for example `<0.1`) is interpreted as a left-censored bound **only
+when the analyst enables the below-limit import option**; with the option off,
+the same text is rejected exactly as before. `BLQ`, `<LLOQ`, `LLQ` and `LLOQ`
+markers have no inline number and require an explicitly mapped LLOQ column; the
+cell value of that column is the bound. A mapped LLOQ column that disagrees with
+an inline `<number` bound is a per-row conflict. Zero, negative, non-finite or
+unparsable limits are rejected by source row.
+
+### 22.3 Analysis boundary
+
+Every numeric concentration analysis — NCA (`AUC`, terminal phase, λ_z, t½),
+interval `AUCτ` and steady-state parameters, interval exposure metrics
+(`Cmax,obs`/`Cmin,obs`, means, fluctuation), the mono-exponential and
+baseline fits, residual diagnostics, model comparison, and the
+proportional-variance likelihood — returns a structured
+`CENSORED_CONCENTRATION_UNSUPPORTED` refusal (naming the BLQ count and source
+rows) whenever a BLQ record is present. No analysis silently drops the BLQ row,
+computes on the remaining rows as if the curve were complete, or treats the
+limit as a concentration.
+
+The time-only sampling-coverage diagnostics keep the BLQ record's real sampling
+time: record counts, distinct-time counts, adjacent gaps, boundary coverage and
+repeated-time groups remain available. Only the observed-extreme location is
+unavailable, because it reuses the phase-50D exposure report, which itself
+refused the BLQ records.
+
+### 22.4 Format, storage and compatibility
+
+`.npex` advances to **1.3.0**. Quantified measurements are byte-identical to
+1.2.0, so 1.0–1.2 files still import unchanged, and an older reader rejects a
+1.3 file rather than silently dropping the censored contract. A BLQ record
+round-trips its `censored`, `censoring`, `rawText`, `limit`, `sourceRow`, order,
+sample id and note exactly. `.npsb` stays **1.1.0**: the raw-row snapshot
+already preserves the new fields verbatim. The IndexedDB repository creates,
+reads, updates and restores the union without ever converting a limit into a
+concentration. No implicit migration turns an old numeric record into a
+censored one.
+
+### 22.5 Not implemented
+
+- BLQ numeric substitution (0, LLOQ/2, LLOQ/√2, maximum likelihood);
+- BLQ-aware NCA or censored-data statistical models;
+- point estimation of the true concentration;
+- population PK or any censored likelihood;
+- clinical dose recommendations.

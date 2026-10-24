@@ -119,7 +119,7 @@ test('CSV → chart → .npex round trip, rename, reload, delete and narrow layo
     }
   }
   expect(npex.formatId).toBe('npex')
-  expect(npex.formatVersion).toBe('1.2.0')
+  expect(npex.formatVersion).toBe('1.3.0')
   expect(npex.dataset.name).toBe('Synthetic 47A measured study')
   expect(npex.dataset.timeUnit).toBe('h')
   expect(npex.dataset.concentrationUnit).toBe('mg/L')
@@ -826,4 +826,66 @@ test('reports observed exposure without inventing a steady-state mean', async ({
   await expect(page.getByTestId('exposure-fluctuation-status')).toContainText('not applicable')
   await expect(page.getByTestId('exposure-unavailable')).toContainText('REGIMEN_NOT_STEADY_STATE')
   await expect(page.getByTestId('exposure-scope')).toContainText('not the true extremes between samples')
+})
+
+test('imports below-limit records, refuses numeric NCA and round-trips them', async ({ page }) => {
+  await page.goto('/experiments')
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+
+  await page.getByTestId('csv-dataset-file').setInputFiles({
+    name: 'synthetic-blq.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(
+      'time,conc,lloq\n0,5,0.1\n1,<0.1,0.1\n2,BLQ,0.1\n3,4,0.1\n',
+      'utf8',
+    ),
+  })
+  await expect(page.getByTestId('csv-dataset-mapping')).toBeVisible()
+  await page.getByTestId('csv-dataset-name').fill('Synthetic BLQ study')
+  await page.getByTestId('csv-dataset-time-column').selectOption('0')
+  await page.getByTestId('csv-dataset-time-unit').selectOption('h')
+  await page.getByTestId('csv-dataset-concentration-column').selectOption('1')
+  await page.getByTestId('csv-dataset-concentration-unit').selectOption('mg/L')
+  await page.getByTestId('csv-dataset-lloq-column').selectOption('2')
+  // Without the opt-in the "<0.1" and "BLQ" cells would be rejected.
+  await page.getByTestId('csv-dataset-allow-censored').check()
+  await page.getByTestId('csv-dataset-preview').click()
+
+  // The preview keeps the limit out of the concentration column.
+  const preview = page.getByTestId('csv-dataset-preview-result')
+  await expect(preview).toContainText('<0.1 (LLOQ 0.1 mg/L)')
+  await expect(preview).toContainText('BLQ (LLOQ 0.1 mg/L)')
+  await page.getByTestId('csv-dataset-confirm').click()
+  await expect(page.getByRole('heading', { level: 2, name: 'Synthetic BLQ study' })).toBeVisible()
+
+  // The stored table distinguishes censored from quantified rows.
+  const rows = page.locator('[data-testid="dataset-measurement-row"]')
+  await expect(rows).toHaveCount(4)
+  await expect(rows.nth(1)).toContainText('<0.1')
+  await expect(rows.nth(2)).toContainText('BLQ')
+  // Numeric NCA refuses the whole dataset rather than reading a limit as a value.
+  await expect(page.getByTestId('nca-error')).toContainText('below-quantification-limit')
+  await expect(page.getByTestId('nca-error')).toContainText('source rows 2, 3')
+
+  // Export → re-import preserves the censored contract at .npex 1.3.0.
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('dataset-export').click()
+  const download = await downloadPromise
+  const npexPath = await download.path()
+  if (npexPath === null) throw new Error('.npex export produced no file path')
+  const npexText = readFileSync(npexPath, 'utf8')
+  const npex = JSON.parse(npexText) as { formatVersion: string; dataset: { measurements: unknown[] } }
+  expect(npex.formatVersion).toBe('1.3.0')
+  expect(npex.dataset.measurements).toEqual([
+    { sourceRow: 1, time: 0, concentration: 5 },
+    { sourceRow: 2, time: 1, censored: true, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 0.1 },
+    { sourceRow: 3, time: 2, censored: true, censoring: 'below-quantification-limit', rawText: 'BLQ', limit: 0.1 },
+    { sourceRow: 4, time: 3, concentration: 4 },
+  ])
+
+  await page.getByTestId('npex-dataset-file').setInputFiles(npexPath)
+  const reimport = page.getByTestId('npex-dataset-preview')
+  await expect(reimport).toContainText('Synthetic BLQ study')
+  await page.getByTestId('npex-dataset-confirm').click()
+  await expect(page.getByText('2 datasets', { exact: true })).toBeVisible()
 })
