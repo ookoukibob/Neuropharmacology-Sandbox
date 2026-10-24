@@ -761,7 +761,8 @@ export function analyzeIntervalExposure(input: IntervalExposureInput): IntervalE
           unit: '%',
           substitution: `100 × (${auditNumber(cmaxObs.value as number)} − ${auditNumber(cminObs.value as number)}) ${concentrationUnit} ÷ ${auditNumber(denominator)} ${concentrationUnit} = ${auditNumber(value)} %`,
           assumptions: [
-            'The peak and trough are OBSERVED values: with sparse sampling the true extremes may lie between samples, so this fluctuation is a lower bound on the true one.',
+            'Cmax,obs and Cmin,obs are OBSERVED sample extremes, and Cavg,ss is an AUCτ-based ESTIMATE of the interval mean: sparse sampling may miss the actual peak or trough, and the trapezoidal area is itself an estimate.',
+            'The percentage is therefore an observed-data-based estimate. Without assumptions about the concentration–time profile between samples and about the integration error, it is not guaranteed to be a lower bound on the true normalized fluctuation.',
             'The denominator is Cavg,ss over exactly one dosing interval τ at the declared steady state.',
           ],
           notes: [],

@@ -270,9 +270,11 @@ export function IntervalExposureSummary({ report }: { readonly report: IntervalE
       <p className="text-xs text-muted-foreground" data-testid="exposure-scope">
         The peak and trough are the largest and smallest concentrations actually sampled inside the
         interval — not the true extremes between samples. They are never averaged, interpolated, smoothed
-        or fitted. The steady-state mean and the fluctuation exist only for a dataset declared to be at
-        steady state with an interval confirmed to start at a dose, and they are never inferred from the
-        curve. These are exploratory pharmacokinetic summaries, not clinical dose recommendations.
+        or fitted. Because the mean is an AUCτ-based estimate, the reported fluctuation is an
+        observed-data-based estimate — not a guaranteed lower bound on the true fluctuation. The
+        steady-state mean and the fluctuation exist only for a dataset declared to be at steady state with
+        an interval confirmed to start at a dose, and they are never inferred from the curve. These are
+        exploratory pharmacokinetic summaries, not clinical dose recommendations.
       </p>
     </section>
   )
