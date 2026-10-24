@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { ExperimentalMeasurement } from '@/domain/experiments/experimental-dataset'
+import type { AdministrationMetadata, ExperimentalMeasurement } from '@/domain/experiments/experimental-dataset'
 import {
   analyzeNca,
   DEFAULT_TERMINAL_POINT_COUNT,
@@ -7,6 +7,11 @@ import {
   type NcaIntegrationMethod,
   type NcaMetric,
 } from '@/domain/experiments/nca'
+import {
+  analyzeDoseDependentNca,
+  type DoseDependentNcaReport,
+} from '@/domain/experiments/dose-dependent-nca'
+import { DoseDependentNcaSection } from './DoseDependentNcaSection'
 import { formatNumber } from '@/engine/numeric/decimal'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -44,6 +49,8 @@ interface NcaCardProps {
   readonly measurements: readonly ExperimentalMeasurement[]
   readonly timeUnit: string
   readonly concentrationUnit: string
+  /** Recorded administration context (phase 50A); absent means not recorded. */
+  readonly administration: AdministrationMetadata | undefined
 }
 
 /**
@@ -52,15 +59,25 @@ interface NcaCardProps {
  * The integration method and terminal point count are explicit, user-reviewable
  * settings; every value below is derived and ephemeral, never persisted. A
  * metric the data cannot support is shown as unavailable with its reason, never
- * as a fabricated number.
+ * as a fabricated number. Dose-dependent parameters reuse the same analysis.
  */
-export function NcaCard({ measurements, timeUnit, concentrationUnit }: NcaCardProps) {
+export function NcaCard({ measurements, timeUnit, concentrationUnit, administration }: NcaCardProps) {
   const [integrationMethod, setIntegrationMethod] = useState<NcaIntegrationMethod>('linear')
   const [terminalPointCount, setTerminalPointCount] = useState(DEFAULT_TERMINAL_POINT_COUNT)
 
   const analysis = useMemo(
     () => analyzeNca(measurements, timeUnit, concentrationUnit, { integrationMethod, terminalPointCount }),
     [measurements, timeUnit, concentrationUnit, integrationMethod, terminalPointCount],
+  )
+
+  // Dose-dependent parameters consume the SAME analysis the table displays;
+  // the NCA is never recomputed for them.
+  const doseDependent = useMemo(
+    () =>
+      analysis.ok
+        ? analyzeDoseDependentNca({ timeUnit, concentrationUnit, administration, nca: analysis })
+        : null,
+    [analysis, timeUnit, concentrationUnit, administration],
   )
 
   return (
@@ -114,6 +131,7 @@ export function NcaCard({ measurements, timeUnit, concentrationUnit }: NcaCardPr
             measurementCount={measurements.length}
             timeUnit={timeUnit}
             concentrationUnit={concentrationUnit}
+            doseDependent={doseDependent}
           />
         )}
       </CardContent>
@@ -126,11 +144,13 @@ function NcaResults({
   measurementCount,
   timeUnit,
   concentrationUnit,
+  doseDependent,
 }: {
   analysis: NcaAnalysis
   measurementCount: number
   timeUnit: string
   concentrationUnit: string
+  doseDependent: DoseDependentNcaReport | null
 }) {
   const rows: readonly { label: string; metric: NcaMetric; testId: string }[] = [
     { label: 'Cmax (maximum observed concentration)', metric: analysis.cmax, testId: 'nca-cmax' },
@@ -238,6 +258,8 @@ function NcaResults({
         λ_z in {timeUnit}⁻¹. The extrapolated fraction is a quality criterion, not a proof that the
         estimate is valid.
       </p>
+
+      {doseDependent === null ? null : <DoseDependentNcaSection report={doseDependent} />}
     </>
   )
 }

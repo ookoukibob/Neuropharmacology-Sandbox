@@ -645,7 +645,9 @@ test('records and displays administration metadata without touching measurements
 
   await importTwoColumnCsv(page, {
     fileName: 'synthetic-admin.csv',
-    csv: 'time,concentration\n0,100\n1,60.653\n2,36.788\n',
+    csv:
+      'time,concentration\n' +
+      '0,100\n1,60.653\n2,36.788\n3,22.313\n4,13.534\n5,8.208\n',
     name: 'Synthetic administration study',
   })
 
@@ -666,5 +668,15 @@ test('records and displays administration metadata without touching measurements
   await expect(summary).toContainText('IV bolus')
   await expect(summary).toContainText('100 mg')
   await expect(summary).toContainText('Dose administration time')
-  await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(3)
+  await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(6)
+
+  // The dose-dependent NCA now has what it needs: an IV bolus with an explicit
+  // dose, a single-dose regimen, a matching time origin and a complete AUC(0→∞).
+  await expect(page.getByTestId('dose-dependent-cl')).toContainText('L/h')
+  await expect(page.getByTestId('dose-dependent-cl-status')).toContainText('available')
+  await expect(page.getByTestId('dose-dependent-vz')).toContainText(/L$/)
+  // F = 1 by the IV route, so the apparent twins are explicitly not applicable.
+  await expect(page.getByTestId('dose-dependent-cl-f-status')).toContainText('not applicable')
+  // The audit block names the dose and the AUC interval that were used.
+  await expect(page.getByTestId('dose-dependent-inputs')).toContainText('100 mg')
 })

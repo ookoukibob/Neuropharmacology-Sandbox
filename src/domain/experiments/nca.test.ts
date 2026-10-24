@@ -310,6 +310,7 @@ describe('NCA main analysis', () => {
     expect(metric(analysis, 'aucLast').value).toBeGreaterThan(0)
     // But extrapolation cannot be anchored at a zero last observation.
     expect(analysis.aucInf.status).toBe('unavailable')
+    expect(analysis.aucInfInterval).toBeNull()
     if (analysis.aucInf.status === 'unavailable') {
       expect(analysis.aucInf.code).toBe('TERMINAL_TAIL_NOT_POSITIVE')
     }
@@ -419,6 +420,8 @@ describe('NCA main analysis', () => {
     expect(aucInf.name).toBe('AUC(0→∞)')
     expect(aucInf.method).toBe('AUC(last) + C_last/λ_z')
     expect(aucInf.value).toBeCloseTo(112.5 + 25 / Math.LN2, 8)
+    // The explicit interval discriminant carries the same fact as the name.
+    expect(analysis.aucInfInterval).toBe('zero-to-infinity')
     // The fraction is named for the complete curve.
     expect(metric(analysis, 'extrapolatedFraction').method).toBe('(AUC(0→∞) − AUC(0→last)) / AUC(0→∞)')
     expect(metric(analysis, 'extrapolatedFraction').value).toBeCloseTo((25 / Math.LN2) / (112.5 + 25 / Math.LN2), 8)
@@ -444,6 +447,9 @@ describe('NCA main analysis', () => {
     expect(aucInf.name).not.toBe('AUC(0→∞)')
     expect(aucInf.method).toBe('AUC(first→last) + C_last/λ_z')
     expect(aucInf.value).toBeCloseTo(112.5 + 25 / Math.LN2, 8)
+    // The discriminant is NOT `zero-to-infinity`, so a dose-dependent consumer
+    // can refuse it without parsing the display name.
+    expect(analysis.aucInfInterval).toBe('first-to-infinity')
     // The partial-interval disclosure is carried on the metric itself.
     expect(aucInf.notes?.some((note) => /before the first observation is not included/.test(note))).toBe(true)
   })

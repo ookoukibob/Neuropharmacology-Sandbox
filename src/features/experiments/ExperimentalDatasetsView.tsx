@@ -835,6 +835,7 @@ function DatasetDetail({ dataset, busy, onRename, onSetAdministration, onDelete 
             measurements={dataset.measurements}
             timeUnit={dataset.timeUnit}
             concentrationUnit={dataset.concentrationUnit}
+            administration={dataset.administration}
           />
 
           <div className="max-h-[36rem] overflow-auto rounded-md border">

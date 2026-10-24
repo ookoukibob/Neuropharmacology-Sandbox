@@ -1039,6 +1039,60 @@ known and unknown contexts without inventing information.
 
 ---
 
+## ADR-31 · Dose-dependent NCA is gated on explicit preconditions and never substitutes a partial AUC
+
+**Context.** Phase 50A added optional administration metadata. Phase 50B turns
+it into `CL`, `CL/F`, `Vz` and `Vz/F`. The danger is that every one of these
+parameters is numerically computable from almost any dataset — `Dose/AUC`
+always returns a number — while being scientifically meaningless when the
+route, time origin, regimen or AUC interval are wrong.
+
+**Decision.**
+
+- **A dedicated pure domain module** (`src/domain/experiments/dose-dependent-nca.ts`)
+  consumes the *existing* `NcaAnalysis`; it never re-implements AUC or λ_z.
+- **A complete `AUC(0→∞)` is mandatory.** The NCA result now carries an
+  explicit `aucInfInterval: 'zero-to-infinity' | 'first-to-infinity' | null`
+  discriminant, so this module refuses a partial interval without parsing a
+  display name. `AUC(first→∞)` is never substituted, even though it is
+  numerically available.
+- **Single dose only.** `repeated-dose`, `repeated-dose-steady-state` and
+  `unknown` are refused; τ is never treated as the analysis interval and no
+  `AUCτ` is invented.
+- **Route and time origin are explicit.** A bolus or extravascular dose needs
+  `timeReference = dose-time`; an infusion needs `infusion-start`. Time zero is
+  never assumed to be a dose time. `other`/`unknown` routes are refused.
+- **Absolute vs apparent are separate results.** `CL`/`Vz` require `F`
+  (an IV route supplies `F = 1` by definition); `CL/F`/`Vz/F` do not. For IV,
+  the apparent twins are `not-applicable`, not duplicated values.
+- **Units go through the unit catalog.** Mass → g, mass-concentration → g/L,
+  time → h via `toBase`; the result is `L/h` and `L`. A molar concentration
+  with a mass dose is refused rather than converted with an invented molecular
+  weight. No second conversion table is introduced.
+- **Four states, not one.** `available`, `conditional` (a recorded caveat:
+  >20 % extrapolated, weak terminal R², extravascular flip-flop), `unavailable`
+  (a structured code and message), and `not-applicable` (F = 1 for IV).
+- **Full audit trail.** Dose, AUC, λ_z, F, formula, substitution and the checked
+  preconditions travel with every result; the UI only renders them.
+- **No persistence change.** Derived values are ephemeral and never written to
+  the dataset, `.npex` or `.npsb`.
+
+**Rejected alternatives.** *Compute whenever the arithmetic succeeds* — it
+would publish a meaningless clearance from an unknown route or a partial AUC.
+*Reuse the display name to detect the AUC interval* — a string match is not a
+contract; the explicit discriminant is. *Treat an extravascular terminal slope
+as elimination* — it may be absorption-limited (flip-flop), so the volume is
+conditional, not absolute. *Derive the dose from rate × duration* — the
+metadata records at most one of them, and a silent derivation would be a second
+dose representation.
+
+**Consequences.** Every displayed dose-dependent value has a stated formula,
+unit, input provenance and precondition list. Missing or contradictory metadata
+produces a specific refusal instead of a plausible-looking number. Repeated
+dosing remains a candidate Phase 50C task (`AUCτ` at a declared interval).
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

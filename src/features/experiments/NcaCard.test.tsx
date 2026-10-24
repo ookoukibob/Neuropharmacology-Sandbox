@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import type { ExperimentalMeasurement } from '@/domain/experiments/experimental-dataset'
+import type {
+  AdministrationMetadata,
+  ExperimentalMeasurement,
+} from '@/domain/experiments/experimental-dataset'
 import { NcaCard } from './NcaCard'
 
 const rows = (pairs: readonly (readonly [number, number])[]): ExperimentalMeasurement[] =>
@@ -21,9 +24,18 @@ const decaying = rows([
   [5, 8.208],
 ])
 
+const ivBolus: AdministrationMetadata = {
+  route: 'iv-bolus',
+  regimen: 'single-dose',
+  timeReference: 'dose-time',
+  dose: { value: 100, unit: 'mg' },
+}
+
 describe('NcaCard', () => {
   it('shows observed and derived parameters with their units', () => {
-    render(<NcaCard measurements={decaying} timeUnit="h" concentrationUnit="mg/L" />)
+    render(
+      <NcaCard measurements={decaying} timeUnit="h" concentrationUnit="mg/L" administration={undefined} />,
+    )
 
     expect(screen.getByText(/Noncompartmental analysis/i)).toBeInTheDocument()
     expect(screen.getByTestId('nca-cmax')).toHaveTextContent(/mg\/L/)
@@ -49,6 +61,7 @@ describe('NcaCard', () => {
         ])}
         timeUnit="h"
         concentrationUnit="mg/L"
+        administration={undefined}
       />,
     )
     expect(screen.getByTestId('nca-auc-last').closest('tr')).toHaveTextContent('AUC(first→last)')
@@ -56,7 +69,9 @@ describe('NcaCard', () => {
   })
 
   it('switches the integration method and the terminal point count', () => {
-    const { rerender } = render(<NcaCard measurements={decaying} timeUnit="h" concentrationUnit="mg/L" />)
+    const { rerender } = render(
+      <NcaCard measurements={decaying} timeUnit="h" concentrationUnit="mg/L" administration={undefined} />,
+    )
     const linear = screen.getByTestId('nca-auc-last').textContent
 
     fireEvent.change(screen.getByTestId('nca-integration-method'), {
@@ -69,7 +84,9 @@ describe('NcaCard', () => {
     fireEvent.change(screen.getByTestId('nca-terminal-points'), { target: { value: '4' } })
     expect(screen.getByTestId('nca-terminal')).toHaveTextContent(/source rows 3, 4, 5, 6/)
 
-    rerender(<NcaCard measurements={decaying} timeUnit="h" concentrationUnit="mg/L" />)
+    rerender(
+      <NcaCard measurements={decaying} timeUnit="h" concentrationUnit="mg/L" administration={undefined} />,
+    )
   })
 
   it('reports duplicate sampling times without fabricating an AUC', () => {
@@ -83,6 +100,7 @@ describe('NcaCard', () => {
         ])}
         timeUnit="h"
         concentrationUnit="mg/L"
+        administration={undefined}
       />,
     )
     expect(screen.getByTestId('nca-auc-last')).toHaveTextContent('unavailable')
@@ -102,6 +120,7 @@ describe('NcaCard', () => {
         ])}
         timeUnit="h"
         concentrationUnit="mg/L"
+        administration={undefined}
       />,
     )
     expect(screen.getByTestId('nca-lambda-z')).toHaveTextContent('unavailable')
@@ -109,7 +128,9 @@ describe('NcaCard', () => {
   })
 
   it('marks the extrapolated AUC and its fraction as extrapolated/calculated', () => {
-    render(<NcaCard measurements={decaying} timeUnit="h" concentrationUnit="mg/L" />)
+    render(
+      <NcaCard measurements={decaying} timeUnit="h" concentrationUnit="mg/L" administration={undefined} />,
+    )
     const table = screen.getByTestId('nca-table')
     const aucInfRow = screen.getByTestId('nca-auc-inf').closest('tr') as HTMLElement
     expect(aucInfRow).toHaveTextContent('AUC(0→∞)')
@@ -128,6 +149,7 @@ describe('NcaCard', () => {
         ])}
         timeUnit="h"
         concentrationUnit="mg/L"
+        administration={undefined}
       />,
     )
     // The extrapolated AUC is named for the partial interval, not AUC(0→∞).
@@ -137,5 +159,69 @@ describe('NcaCard', () => {
     expect(screen.getByTestId('nca-interval-limitation')).toHaveTextContent(/not included/i)
     expect(screen.getByTestId('nca-interval-limitation')).toHaveTextContent(/not directly interchangeable/i)
     expect(screen.getByTestId('nca-warnings')).toHaveTextContent(/before the first observation is excluded/i)
+  })
+
+  it('shows an explicit unavailable reason when no administration metadata is recorded', () => {
+    render(
+      <NcaCard measurements={decaying} timeUnit="h" concentrationUnit="mg/L" administration={undefined} />,
+    )
+    expect(screen.getByTestId('dose-dependent-nca')).toBeInTheDocument()
+    expect(screen.getByTestId('dose-dependent-cl')).toHaveTextContent('—')
+    expect(screen.getByTestId('dose-dependent-cl-status')).toHaveTextContent('unavailable')
+    expect(screen.getByTestId('dose-dependent-unavailable')).toHaveTextContent(/ADMINISTRATION_MISSING/)
+  })
+
+  it('shows absolute CL and Vz for an IV bolus and marks the apparent twins not applicable', () => {
+    render(
+      <NcaCard measurements={decaying} timeUnit="h" concentrationUnit="mg/L" administration={ivBolus} />,
+    )
+    expect(screen.getByTestId('dose-dependent-cl')).toHaveTextContent(/L\/h/)
+    expect(screen.getByTestId('dose-dependent-cl-status')).toHaveTextContent('available')
+    expect(screen.getByTestId('dose-dependent-vz')).toHaveTextContent(/ L$/)
+    expect(screen.getByTestId('dose-dependent-cl-f-status')).toHaveTextContent('not applicable')
+    expect(screen.getByTestId('dose-dependent-vz-f-status')).toHaveTextContent('not applicable')
+    // The audit block shows the dose and the AUC interval actually used.
+    const inputs = screen.getByTestId('dose-dependent-inputs')
+    expect(inputs).toHaveTextContent('100 mg')
+    expect(inputs).toHaveTextContent(/AUC\(0→∞\)/)
+    expect(inputs).toHaveTextContent(/1 by the IV route definition/)
+  })
+
+  it('reports only the apparent parameters for an extravascular dose without F', () => {
+    render(
+      <NcaCard
+        measurements={decaying}
+        timeUnit="h"
+        concentrationUnit="mg/L"
+        administration={{
+          route: 'extravascular',
+          regimen: 'single-dose',
+          timeReference: 'dose-time',
+          dose: { value: 100, unit: 'mg' },
+        }}
+      />,
+    )
+    expect(screen.getByTestId('dose-dependent-cl-status')).toHaveTextContent('unavailable')
+    expect(screen.getByTestId('dose-dependent-unavailable')).toHaveTextContent(/BIOAVAILABILITY_MISSING/)
+    expect(screen.getByTestId('dose-dependent-cl-f-status')).toHaveTextContent('available')
+    expect(screen.getByTestId('dose-dependent-vz-f-status')).toHaveTextContent('conditional')
+    expect(screen.getByTestId('dose-dependent-conditional')).toHaveTextContent(/flip-flop/i)
+  })
+
+  it('refuses a partial interval even when administration metadata is complete', () => {
+    render(
+      <NcaCard
+        measurements={rows([
+          [1, 100],
+          [2, 50],
+          [3, 25],
+        ])}
+        timeUnit="h"
+        concentrationUnit="mg/L"
+        administration={ivBolus}
+      />,
+    )
+    expect(screen.getByTestId('dose-dependent-cl-status')).toHaveTextContent('unavailable')
+    expect(screen.getByTestId('dose-dependent-unavailable')).toHaveTextContent(/AUC_NOT_COMPLETE/)
   })
 })
