@@ -731,6 +731,18 @@ test('analyses a selected steady-state interval only after it is confirmed', asy
   await expect(intervalBlock).toContainText('mg/L·h')
   await expect(intervalBlock).toContainText('1, 2, 3, 4, 5, 6, 7')
 
+  // Interval exposure: the observed peak/trough and the interval mean are
+  // reported from the same selected interval, before any steady-state claim.
+  await expect(page.getByTestId('exposure-cmax-obs')).toContainText('100 mg/L')
+  await expect(page.getByTestId('exposure-tmax-obs')).toContainText('0 h')
+  await expect(page.getByTestId('exposure-cmin-obs')).toContainText('40 mg/L')
+  await expect(page.getByTestId('exposure-tmin-obs')).toContainText('12 h')
+  await expect(page.getByTestId('exposure-cavg-interval')).toContainText('70 mg/L')
+  await expect(page.getByTestId('exposure-peak-observations')).toContainText('source row 1')
+  await expect(page.getByTestId('exposure-trough-observations')).toContainText('source row 7')
+  // The steady-state mean stays withheld until the alignment is confirmed.
+  await expect(page.getByTestId('exposure-cavg-ss-status')).toContainText('unavailable')
+
   // Without the analyst's confirmation the steady-state parameters stay refused.
   await expect(page.getByTestId('steady-state-unavailable')).toContainText('INTERVAL_NOT_ALIGNED')
 
@@ -741,6 +753,49 @@ test('analyses a selected steady-state interval only after it is confirmed', asy
   await expect(page.getByTestId('steady-state-cl-f-status')).toContainText('not applicable')
   await expect(page.getByTestId('steady-state-inputs')).toContainText('per-administration')
 
+  // With the confirmation, the steady-state mean and the fluctuation follow:
+  // 840 / 12 = 70 mg/L and 100 · (100 − 40) / 70 = 85.714… %.
+  await expect(page.getByTestId('exposure-cavg-ss-status')).toContainText('available')
+  await expect(page.getByTestId('exposure-cavg-ss')).toContainText('70 mg/L')
+  await expect(page.getByTestId('exposure-fluctuation')).toContainText('85.714')
+  await expect(page.getByTestId('exposure-fluctuation')).toContainText('%')
+
   // The recorded measurements are untouched by any of the analysis.
   await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(7)
+})
+
+test('reports observed exposure without inventing a steady-state mean', async ({ page }) => {
+  await page.goto('/experiments')
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+
+  await importTwoColumnCsv(page, {
+    fileName: 'synthetic-repeated.csv',
+    csv:
+      'time,concentration\n' +
+      '0,100\n2,90\n4,80\n6,70\n8,60\n10,50\n12,40\n',
+    name: 'Synthetic repeated-dose study',
+  })
+
+  // Repeated dosing NOT at steady state, with τ recorded so an interval exists.
+  await page.getByTestId('administration-edit').click()
+  await page.getByTestId('administration-route').selectOption('iv-bolus')
+  await page.getByTestId('administration-regimen').selectOption('repeated-dose')
+  await page.getByTestId('administration-time-reference').selectOption('dose-time')
+  await page.getByTestId('administration-dose').fill('84')
+  await page.getByTestId('administration-dose-basis').selectOption('per-administration')
+  await page.getByTestId('administration-interval').fill('12')
+  await page.getByTestId('administration-save').click()
+
+  await page.getByTestId('repeated-interval-start').selectOption('0')
+  await page.getByTestId('repeated-interval-end').selectOption('12')
+  await page.getByTestId('interval-aligned').check()
+
+  // The observed metrics are descriptive and available...
+  await expect(page.getByTestId('exposure-cmax-obs')).toContainText('100 mg/L')
+  await expect(page.getByTestId('exposure-cavg-interval')).toContainText('70 mg/L')
+  // ...but nothing is published as a steady-state conclusion.
+  await expect(page.getByTestId('exposure-cavg-ss-status')).toContainText('not applicable')
+  await expect(page.getByTestId('exposure-fluctuation-status')).toContainText('not applicable')
+  await expect(page.getByTestId('exposure-unavailable')).toContainText('REGIMEN_NOT_STEADY_STATE')
+  await expect(page.getByTestId('exposure-scope')).toContainText('not the true extremes between samples')
 })

@@ -1847,3 +1847,121 @@ implementation requires both interval boundaries to be actual observations and
 requires an explicit analyst confirmation that the interval starts at a dose;
 it never auto-selects an interval; and it refuses dose-dependent parameters for
 a non-steady-state repeated regimen instead of computing `AUCτ`-based values.
+
+## 20. Observed interval exposure metrics (Phase 50D)
+
+Seven metrics over the **same** selected interval that §19 integrates. They add
+no new interval logic: the window, its `AUCτ`, its source rows and its λ_z all
+come from the `IntervalAucReport` of §19.
+
+### 20.1 Definitions
+
+| Metric | Definition | Kind |
+| --- | --- | --- |
+| `Cmax,obs` | largest concentration actually sampled inside `[t_start, t_end]` | observed |
+| `Tmax,obs` | the sampling time(s) attaining `Cmax,obs` | observed |
+| `Cmin,obs` | smallest concentration actually sampled inside the interval | observed |
+| `Tmin,obs` | the sampling time(s) attaining `Cmin,obs` | observed |
+| `Cavg,interval` | `AUCτ / (t_end − t_start)` — the interval's own duration | calculated |
+| `Cavg,ss` | `AUCτ / τ` — steady state only | calculated |
+| Fluctuation | `100 × (Cmax,obs − Cmin,obs) / Cavg,ss` — steady state only | calculated |
+
+Both interval boundaries are included. No concentration from outside the
+interval can contribute: a dataset may contain a much higher (or lower) value
+after `t_end`, and the interval metrics ignore it by construction.
+
+### 20.2 Sparse sampling: what these numbers are and are not
+
+`Cmax,obs` is the largest concentration the sampling scheme **happened to
+observe**. It is not the true peak: the highest concentration may occur between
+two samples. `Cmin,obs` is likewise a sampled minimum, not a measured trough if
+sampling stopped before the true trough. Nothing is interpolated, extrapolated,
+smoothed or fitted to produce either, and no sample time is automatically
+declared a peak or a trough because it is first or last.
+
+Consequently the fluctuation is a **lower bound** on the true peak-to-trough
+fluctuation: both of its extremes are sampled values and sampling cannot
+overstate the extremes. This is stated in the result's assumptions, not hidden.
+
+### 20.3 Ties are structural
+
+When several observations attain the maximum (or minimum), all of them are
+returned with their time, concentration and `sourceRow`. The reported scalar
+`Tmax,obs`/`Tmin,obs` is the **earliest** attaining time, and the metric becomes
+`conditional` with an explicit message — a single `Tmax` would imply a
+uniqueness the data do not have. Tied values at different sampling times are the
+case covered; duplicate rows at the *same* time never reach this stage, because
+§19 refuses an interval with duplicate sampling times and that refusal is
+propagated.
+
+### 20.4 Availability
+
+Every metric requires a validated interval: §19 must have produced an
+`AUCτ` for it. Without one, each metric reports the interval's own structured
+reason (`INTERVAL_NOT_SELECTED`, `INTERVAL_AUC_UNAVAILABLE`, plus
+`INVALID_MEASUREMENT` when a row is not a finite non-negative pair).
+
+`Cavg,ss` and the fluctuation additionally require:
+
+1. `regimen = repeated-dose-steady-state` — a **recorded declaration**. A flat
+   curve, similar adjacent interval areas, the sampling pattern or the number of
+   doses are never evidence of steady state;
+2. the analyst's confirmation that the interval starts at the recorded
+   administration time of the analysed dose (§19.2);
+3. a recorded positive τ whose unit converts to the dataset's time unit;
+4. finite, non-negative arithmetic.
+
+When (1) fails, both metrics are `not-applicable` with `REGIMEN_NOT_STEADY_STATE`
+(a `single-dose` dataset reports the same, since it has no steady-state
+interval) or `REGIMEN_UNKNOWN`. That verdict survives an unusable interval: the
+reason the quantity does not exist is not masked by a missing `AUCτ`. When (1)
+holds but (2)–(4) fail, they are `unavailable` with `INTERVAL_NOT_ALIGNED`,
+`DOSING_INTERVAL_MISSING`, `DOSING_INTERVAL_NOT_POSITIVE`,
+`DOSING_INTERVAL_UNIT_INCOMPATIBLE`, `CAVG_SS_UNAVAILABLE` or
+`NUMERICAL_FAILURE`.
+
+A `Cavg,ss` of zero, a non-finite value or an overflowing result yields an
+unavailable fluctuation with the specific reason; `Infinity`, `NaN` and a
+fabricated `0 %` are never reported.
+
+### 20.5 Units
+
+`Cavg,interval` divides the `AUCτ` (in `concentrationUnit·timeUnit`) by the
+interval duration **in the dataset's own time unit**, so the result stays a
+concentration. `Cavg,ss` divides by τ converted into that same time unit through
+the existing unit catalog; the audit line shows the τ as recorded, in hours, and
+in the dataset's time unit. The unit of the reported `AUCτ` is checked against
+`concentrationUnit·timeUnit` before either division, so a mismatch is refused
+rather than silently producing a different quantity. `Tmax,obs`/`Tmin,obs` are
+in the dataset's time unit, concentrations in its concentration unit, and the
+fluctuation is a percentage.
+
+### 20.6 Result contract and audit
+
+Each metric carries: id, label, status, kind (`observed`/`calculated`), value,
+unit, formula, the substituted values, the attaining observations (peak/trough),
+assumptions, notes, and — when it cannot be reported — a stable code and a
+reason. The report also carries the window (`start`, `end`, duration, the full
+observation list), the `AUCτ` used, τ as recorded and as converted, the
+preconditions checked and the warnings.
+
+`observed` is never interchangeable with `calculated`: a displayed concentration
+is either sampled or derived from sampled values, and the UI labels which.
+
+### 20.7 Not implemented
+
+- automatic interval selection, multi-interval aggregation, accumulation ratios
+  or dose-history reconstruction;
+- model-based estimates of the true `Cmax`/`Cmin`, or of an unobserved `Tmax`;
+- population statistics, confidence intervals or uncertainty propagation;
+- any new clearance or volume formula (those remain §18/§19);
+- clinical target ranges, dose recommendations or treatment decisions.
+
+### 20.8 Compatibility
+
+No data-contract change: every exposure metric is an ephemeral analysis result.
+`.npex` stays at 1.2.0, `.npsb` at 1.1.0, and no measurement, `sourceRow`, unit,
+provenance or administration field is written. The metrics are defined from the
+standard pharmacokinetic description of peak, trough, average concentration and
+peak-to-trough fluctuation (Rowland & Tozer) implemented independently; no
+third-party source was consulted for this phase.

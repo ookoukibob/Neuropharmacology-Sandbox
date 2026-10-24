@@ -9,13 +9,17 @@
  */
 import { formatNumber } from '@/engine/numeric/decimal'
 import { DoseParameterTable } from './DoseParameterTable'
+import { IntervalExposureSummary } from './IntervalExposureSummary'
 import type { AdministrationQuantity } from '@/domain/experiments/experimental-dataset'
 import type { IntervalAucReport, IntervalAucSelection } from '@/domain/experiments/interval-auc'
+import type { IntervalExposureReport } from '@/domain/experiments/interval-exposure-metrics'
 import type { SteadyStateDoseNcaReport } from '@/domain/experiments/steady-state-dose-nca'
 
 interface RepeatedDoseNcaSectionProps {
   readonly interval: IntervalAucReport
   readonly steady: SteadyStateDoseNcaReport
+  /** Observed interval exposure metrics over the same selected interval. */
+  readonly exposure: IntervalExposureReport
   readonly timeUnit: string
   readonly concentrationUnit: string
   /** Observed sampling times only, ascending; used to build the selectors. */
@@ -32,6 +36,7 @@ interface RepeatedDoseNcaSectionProps {
 export function RepeatedDoseNcaSection({
   interval,
   steady,
+  exposure,
   timeUnit,
   concentrationUnit,
   observedTimes,
@@ -182,7 +187,9 @@ export function RepeatedDoseNcaSection({
         </p>
       </div>
 
-      <div className="space-y-1">
+      <IntervalExposureSummary report={exposure} />
+
+      <div className="space-y-1 border-t pt-4">
         <h5 className="text-sm font-medium">Steady-state dose-dependent parameters</h5>
         <p className="text-xs text-muted-foreground" data-testid="steady-state-summary">
           {steady.summary}
