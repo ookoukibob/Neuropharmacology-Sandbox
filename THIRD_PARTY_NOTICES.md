@@ -84,14 +84,45 @@ formulas documented in `docs/experimental-data.md` §18.
 
 Intentional differences from PKNCA in this phase:
 
-- repeated-dose and steady-state datasets are refused entirely (no `AUCτ` is
-  computed) rather than partially supported;
+- repeated-dose and steady-state datasets are refused entirely by this
+  single-dose path (no `AUCτ` is computed there) rather than partially
+  supported; repeated dosing has its own path (phase 50C, below);
 - absolute and apparent parameters are separate, explicitly labelled results,
   and the apparent twins are `not-applicable` for an IV route;
 - every unmet precondition carries its own structured refusal code, rather than
   a single generic failure;
 - a molar concentration with a mass dose is refused instead of converting via
   a molecular weight.
+
+### Interval AUCτ and steady-state parameters (Phase 50C) — comparison only
+
+PKNCA's public documentation on interval selection, `AUCτ` and the conditions
+for steady-state parameters was reviewed to check that this project's
+independent implementation does not miss a material precondition: that an
+interval must be one dosing interval wide and anchored to administration, that
+`AUCτ` is a different quantity from `AUC(0→∞)`, that clearance from a repeated
+regimen requires steady state and a per-dose amount, and that the terminal
+estimate must belong to the analysed interval. **No PKNCA source code was
+copied, translated or adapted**, and no GPL/AGPL dependency was added; the
+implementation lives in `src/domain/experiments/interval-auc.ts` and
+`src/domain/experiments/steady-state-dose-nca.ts` and was written from the formulas
+documented in `docs/experimental-data.md` §19.
+
+Intentional differences from PKNCA in this phase:
+
+- both interval boundaries must be **actual observations**; a boundary that was
+  not sampled is refused rather than interpolated or extrapolated;
+- the interval is never auto-selected, and the analyst must explicitly confirm
+  that it starts at the administration time of the analysed dose — τ alone is
+  never treated as evidence of which window is a dosing interval;
+- a `repeated-dose` (non-steady-state) dataset reports `AUCτ` but no clearance:
+  PKNCA will compute interval parameters for such data, this project refuses
+  them while steady state is undeclared;
+- steady state is only ever read from the recorded regimen, never inferred from
+  curve shape or from similar adjacent interval areas;
+- the dose amount must carry an explicit `per-administration` basis; a
+  cumulative total-regimen amount is refused instead of being treated as a
+  single dose.
 
 ## Dosing regimens and IV infusion (event-driven dosing)
 

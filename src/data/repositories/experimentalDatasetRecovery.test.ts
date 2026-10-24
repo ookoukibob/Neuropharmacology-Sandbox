@@ -31,6 +31,16 @@ const DATASET_INPUT: ExperimentalDatasetInput = {
     fileName: 'synthetic.csv',
     importedAt: '2026-01-01T00:00:00.000Z',
   },
+  // Phase 50C: the archive is a raw row snapshot, so a new optional field must
+  // survive the round-trip without a `.npsb` version change.
+  administration: {
+    route: 'iv-bolus',
+    regimen: 'repeated-dose-steady-state',
+    timeReference: 'dose-time',
+    dose: { value: 50, unit: 'mg' },
+    doseBasis: 'per-administration',
+    dosingInterval: { value: 8, unit: 'h' },
+  },
   measurements: [
     { sourceRow: 1, time: 0, concentration: 0, sampleId: 'A', note: 'baseline' },
     { sourceRow: 2, time: 0, concentration: 0, sampleId: 'A', note: 'exact replicate' },
@@ -126,10 +136,14 @@ describe('experimental datasets in .npsb recovery', () => {
       expect(after.experimentDatasets).toEqual(before.experimentDatasets)
       const dataset = after.experimentDatasets[0] as {
         measurements: { sourceRow: number; time: number; concentration: number }[]
+        administration?: { doseBasis?: string; dosingInterval?: { value: number; unit: string } }
       }
       expect(dataset.measurements.map((entry) => entry.sourceRow)).toEqual([1, 2, 3])
       expect(dataset.measurements[0]?.time).toBe(0)
       expect(dataset.measurements[1]?.time).toBe(0)
+      // The dose basis and τ are preserved verbatim by the raw snapshot.
+      expect(dataset.administration?.doseBasis).toBe('per-administration')
+      expect(dataset.administration?.dosingInterval).toEqual({ value: 8, unit: 'h' })
     } finally {
       await db.delete()
     }

@@ -173,8 +173,33 @@ describe('administration metadata validation', () => {
     )
   })
 
-  it('rejects infusion details when the recorded route is not IV infusion', () => {
-    const issues = validateAdministration({
+  it('validates the dose basis against a recorded amount', () => {
+    // Absent means "not recorded"; it is never defaulted.
+    expect(validateAdministration(base())).toEqual([])
+    expect(base().doseBasis).toBeUndefined()
+
+    for (const doseBasis of ['per-administration', 'total-regimen', 'unknown'] as const) {
+      expect(
+        validateAdministration({ ...base(), dose: { value: 50, unit: 'mg' }, doseBasis }),
+      ).toEqual([])
+    }
+
+    expect(
+      validateAdministration({
+        ...base(),
+        dose: { value: 50, unit: 'mg' },
+        doseBasis: 'per-dose' as never,
+      })[0]?.field,
+    ).toBe('doseBasis')
+
+    // A basis without an amount describes nothing and is refused rather than
+    // stored as an empty claim.
+    expect(validateAdministration({ ...base(), doseBasis: 'per-administration' })[0]?.message).toMatch(
+      /requires a recorded dose/i,
+    )
+  })
+
+  it('rejects infusion details when the recorded route is not IV infusion', () => {    const issues = validateAdministration({
       ...base(),
       infusion: { duration: { value: 2, unit: 'h' } },
     })

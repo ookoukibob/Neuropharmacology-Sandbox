@@ -254,8 +254,45 @@ describe('DexieExperimentalDatasetRepository', () => {
     expect(cleared.dataset.measurements).toEqual(before.measurements)
   })
 
-  it('keeps administration unchanged when the update does not mention it', async () => {
+  it('persists the dose basis and rejects one that describes nothing', async () => {
     const admin = {
+      route: 'iv-bolus',
+      regimen: 'repeated-dose-steady-state',
+      timeReference: 'dose-time',
+      dose: { value: 50, unit: 'mg' },
+      doseBasis: 'per-administration',
+      dosingInterval: { value: 8, unit: 'h' },
+    } as const
+    const created = await repo.create(input({ administration: admin }))
+    if (!created.ok) throw new Error(created.message)
+    expect(created.dataset.administration?.doseBasis).toBe('per-administration')
+
+    const read = await repo.get(created.dataset.id)
+    if (!read.ok) throw new Error(read.message)
+    expect(read.dataset.administration?.doseBasis).toBe('per-administration')
+    expect(read.dataset.administration?.dosingInterval).toEqual({ value: 8, unit: 'h' })
+
+    // A basis with no amount is refused before anything is written.
+    const before = await repo.list()
+    const invalid = await repo.update(
+      created.dataset.id,
+      {
+        administration: {
+          route: 'iv-bolus',
+          regimen: 'single-dose',
+          timeReference: 'dose-time',
+          doseBasis: 'per-administration',
+        },
+      },
+      created.dataset.updatedAt,
+    )
+    expect(invalid.ok).toBe(false)
+    if (!invalid.ok) expect(invalid.code).toBe('VALIDATION')
+    const after = await repo.list()
+    expect(after).toEqual(before)
+  })
+
+  it('keeps administration unchanged when the update does not mention it', async () => {    const admin = {
       route: 'iv-bolus',
       regimen: 'single-dose',
       timeReference: 'dose-time',

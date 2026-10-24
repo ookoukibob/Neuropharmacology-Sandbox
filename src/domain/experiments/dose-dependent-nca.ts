@@ -30,10 +30,15 @@
  * (mass → g, mass-concentration → g/L, time → h), so CL is reported in L/h and
  * Vz in L. No second conversion table is introduced here.
  *
+ * The parameter-construction helpers and the route rules below are shared with
+ * `steady-state-dose-nca.ts` (phase 50C), so both analyses produce identical
+ * statuses, audit strings and unit handling.
+ *
  * Pure domain module: no React, no storage, no I/O.
  */
 import { unitCatalog } from '../pharmacology/unit-catalog'
 import type {
+  AdministrationDoseBasis,
   AdministrationMetadata,
   AdministrationRegimen,
   AdministrationRoute,
@@ -74,6 +79,19 @@ export type DoseDependentUnavailableCode =
   | 'LAMBDA_Z_UNAVAILABLE'
   | 'BIOAVAILABILITY_MISSING'
   | 'NUMERICAL_FAILURE'
+  // --- steady-state (phase 50C) -------------------------------------------
+  /** Repeated dosing is declared but NOT at steady state. */
+  | 'REGIMEN_NOT_STEADY_STATE'
+  /** No interval has been selected for the repeated-dose analysis. */
+  | 'INTERVAL_NOT_SELECTED'
+  /** The selected interval does not produce a usable AUCτ. */
+  | 'INTERVAL_AUC_UNAVAILABLE'
+  /** The analyst has not confirmed the interval starts at a dose. */
+  | 'INTERVAL_NOT_ALIGNED'
+  /** The recorded dose has no basis (per-administration vs total regimen). */
+  | 'DOSE_BASIS_UNKNOWN'
+  /** The recorded amount is the whole regimen's total, not one dose. */
+  | 'DOSE_BASIS_NOT_PER_ADMINISTRATION'
 
 /** The exact inputs a parameter used, for audit. */
 export interface DoseDependentInputs {
@@ -81,6 +99,14 @@ export interface DoseDependentInputs {
   readonly auc?: { readonly value: number; readonly unit: string; readonly name: string }
   readonly lambdaZ?: { readonly value: number; readonly unit: string }
   readonly bioavailability?: number
+  /** What the recorded dose refers to (steady-state analysis only). */
+  readonly doseBasis?: AdministrationDoseBasis | 'not-recorded'
+  /** The dosing interval the AUCτ covers (steady-state analysis only). */
+  readonly interval?: {
+    readonly startTime: number
+    readonly endTime: number
+    readonly timeUnit: string
+  }
 }
 
 export interface DoseDependentParameter {
@@ -132,7 +158,7 @@ export interface DoseDependentNcaInput {
   readonly nca: NcaAnalysis
 }
 
-const ROUTE_LABEL: Readonly<Record<AdministrationRoute, string>> = {
+export const ROUTE_LABEL: Readonly<Record<AdministrationRoute, string>> = {
   'iv-bolus': 'IV bolus',
   'iv-infusion': 'IV infusion',
   extravascular: 'extravascular',
@@ -140,7 +166,7 @@ const ROUTE_LABEL: Readonly<Record<AdministrationRoute, string>> = {
   unknown: 'unknown',
 }
 
-const TIME_REFERENCE_LABEL: Readonly<Record<AdministrationTimeReference, string>> = {
+export const TIME_REFERENCE_LABEL: Readonly<Record<AdministrationTimeReference, string>> = {
   'dose-time': 'dose-time',
   'infusion-start': 'infusion-start',
   'first-observation': 'first-observation',
@@ -149,7 +175,7 @@ const TIME_REFERENCE_LABEL: Readonly<Record<AdministrationTimeReference, string>
 }
 
 /** Route-specific preconditions, declared once. */
-interface RouteRule {
+export interface RouteRule {
   /** The time reference that actually anchors time zero to administration. */
   readonly requiredTimeReference: AdministrationTimeReference
   /** True when the route's systemic bioavailability is 1 by definition (IV). */
@@ -158,7 +184,7 @@ interface RouteRule {
   readonly allowsInfusion: boolean
 }
 
-function routeRule(route: AdministrationRoute): RouteRule | null {
+export function routeRule(route: AdministrationRoute): RouteRule | null {
   switch (route) {
     case 'iv-bolus':
       return { requiredTimeReference: 'dose-time', absoluteByRoute: true, allowsInfusion: false }
@@ -173,7 +199,7 @@ function routeRule(route: AdministrationRoute): RouteRule | null {
 }
 
 /** Exact shortest round-trip rendering for recorded values and status messages. */
-const exact = (value: number): string => String(value)
+export const exact = (value: number): string => String(value)
 
 /**
  * Readable rendering for arithmetic substitutions only. The calculation and
@@ -182,10 +208,10 @@ const exact = (value: number): string => String(value)
  * the application's displayed-result precision and avoiding binary artefacts
  * such as 0.09999999999999999 g.
  */
-const auditNumber = (value: number): string =>
+export const auditNumber = (value: number): string =>
   Number.isFinite(value) ? Number(value.toPrecision(12)).toString() : String(value)
 
-function unavailableParameter(
+export function unavailableParameter(
   parameter: DoseDependentParameterId,
   label: string,
   basis: DoseDependentBasis,
@@ -209,7 +235,7 @@ function unavailableParameter(
   }
 }
 
-function notApplicableParameter(
+export function notApplicableParameter(
   parameter: DoseDependentParameterId,
   label: string,
   basis: DoseDependentBasis,
@@ -230,7 +256,7 @@ function notApplicableParameter(
   }
 }
 
-interface ComputedParameterInput {
+export interface ComputedParameterInput {
   readonly parameter: DoseDependentParameterId
   readonly label: string
   readonly basis: DoseDependentBasis
@@ -244,7 +270,7 @@ interface ComputedParameterInput {
   readonly conditionalReasons: readonly string[]
 }
 
-function computedParameter(input: ComputedParameterInput): DoseDependentParameter {
+export function computedParameter(input: ComputedParameterInput): DoseDependentParameter {
   // All four parameters are ratios/products of strictly positive finite
   // quantities. A zero or negative result can only arise from invalid
   // arithmetic or floating-point underflow, not from a valid scientific input.
@@ -277,7 +303,7 @@ function computedParameter(input: ComputedParameterInput): DoseDependentParamete
   }
 }
 
-function baseFactor(unit: string, dimension: 'mass' | 'mass-concentration' | 'time'): number | null {
+export function baseFactor(unit: string, dimension: 'mass' | 'mass-concentration' | 'time'): number | null {
   const def = unitCatalog.get(unit)
   if (def === undefined || def.dimension !== dimension) return null
   return def.toBase

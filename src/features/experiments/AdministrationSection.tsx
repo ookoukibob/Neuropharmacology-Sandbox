@@ -15,10 +15,12 @@ import { Label } from '@/components/ui/label'
 import { formatNumber } from '@/engine/numeric/decimal'
 import { unitCatalog } from '@/domain/pharmacology/unit-catalog'
 import {
+  ADMINISTRATION_DOSE_BASES,
   ADMINISTRATION_REGIMENS,
   ADMINISTRATION_ROUTES,
   ADMINISTRATION_TIME_REFERENCES,
   validateAdministration,
+  type AdministrationDoseBasis,
   type AdministrationMetadata,
   type AdministrationQuantity,
   type AdministrationRegimen,
@@ -46,6 +48,12 @@ const TIME_REFERENCE_LABEL: Record<AdministrationTimeReference, string> = {
   'infusion-start': 'Infusion start',
   'first-observation': 'First observation',
   other: 'Other reference',
+  unknown: 'Unknown',
+}
+
+const DOSE_BASIS_LABEL: Record<AdministrationDoseBasis, string> = {
+  'per-administration': 'Per administration (amount of each dose)',
+  'total-regimen': 'Total regimen (cumulative amount)',
   unknown: 'Unknown',
 }
 
@@ -148,6 +156,14 @@ function AdministrationDisplay({ administration }: { readonly administration: Ad
       <Field label="Route" value={ROUTE_LABEL[administration.route]} />
       <Field label="Regimen" value={REGIMEN_LABEL[administration.regimen]} />
       <Field label="Dose" value={quantityText(administration.dose)} />
+      <Field
+        label="Dose basis"
+        value={
+          administration.doseBasis === undefined
+            ? 'Not recorded'
+            : DOSE_BASIS_LABEL[administration.doseBasis]
+        }
+      />
       <Field label="Infusion" value={infusionText(administration)} />
       <Field label="Dosing interval τ" value={quantityText(administration.dosingInterval)} />
       <Field label="Time reference" value={TIME_REFERENCE_LABEL[administration.timeReference]} />
@@ -178,6 +194,8 @@ interface EditorState {
   timeReference: AdministrationTimeReference
   doseValue: string
   doseUnit: string
+  /** Empty string means "not recorded", never an assumed basis. */
+  doseBasis: AdministrationDoseBasis | ''
   infusionMode: 'none' | 'duration' | 'rate'
   infusionDurationValue: string
   infusionDurationUnit: string
@@ -198,6 +216,7 @@ function initialEditorState(administration: AdministrationMetadata | undefined):
     timeReference: administration?.timeReference ?? 'unknown',
     doseValue: administration?.dose === undefined ? '' : String(administration.dose.value),
     doseUnit: administration?.dose?.unit ?? DEFAULT_MASS_UNIT,
+    doseBasis: administration?.doseBasis ?? '',
     infusionMode,
     infusionDurationValue:
       infusion?.duration === undefined ? '' : String(infusion.duration.value),
@@ -268,6 +287,9 @@ function AdministrationEditor({
       regimen: state.regimen,
       timeReference: state.timeReference,
       ...(dose.quantity === undefined ? {} : { dose: dose.quantity }),
+      // A basis only describes a recorded amount; it is dropped (never
+      // defaulted) when the amount itself is unknown.
+      ...(dose.quantity === undefined || state.doseBasis === '' ? {} : { doseBasis: state.doseBasis }),
       ...(state.infusionMode === 'none'
         ? {}
         : {
@@ -355,6 +377,28 @@ function AdministrationEditor({
           onChange={(value) => set('intervalValue', value)}
           onUnitChange={(unit) => set('intervalUnit', unit)}
         />
+      </div>
+
+      <div className="grid gap-1.5">
+        <Label htmlFor="administration-dose-basis">Dose basis (what the amount refers to)</Label>
+        <select
+          id="administration-dose-basis"
+          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          value={state.doseBasis}
+          data-testid="administration-dose-basis"
+          onChange={(event) => set('doseBasis', event.target.value as EditorState['doseBasis'])}
+        >
+          <option value="">Not recorded</option>
+          {ADMINISTRATION_DOSE_BASES.map((basis) => (
+            <option key={basis} value={basis}>
+              {DOSE_BASIS_LABEL[basis]}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-muted-foreground">
+          Per-administration means each dose. Total regimen is the cumulative amount of the whole
+          regimen and is never used as a single interval's dose.
+        </p>
       </div>
 
       <fieldset className="grid gap-3 sm:grid-cols-2 rounded-md border p-3">

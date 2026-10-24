@@ -41,7 +41,16 @@ import { scanDuplicateJsonKeys } from '../recovery/duplicateKeys'
 import { exceedsUtf8ByteLimit } from '../recovery/fidelity'
 
 export const NPEX_FORMAT_ID = 'npex'
-export const NPEX_VERSION = '1.1.0'
+/**
+ * Interchange version history (same major; a reader accepts minor ≤ its own):
+ * - 1.0.0 — the initial dataset envelope;
+ * - 1.1.0 — optional `administration` metadata (phase 50A);
+ * - 1.2.0 — optional `administration.doseBasis` (phase 50C).
+ *
+ * Each step is additive: a file written by an older build still parses, and a
+ * newer file is rejected by an older reader rather than silently dropped.
+ */
+export const NPEX_VERSION = '1.2.0'
 export const NPEX_EXTENSION = '.npex'
 export const NPEX_MIME_TYPE = 'application/json;charset=utf-8'
 export const MAX_NPEX_BYTES = 10 * 1024 * 1024

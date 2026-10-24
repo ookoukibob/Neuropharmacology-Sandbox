@@ -118,8 +118,73 @@ describe('.npex experimental dataset format', () => {
     expect(parsedLegacy.dataset.administration).toBeUndefined()
   })
 
-  it('rejects malformed administration metadata without producing a dataset', () => {
+  it('round-trips the dose basis and reads 1.1.0 files that predate it', () => {
+    const withBasis: ExperimentalDataset = {
+      ...stored(),
+      administration: {
+        route: 'iv-bolus',
+        regimen: 'repeated-dose-steady-state',
+        timeReference: 'dose-time',
+        dose: { value: 50, unit: 'mg' },
+        doseBasis: 'per-administration',
+        dosingInterval: { value: 8, unit: 'h' },
+      },
+    }
+    const built = buildNpexFile(withBasis, EXPORTED_AT)
+    if (!built.ok) throw new Error(JSON.stringify(built.issues))
+    const parsed = parseNpexText(built.text)
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.issues))
+    expect(parsed.dataset.administration?.doseBasis).toBe('per-administration')
+
+    // A 1.1.0 file (recorded before this phase) has no doseBasis. It must load
+    // with the field absent rather than defaulted to a per-dose amount.
+    const doc = JSON.parse(built.text) as { formatVersion: string; dataset: { administration: Record<string, unknown> } }
+    doc.formatVersion = '1.1.0'
+    delete doc.dataset.administration['doseBasis']
+    const legacy = parseNpexText(JSON.stringify(doc))
+    if (!legacy.ok) throw new Error(JSON.stringify(legacy.issues))
+    expect(legacy.dataset.administration?.doseBasis).toBeUndefined()
+    expect(legacy.dataset.administration?.dose).toEqual({ value: 50, unit: 'mg' })
+
+    // A 1.0.0 file without any administration key is still readable.
+    const oldest = JSON.parse(built.text) as { formatVersion: string; dataset: Record<string, unknown> }
+    oldest.formatVersion = '1.0.0'
+    delete oldest.dataset['administration']
+    const noAdmin = parseNpexText(JSON.stringify(oldest))
+    if (!noAdmin.ok) throw new Error(JSON.stringify(noAdmin.issues))
+    expect(noAdmin.dataset.administration).toBeUndefined()
+  })
+
+  it('rejects an unknown dose basis value', () => {
     const built = buildNpexFile(stored(), EXPORTED_AT)
+    if (!built.ok) throw new Error('setup')
+    const base = JSON.parse(built.text) as { dataset: Record<string, unknown> }
+    base.dataset.administration = {
+      route: 'iv-bolus',
+      regimen: 'single-dose',
+      timeReference: 'dose-time',
+      dose: { value: 100, unit: 'mg' },
+      doseBasis: 'per-dose', // not one of the documented bases
+    }
+    const parsed = parseNpexText(JSON.stringify(base))
+    expect(parsed.ok).toBe(false)
+    if (parsed.ok) return
+    expect(parsed.issues.some((entry) => entry.path === 'dataset.administration.doseBasis')).toBe(true)
+
+    // A basis without an amount is also refused: it would describe nothing.
+    base.dataset.administration = {
+      route: 'iv-bolus',
+      regimen: 'single-dose',
+      timeReference: 'dose-time',
+      doseBasis: 'per-administration',
+    }
+    const orphan = parseNpexText(JSON.stringify(base))
+    expect(orphan.ok).toBe(false)
+    if (orphan.ok) return
+    expect(orphan.issues.some((entry) => entry.message.includes('requires a recorded dose'))).toBe(true)
+  })
+
+  it('rejects malformed administration metadata without producing a dataset', () => {    const built = buildNpexFile(stored(), EXPORTED_AT)
     if (!built.ok) throw new Error('setup')
     const base = JSON.parse(built.text) as { dataset: Record<string, unknown> }
     base.dataset.administration = {
@@ -139,14 +204,15 @@ describe('.npex experimental dataset format', () => {
     expect(checkNpexVersion('1.0.0').ok).toBe(true)
     expect(checkNpexVersion('1.0.99').ok).toBe(true)
     expect(checkNpexVersion('1.1.0').ok).toBe(true)
-    expect(checkNpexVersion('1.2.0').ok).toBe(false)
+    expect(checkNpexVersion('1.2.0').ok).toBe(true)
+    expect(checkNpexVersion('1.3.0').ok).toBe(false)
     expect(checkNpexVersion('2.0.0').ok).toBe(false)
     expect(checkNpexVersion('1.0').ok).toBe(false)
 
     const built = buildNpexFile(stored(), EXPORTED_AT)
     if (!built.ok) throw new Error('setup')
     const doc = JSON.parse(built.text) as Record<string, unknown>
-    doc['formatVersion'] = '1.2.0'
+    doc['formatVersion'] = '1.3.0'
     const parsed = parseNpexText(JSON.stringify(doc))
     expect(parsed.ok).toBe(false)
     if (parsed.ok) return

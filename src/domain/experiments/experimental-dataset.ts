@@ -72,6 +72,21 @@ export type AdministrationTimeReference =
   | 'other'
   | 'unknown'
 
+/**
+ * What the recorded `dose` amount actually refers to (phase 50C).
+ *
+ * - `per-administration` — the amount given at EACH administration, so it is
+ *   the dose that belongs to one dosing interval τ;
+ * - `total-regimen` — the cumulative amount of the whole recorded regimen,
+ *   which must never be divided by a single interval's AUCτ;
+ * - `unknown` — the basis was not established.
+ *
+ * Absent means "not recorded". A pre-50C dataset without this field is NEVER
+ * defaulted to `per-administration`: that would silently turn a cumulative or
+ * unstated amount into a per-dose amount and fabricate a clearance.
+ */
+export type AdministrationDoseBasis = 'per-administration' | 'total-regimen' | 'unknown'
+
 /** A quantity as the analyst stated it: number + explicit unit, never bare. */
 export interface AdministrationQuantity {
   readonly value: number
@@ -99,6 +114,11 @@ export interface AdministrationMetadata {
   readonly route: AdministrationRoute
   /** Dose amount with a mass unit, present only when known. */
   readonly dose?: AdministrationQuantity
+  /**
+   * What `dose` refers to (phase 50C). Absent means not recorded; it is never
+   * assumed to be a per-administration amount for a repeated regimen.
+   */
+  readonly doseBasis?: AdministrationDoseBasis
   /** Infusion duration or rate, present only for an IV infusion. */
   readonly infusion?: AdministrationInfusion
   readonly regimen: AdministrationRegimen
@@ -129,6 +149,12 @@ export const ADMINISTRATION_TIME_REFERENCES: readonly AdministrationTimeReferenc
   'infusion-start',
   'first-observation',
   'other',
+  'unknown',
+]
+
+export const ADMINISTRATION_DOSE_BASES: readonly AdministrationDoseBasis[] = [
+  'per-administration',
+  'total-regimen',
   'unknown',
 ]
 
@@ -197,6 +223,22 @@ export function validateAdministration(
 
   if (administration.dose !== undefined) {
     issues.push(...quantityIssue(administration.dose, 'mass', false, 'dose', 'Dose amount'))
+  }
+
+  if (administration.doseBasis !== undefined) {
+    if (!ADMINISTRATION_DOSE_BASES.includes(administration.doseBasis)) {
+      issues.push({
+        field: 'doseBasis',
+        message: `Unknown dose basis "${String(administration.doseBasis)}".`,
+      })
+    } else if (administration.dose === undefined) {
+      // A basis for a dose that was never recorded describes nothing and would
+      // invite a later reader to assume an amount exists.
+      issues.push({
+        field: 'doseBasis',
+        message: 'A dose basis requires a recorded dose amount.',
+      })
+    }
   }
 
   if (administration.infusion !== undefined) {

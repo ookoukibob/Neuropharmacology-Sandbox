@@ -6,41 +6,8 @@
  * pharmacological calculation, and it never fills a missing input with a guess.
  */
 import { formatNumber } from '@/engine/numeric/decimal'
-import {
-  Table,
-  TableBody,
-  TableCaption,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import type {
-  DoseDependentNcaReport,
-  DoseDependentParameter,
-  DoseDependentStatus,
-} from '@/domain/experiments/dose-dependent-nca'
-
-const STATUS_LABEL: Record<DoseDependentStatus, string> = {
-  available: 'available',
-  conditional: 'conditional',
-  unavailable: 'unavailable',
-  'not-applicable': 'not applicable',
-}
-
-const STATUS_CLASS: Record<DoseDependentStatus, string> = {
-  available: 'text-foreground',
-  conditional: 'text-amber-700',
-  unavailable: 'text-muted-foreground',
-  'not-applicable': 'text-muted-foreground',
-}
-
-function parameterValue(parameter: DoseDependentParameter): string {
-  if (parameter.status === 'available' || parameter.status === 'conditional') {
-    return `${formatNumber(parameter.value ?? Number.NaN)} ${parameter.unit ?? ''}`.trim()
-  }
-  return '—'
-}
+import { DoseParameterTable } from './DoseParameterTable'
+import type { DoseDependentNcaReport } from '@/domain/experiments/dose-dependent-nca'
 
 export function DoseDependentNcaSection({ report }: { readonly report: DoseDependentNcaReport }) {
   const parameters = [report.parameters.cl, report.parameters.clF, report.parameters.vz, report.parameters.vzF]
@@ -58,43 +25,11 @@ export function DoseDependentNcaSection({ report }: { readonly report: DoseDepen
         </p>
       </div>
 
-      <Table data-testid="dose-dependent-table">
-        <TableCaption>
-          Clearance and terminal volume derived from recorded administration metadata and the NCA result
-          above. Conditional values include explicit caveats; unavailable parameters show why they were refused.
-        </TableCaption>
-        <TableHeader>
-          <TableRow>
-            <TableHead scope="col">Parameter</TableHead>
-            <TableHead scope="col">Value</TableHead>
-            <TableHead scope="col">Status</TableHead>
-            <TableHead scope="col">Formula</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {parameters.map((parameter) => (
-            <TableRow key={parameter.parameter}>
-              <TableHead scope="row" className="text-xs">
-                {parameter.label}
-                <span className="ml-1 text-muted-foreground">({parameter.basis})</span>
-              </TableHead>
-              <TableCell
-                className="font-mono text-xs"
-                data-testid={`dose-dependent-${parameter.parameter.toLowerCase().replace('/', '-')}`}
-              >
-                {parameterValue(parameter)}
-              </TableCell>
-              <TableCell
-                className={`text-xs ${STATUS_CLASS[parameter.status]}`}
-                data-testid={`dose-dependent-${parameter.parameter.toLowerCase().replace('/', '-')}-status`}
-              >
-                {STATUS_LABEL[parameter.status]}
-              </TableCell>
-              <TableCell className="font-mono text-xs">{parameter.formula}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <DoseParameterTable
+        parameters={parameters}
+        testIdPrefix="dose-dependent"
+        caption="Clearance and terminal volume derived from recorded administration metadata and the NCA result above. Conditional values include explicit caveats; unavailable parameters show why they were refused."
+      />
 
       {unavailable.length > 0 ? (
         <div

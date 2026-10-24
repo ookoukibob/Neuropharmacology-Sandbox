@@ -1493,11 +1493,18 @@ phase.
 | --- | --- | --- |
 | `route` | `iv-bolus`, `iv-infusion`, `extravascular`, `other`, `unknown` | always (explicit `unknown` is the honest value) |
 | `dose` | amount + mass unit | only when the dose is known |
+| `doseBasis` | `per-administration`, `total-regimen`, `unknown` (phase 50C) | only with a recorded `dose`; absent means **not recorded** |
 | `infusion` | `duration` (time unit) **or** `rate` (mass-flow unit), never both | only for an IV infusion, and only when known |
 | `regimen` | `single-dose`, `repeated-dose`, `repeated-dose-steady-state`, `unknown` | always |
 | `dosingInterval` | τ + time unit | only for a repeated regimen, when known |
 | `timeReference` | `dose-time`, `infusion-start`, `first-observation`, `other`, `unknown` | always |
 | `bioavailability` | F in (0, 1] | only when explicitly supplied |
+
+`doseBasis` says what the recorded amount refers to. `per-administration` is the
+amount of **each** dose, i.e. the amount that belongs to one dosing interval τ;
+`total-regimen` is the **cumulative** amount of the whole recorded regimen. An
+absent field means the basis was not recorded and is never defaulted to
+`per-administration` — see §19.5.
 
 Nothing is ever inferred from the measurements. A repeated-dose dataset is not
 treated as a single-dose curve extending to infinity, and steady state is never
@@ -1522,6 +1529,8 @@ The recorded measurements are never re-expressed.
 
 - route/regimen/timeReference must be one of the listed values;
 - dose amount is finite and positive with a **mass** unit;
+- `doseBasis` must be one of the listed values, and it requires a recorded
+  `dose` — a basis for an amount that does not exist describes nothing;
 - infusion duration is positive with a **time** unit; infusion rate is positive
   with a **mass-flow-rate** unit; both together is rejected;
 - dosing interval τ is positive with a **time** unit;
@@ -1534,10 +1543,14 @@ The recorded measurements are never re-expressed.
 ### 17.4 Compatibility
 
 The field is optional, so datasets created before this phase remain valid and
-load with no administration metadata (shown as unknown). `.npex` advances to
-`1.1.0`: files without the key (≤ 1.0.x) still import, and 1.1.0 files carry
-the metadata losslessly. The independent version rule is unchanged (same major,
-file minor ≤ reader minor).
+load with no administration metadata (shown as unknown). `.npex` is now
+**1.2.0** (`doseBasis`, phase 50C): 1.0.x files (no `administration`) and 1.1.x
+files (administration without a dose basis) still import unchanged, and 1.2.0
+files carry the metadata losslessly. The independent version rule is unchanged
+(same major, file minor ≤ reader minor), so an older reader rejects a newer
+file rather than silently dropping a field. The `.npsb` recovery archive is a
+raw row snapshot and needs no format change — the new optional field round-trips
+verbatim.
 
 ### 17.5 Prerequisites for dose-dependent NCA
 
@@ -1556,7 +1569,7 @@ Computing `CL`, `CL/F`, `Vz` or `Vz/F` requires, and must not proceed without:
 A repeated-dose dataset must not automatically be treated as a single-dose
 concentration curve extending to infinity, and steady state must not be
 inferred from appearance. The single-dose implementation of these prerequisites
-is documented in §18; repeated-dose (`AUCτ`) remains deferred.
+is documented in §18; the repeated-dose (`AUCτ`) implementation in §19.
 
 ## 18. Dose-dependent noncompartmental analysis (Phase 50B)
 
@@ -1630,13 +1643,14 @@ numbers; the UI only renders them.
 
 ### 18.6 Not implemented
 
-- Repeated-dose and steady-state dose-dependent NCA (an `AUCτ` at a declared
-  dosing interval) — deferred to a candidate Phase 50C. τ is never treated as
-  the analysis interval.
 - Deriving a dose from an infusion rate × duration (the §17 contract records at
   most one of duration/rate, so the total dose must be stated explicitly).
 - Any clinical dose recommendation, population PK, PBPK or multi-compartment
   fitting.
+
+Repeated-dose and steady-state dose-dependent NCA is implemented separately in
+§19 (phase 50C) and is deliberately *not* part of this single-dose path: this
+module still refuses every regimen other than `single-dose`.
 
 ### 18.7 Relationship to PKNCA
 
@@ -1649,3 +1663,187 @@ implementation here is independent: no PKNCA source is copied or translated
 dosing entirely rather than computing `AUCτ`; it reports absolute and apparent
 parameters as separate, explicitly labelled results; and it exposes a structured
 refusal code for every unmet precondition rather than a single failure state.
+
+## 19. Repeated-dose interval AUCτ and steady-state parameters (Phase 50C)
+
+Two separate deliverables:
+
+1. **AUCτ** — the observed area over an explicitly selected interval that is
+   exactly one dosing interval τ wide. Available for any recorded repeated
+   regimen whose τ is known, regardless of steady state.
+2. **Steady-state dose-dependent NCA** — `CL`, `CL/F`, `Vz`, `Vz/F` derived
+   from that AUCτ, only when the dataset is *declared* to be at steady state
+   and the remaining conditions hold.
+
+The two are deliberately decoupled: an interval area can be perfectly
+computable while the clearance derived from it would be meaningless.
+
+### 19.1 Definition of AUCτ
+
+AUCτ is the trapezoidal area under the observed concentration–time curve
+between two boundary times `t_start` and `t_end` such that:
+
+- both boundaries are **existing observation times** of the dataset;
+- `t_end − t_start` equals the recorded `dosingInterval` τ (converted through
+  the unit catalog), within a tolerance that only absorbs binary64/unit-factor
+  noise (`1e-9` relative — at τ = 8 h that is ≈ 3·10⁻⁸ s);
+- no duplicate sampling time occurs strictly inside the interval;
+- at least two observations lie inside the interval (the boundaries themselves
+  are observations).
+
+No point is interpolated, extrapolated, back-filled with zero or averaged to
+create a boundary. If a boundary is missing, the AUCτ is `unavailable` with
+`INTERVAL_BOUNDARY_NOT_OBSERVED`; the algorithm never lowers the requirement to
+make a window fit.
+
+AUCτ is **never** `AUC(0→∞)` or `AUC(first→∞)` relabelled. It is computed by
+the same `trapezoidalArea` used for `AUC(0→last)` — the identical integration
+rule, the identical linear-up/log-down behaviour — applied to the interval's
+observations. It carries no extrapolated component, so the single-dose
+"≤ 20 % extrapolated" quality criterion does not apply to it and is not used as
+a condition.
+
+### 19.2 Why explicit selection is mandatory
+
+`timeReference` records what the time axis is relative to; it does **not**
+identify a dose number, so τ alone cannot tell which window is a dosing
+interval. The analyst therefore selects `t_start` and `t_end` from the observed
+times, and — separately — confirms that the interval begins at the recorded
+administration time of the dose it describes. Both are analysis inputs recorded
+in the audit trail; neither is written to the dataset, and neither is inferred.
+
+Multiple candidate intervals of length τ may exist. The UI never picks one
+automatically (not the largest, not the last, not the one "closest to steady
+state"): the selection starts empty and only the analyst's choice produces a
+value.
+
+### 19.3 Reuse, not a second integrator
+
+`analyzeIntervalAuc` slices the measurements to the selected interval and calls
+the existing pure functions:
+
+- `trapezoidalArea` for the area (same code path as `AUC(0→last)`);
+- `analyzeNca` on the interval subset for its terminal phase and λ_z.
+
+There is no second trapezoid implementation, no second unit table and no second
+log-linear regression. The interval's `AUCτ` result is a new, separately typed
+object; it is not a renamed `aucLast` or `aucInf`.
+
+### 19.4 Steady state is a declaration, never an inference
+
+The dose-dependent parameters are computed only when
+`regimen = repeated-dose-steady-state`. Specifically:
+
+- `repeated-dose` (not at steady state) reports the interval AUCτ but **no**
+  dose-dependent parameter: `Dose_τ/AUCτ` over a non-steady-state interval is
+  not a clearance. Code: `REGIMEN_NOT_STEADY_STATE`.
+- `unknown` is refused (`REGIMEN_UNKNOWN`); it is never upgraded.
+- A flat-looking curve, similar adjacent interval areas, or a "reasonable"
+  number of doses before the window are **not** evidence of steady state and
+  are never used as such. No code path inspects the shape of the curve to
+  decide steadiness.
+- `single-dose` is refused by this path and belongs to §18.
+
+### 19.5 Dose basis: per-administration vs total regimen
+
+Phase 50A's `dose` only stated an amount. For repeated dosing the amount that
+belongs to one interval is the **per-administration** dose, so a basis is now
+part of the contract:
+
+| `doseBasis` | Meaning | Used as `Dose_τ`? |
+| --- | --- | --- |
+| `per-administration` | amount of each administration | yes |
+| `total-regimen` | cumulative amount of the whole regimen | no — `DOSE_BASIS_NOT_PER_ADMINISTRATION` |
+| `unknown` | basis not established | no — `DOSE_BASIS_UNKNOWN` |
+| absent (pre-50C record) | not recorded | no — `DOSE_BASIS_UNKNOWN` |
+
+An absent basis is **never** defaulted to `per-administration`. For a
+`single-dose` dataset the amount is the administered dose by definition of the
+regimen, so §18 does not require the field; it does not read it either.
+
+### 19.6 Formulas and conditions
+
+| Parameter | Formula | Conditions |
+| --- | --- | --- |
+| `CL/F` | `Dose_τ / AUCτ` | steady state declared, per-administration dose, τ-wide observed interval selected **and** confirmed aligned, matching units, extravascular route |
+| `CL` | `F × Dose_τ / AUCτ`; `F = 1` for an IV route by definition | as `CL/F`, plus a recorded `F` for an extravascular dose |
+| `Vz/F` | `(CL/F) / λ_z` | as `CL/F`, plus a usable λ_z from the selected interval |
+| `Vz` | `CL / λ_z` | as `CL`, plus a usable λ_z from the selected interval |
+
+For an IV route the apparent twins are `not-applicable` (F = 1 is a route
+property, not a duplicated value). For an extravascular dose without F, only the
+apparent parameters are reported.
+
+### 19.7 λ_z must come from the selected interval
+
+The terminal regression that produces λ_z uses **only** the observations inside
+the selected interval. The whole-dataset λ_z is never substituted, because a
+slope fitted elsewhere does not describe the interval being analysed. A missing
+or unusable interval λ_z makes `Vz`/`Vz/F` unavailable while leaving `CL`/`CL/F`
+available — the two families are independent results.
+
+Additional caveats that make the volume `conditional` rather than `available`:
+
+- the interval's terminal regression has `R² < 0.8`;
+- the dose is extravascular, so the observed terminal slope may be
+  absorption-limited (flip-flop);
+- for an IV infusion, not every terminal observation demonstrably lies after
+  the infusion end (measured from the interval start), so the slope may include
+  the input phase.
+
+### 19.8 Statuses, codes and audit trail
+
+AUCτ is `available` or `unavailable` with one of: `ADMINISTRATION_MISSING`,
+`REGIMEN_UNKNOWN`, `REGIMEN_NOT_REPEATED`, `DOSING_INTERVAL_MISSING`,
+`DOSING_INTERVAL_NOT_POSITIVE`, `DOSING_INTERVAL_UNIT_INCOMPATIBLE`,
+`TIME_UNIT_INCOMPATIBLE`, `INTERVAL_NOT_SELECTED`, `INTERVAL_NOT_FINITE`,
+`INTERVAL_ORDER`, `INTERVAL_BOUNDARY_NOT_OBSERVED`, `INTERVAL_LENGTH_MISMATCH`,
+`INSUFFICIENT_OBSERVATIONS`, `DUPLICATE_SAMPLING_TIMES`, `INVALID_MEASUREMENT`,
+`NUMERICAL_FAILURE`.
+
+The steady-state parameters add `REGIMEN_NOT_STEADY_STATE`,
+`INTERVAL_NOT_SELECTED`, `INTERVAL_AUC_UNAVAILABLE`, `INTERVAL_NOT_ALIGNED`,
+`DOSE_BASIS_UNKNOWN`, `DOSE_BASIS_NOT_PER_ADMINISTRATION`, plus the
+single-dose-path codes (`DOSE_MISSING`, `DOSE_NOT_POSITIVE`,
+`DOSE_UNIT_INCOMPATIBLE`, `CONCENTRATION_UNIT_INCOMPATIBLE`,
+`TIME_UNIT_INCOMPATIBLE`, `TIME_REFERENCE_MISMATCH`,
+`INFUSION_METADATA_INCONSISTENT`, `LAMBDA_Z_UNAVAILABLE`,
+`BIOAVAILABILITY_MISSING`, `NUMERICAL_FAILURE`).
+
+Every AUCτ carries the selected start/end on the dataset's own time axis, τ with
+its unit, the interval in hours, the observation count, the contributing
+`sourceRow` values, the per-segment breakdown, the integration method and the
+interval-scoped λ_z. Every parameter carries its formula, substituted values,
+inputs (dose, dose basis, AUCτ, λ_z, F), assumptions, warnings and the checked
+preconditions.
+
+### 19.9 Compatibility
+
+- `.npex` is **1.2.0**. 1.0.x (no administration) and 1.1.x (administration
+  without `doseBasis`) import unchanged; the new field is optional.
+- `.npsb` is unchanged at **1.1.0**: the archive stores experiment-dataset rows
+  verbatim, so `doseBasis` round-trips with no schema or version change.
+- No new persisted field for any derived value: AUCτ and the parameters are
+  ephemeral analysis results.
+- Editing administration metadata (including `doseBasis`) never touches
+  measurements, `sourceRow` values, units, or provenance.
+
+### 19.10 Not implemented
+
+- Automatic interval selection, and any multi-interval accumulation.
+- Deriving `Dose_τ` from `rate × duration` or from a total-regimen amount.
+- `AUCτ` pooling across subjects or occasions, population PK, PBPK.
+- Any inference of steady state, of dosing history, or of which dose an
+  interval belongs to.
+- Clinical dose recommendations.
+
+### 19.11 Relationship to PKNCA
+
+PKNCA's public documentation of interval selection, `AUCτ` and the conditions
+for steady-state parameters was reviewed for comparison only. No PKNCA source is
+copied or translated (AGPL-3.0 versus this repository's PolyForm Noncommercial
+licence — see `THIRD_PARTY_NOTICES.md`). Intentional differences: this
+implementation requires both interval boundaries to be actual observations and
+requires an explicit analyst confirmation that the interval starts at a dose;
+it never auto-selects an interval; and it refuses dose-dependent parameters for
+a non-steady-state repeated regimen instead of computing `AUCτ`-based values.

@@ -119,7 +119,7 @@ test('CSV → chart → .npex round trip, rename, reload, delete and narrow layo
     }
   }
   expect(npex.formatId).toBe('npex')
-  expect(npex.formatVersion).toBe('1.1.0')
+  expect(npex.formatVersion).toBe('1.2.0')
   expect(npex.dataset.name).toBe('Synthetic 47A measured study')
   expect(npex.dataset.timeUnit).toBe('h')
   expect(npex.dataset.concentrationUnit).toBe('mg/L')
@@ -679,4 +679,68 @@ test('records and displays administration metadata without touching measurements
   await expect(page.getByTestId('dose-dependent-cl-f-status')).toContainText('not applicable')
   // The audit block names the dose and the AUC interval that were used.
   await expect(page.getByTestId('dose-dependent-inputs')).toContainText('100 mg')
+})
+
+test('analyses a selected steady-state interval only after it is confirmed', async ({ page }) => {
+  await page.goto('/experiments')
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+
+  // C = 100 − 5t over one 12 h dosing interval: AUCτ = (100 + 40)/2 · 12 = 840.
+  await importTwoColumnCsv(page, {
+    fileName: 'synthetic-steady-state.csv',
+    csv:
+      'time,concentration\n' +
+      '0,100\n2,90\n4,80\n6,70\n8,60\n10,50\n12,40\n',
+    name: 'Synthetic steady-state study',
+  })
+
+  // A single-dose regimen offers no interval analysis.
+  await expect(page.getByTestId('repeated-dose-nca')).toHaveCount(0)
+
+  // Record a repeated regimen that the analyst declares to be at steady state,
+  // with a per-administration dose and a 12 h interval.
+  await page.getByTestId('administration-edit').click()
+  await page.getByTestId('administration-route').selectOption('iv-bolus')
+  await page.getByTestId('administration-regimen').selectOption('repeated-dose-steady-state')
+  await page.getByTestId('administration-time-reference').selectOption('dose-time')
+  await page.getByTestId('administration-dose').fill('84')
+  await page.getByTestId('administration-dose-unit').selectOption('mg')
+  await page.getByTestId('administration-dose-basis').selectOption('per-administration')
+  await page.getByTestId('administration-interval').fill('12')
+  await page.getByTestId('administration-interval-unit').selectOption('h')
+  await page.getByTestId('administration-save').click()
+
+  await expect(page.getByTestId('administration-summary')).toContainText('Per administration')
+  await expect(page.getByTestId('administration-summary')).toContainText('12 h')
+
+  // The interval analysis exists but refuses to guess which window to use.
+  await expect(page.getByTestId('repeated-dose-nca')).toBeVisible()
+  await expect(page.getByTestId('repeated-dose-tau')).toContainText('12 h')
+  await expect(page.getByTestId('interval-auc-unavailable')).toContainText('INTERVAL_NOT_SELECTED')
+  await expect(page.getByTestId('steady-state-cl-status')).toContainText('unavailable')
+
+  // An interval that is not one τ wide is refused, not silently accepted.
+  await page.getByTestId('repeated-interval-start').selectOption('0')
+  await page.getByTestId('repeated-interval-end').selectOption('8')
+  await expect(page.getByTestId('interval-auc-unavailable')).toContainText('INTERVAL_LENGTH_MISMATCH')
+
+  // The τ-wide interval integrates to the hand-checkable 840 mg/L·h.
+  await page.getByTestId('repeated-interval-end').selectOption('12')
+  const intervalBlock = page.getByTestId('interval-auc')
+  await expect(intervalBlock).toContainText('840')
+  await expect(intervalBlock).toContainText('mg/L·h')
+  await expect(intervalBlock).toContainText('1, 2, 3, 4, 5, 6, 7')
+
+  // Without the analyst's confirmation the steady-state parameters stay refused.
+  await expect(page.getByTestId('steady-state-unavailable')).toContainText('INTERVAL_NOT_ALIGNED')
+
+  // Confirming that the interval starts at a dose unlocks CL = 84 / 840 = 0.1 L/h.
+  await page.getByTestId('interval-aligned').check()
+  await expect(page.getByTestId('steady-state-cl-status')).toContainText('available')
+  await expect(page.getByTestId('steady-state-cl')).toContainText('0.1 L/h')
+  await expect(page.getByTestId('steady-state-cl-f-status')).toContainText('not applicable')
+  await expect(page.getByTestId('steady-state-inputs')).toContainText('per-administration')
+
+  // The recorded measurements are untouched by any of the analysis.
+  await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(7)
 })

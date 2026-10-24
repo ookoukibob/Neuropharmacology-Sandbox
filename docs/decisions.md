@@ -1089,7 +1089,71 @@ dose representation.
 **Consequences.** Every displayed dose-dependent value has a stated formula,
 unit, input provenance and precondition list. Missing or contradictory metadata
 produces a specific refusal instead of a plausible-looking number. Repeated
-dosing remains a candidate Phase 50C task (`AUCτ` at a declared interval).
+dosing was subsequently implemented in its own path — see ADR-32 — and this
+single-dose module still refuses it.
+
+---
+
+## ADR-32 · Interval AUCτ requires observed boundaries, and steady state is a declaration
+
+**Context.** Phase 50C adds repeated-dose analysis. Three things are tempting and
+all three are wrong: integrating "the last τ worth of data" automatically,
+picking whichever τ-wide window looks best, and dividing the per-administration
+dose by an interval area to call the result a clearance. Each produces a number
+that looks authoritative and is scientifically unfounded.
+
+**Decision.**
+
+- **AUCτ is an explicitly selected interval with observed boundaries.** The
+  analyst chooses `t_start` and `t_end` from the dataset's own sampling times;
+  neither is interpolated, extrapolated or zero-filled. `t_end − t_start` must
+  equal the recorded τ within `1e-9` relative tolerance, which exists only to
+  absorb binary64/unit-factor noise. Anything else is
+  `INTERVAL_BOUNDARY_NOT_OBSERVED` or `INTERVAL_LENGTH_MISMATCH`.
+- **No automatic interval selection.** Multiple τ-wide windows may exist; the UI
+  starts with nothing selected and never prefers the largest, the last, or the
+  one closest to steady state. The choice is an analysis input, echoed in the
+  audit trail, never persisted.
+- **Alignment is confirmed, not derived.** `timeReference` does not identify a
+  dose number, so τ alone cannot say which dose a window belongs to. The
+  analyst confirms the interval starts at the recorded administration time; the
+  steady-state parameters refuse with `INTERVAL_NOT_ALIGNED` without it.
+- **Steady state must be declared.** Only `repeated-dose-steady-state` yields
+  dose-dependent parameters. A plain `repeated-dose` dataset reports its AUCτ
+  and is refused with `REGIMEN_NOT_STEADY_STATE`. No code path inspects curve
+  shape, adjacent interval similarity or dose count to decide steadiness.
+- **A dose basis is part of the contract.** `doseBasis`
+  (`per-administration` | `total-regimen` | `unknown`) is optional and defaults
+  to **not recorded**, never to `per-administration`. Only
+  `per-administration` is a valid `Dose_τ`; a total-regimen amount is refused
+  (`DOSE_BASIS_NOT_PER_ADMINISTRATION`) because dividing a cumulative amount by
+  one interval inflates clearance by the number of doses.
+- **λ_z comes from the selected interval.** The interval subset is analysed by
+  the existing `analyzeNca`; the whole-dataset λ_z is never substituted. A
+  missing interval λ_z leaves `CL`/`CL/F` available and `Vz`/`Vz/F`
+  unavailable.
+- **Reuse, don't reimplement.** The area uses the same `trapezoidalArea` as
+  `AUC(0→last)`; units, statuses, audit strings and the parameter table are the
+  phase-50B ones. `AUCτ` is never `aucInf` renamed, and the ≤20 % extrapolation
+  criterion of the single-dose path does not apply to an observed-only area.
+- **Additive interchange change.** `.npex` goes to 1.2.0 for `doseBasis`; 1.0.x
+  and 1.1.x still import. `.npsb` needs no change because it snapshots rows
+  verbatim. Derived values remain ephemeral.
+
+**Rejected alternatives.** *Integrate the whole dataset and call it AUCτ* — its
+length is not τ. *Auto-select the interval with the most points or the largest
+area* — a selection rule is not evidence of a dosing interval. *Compute CL from
+`repeated-dose` and label it "non-steady-state CL"* — no such parameter exists;
+`Dose/AUCτ` off steady state is not a clearance. *Default a missing dose basis to
+per-administration* — that silently turns a cumulative or unstated amount into a
+per-dose amount. *Fit the terminal phase on the whole dataset and reuse its λ_z*
+— it describes another window.
+
+**Consequences.** Every AUCτ names the interval it covers, in the dataset's own
+time units, with its source rows and integration segments. Every steady-state
+parameter traces to an explicit per-administration dose, a confirmed τ-wide
+observed interval and that interval's λ_z — or it is refused with a code that
+says which of those is missing.
 
 ---
 

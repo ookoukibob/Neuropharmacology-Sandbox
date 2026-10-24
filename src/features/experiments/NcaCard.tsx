@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import type { AdministrationMetadata, ExperimentalMeasurement } from '@/domain/experiments/experimental-dataset'
 import {
   analyzeNca,
@@ -11,7 +11,10 @@ import {
   analyzeDoseDependentNca,
   type DoseDependentNcaReport,
 } from '@/domain/experiments/dose-dependent-nca'
+import { analyzeIntervalAuc, observedTimeChoices } from '@/domain/experiments/interval-auc'
+import { analyzeSteadyStateDoseNca } from '@/domain/experiments/steady-state-dose-nca'
 import { DoseDependentNcaSection } from './DoseDependentNcaSection'
+import { RepeatedDoseNcaSection } from './RepeatedDoseNcaSection'
 import { formatNumber } from '@/engine/numeric/decimal'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -64,6 +67,12 @@ interface NcaCardProps {
 export function NcaCard({ measurements, timeUnit, concentrationUnit, administration }: NcaCardProps) {
   const [integrationMethod, setIntegrationMethod] = useState<NcaIntegrationMethod>('linear')
   const [terminalPointCount, setTerminalPointCount] = useState(DEFAULT_TERMINAL_POINT_COUNT)
+  // Interval selection is an explicit analysis input. Nothing is pre-selected:
+  // the analyst picks the two observed boundary times, and confirms alignment
+  // separately for the steady-state parameters.
+  const [intervalStart, setIntervalStart] = useState<number | null>(null)
+  const [intervalEnd, setIntervalEnd] = useState<number | null>(null)
+  const [intervalAligned, setIntervalAligned] = useState(false)
 
   const analysis = useMemo(
     () => analyzeNca(measurements, timeUnit, concentrationUnit, { integrationMethod, terminalPointCount }),
@@ -79,6 +88,72 @@ export function NcaCard({ measurements, timeUnit, concentrationUnit, administrat
         : null,
     [analysis, timeUnit, concentrationUnit, administration],
   )
+
+  // Partial selections are not intervals: both boundaries must be chosen
+  // before anything is analysed.
+  const selection = useMemo(
+    () =>
+      intervalStart === null || intervalEnd === null
+        ? null
+        : { startTime: intervalStart, endTime: intervalEnd },
+    [intervalStart, intervalEnd],
+  )
+
+  const intervalReport = useMemo(
+    () =>
+      analyzeIntervalAuc({
+        measurements,
+        timeUnit,
+        concentrationUnit,
+        administration,
+        integrationMethod,
+        terminalPointCount,
+        selection,
+        administrationAligned: intervalAligned,
+      }),
+    [
+      measurements,
+      timeUnit,
+      concentrationUnit,
+      administration,
+      integrationMethod,
+      terminalPointCount,
+      selection,
+      intervalAligned,
+    ],
+  )
+
+  const steadyStateReport = useMemo(
+    () => analyzeSteadyStateDoseNca({ timeUnit, concentrationUnit, administration, interval: intervalReport }),
+    [timeUnit, concentrationUnit, administration, intervalReport],
+  )
+
+  const observedTimes = useMemo(() => observedTimeChoices(measurements), [measurements])
+
+  // A repeated regimen is the only case where an interval AUCτ is meaningful.
+  // A single-dose dataset keeps the phase-50B analysis only, and a dataset with
+  // no administration record keeps its "not recorded" explanation.
+  const repeatedSection: ReactNode =
+    administration === undefined || administration.regimen === 'single-dose' ? null : (
+      <RepeatedDoseNcaSection
+        interval={intervalReport}
+        steady={steadyStateReport}
+        timeUnit={timeUnit}
+        concentrationUnit={concentrationUnit}
+        observedTimes={observedTimes}
+        selection={selection}
+        aligned={intervalAligned}
+        dosingInterval={administration.dosingInterval}
+        onSelectStart={(time) => setIntervalStart(time)}
+        onSelectEnd={(time) => setIntervalEnd(time)}
+        onAlignedChange={(next) => setIntervalAligned(next)}
+        onClearSelection={() => {
+          setIntervalStart(null)
+          setIntervalEnd(null)
+          setIntervalAligned(false)
+        }}
+      />
+    )
 
   return (
     <Card data-testid="nca-card">
@@ -132,6 +207,7 @@ export function NcaCard({ measurements, timeUnit, concentrationUnit, administrat
             timeUnit={timeUnit}
             concentrationUnit={concentrationUnit}
             doseDependent={doseDependent}
+            repeatedSection={repeatedSection}
           />
         )}
       </CardContent>
@@ -145,12 +221,14 @@ function NcaResults({
   timeUnit,
   concentrationUnit,
   doseDependent,
+  repeatedSection,
 }: {
   analysis: NcaAnalysis
   measurementCount: number
   timeUnit: string
   concentrationUnit: string
   doseDependent: DoseDependentNcaReport | null
+  repeatedSection: ReactNode
 }) {
   const rows: readonly { label: string; metric: NcaMetric; testId: string }[] = [
     { label: 'Cmax (maximum observed concentration)', metric: analysis.cmax, testId: 'nca-cmax' },
@@ -258,6 +336,11 @@ function NcaResults({
         λ_z in {timeUnit}⁻¹. The extrapolated fraction is a quality criterion, not a proof that the
         estimate is valid.
       </p>
+
+      {/* The interval AUCτ block comes first for a repeated regimen: it is the
+          applicable analysis there, and the single-dose block below explains
+          why it refuses that regimen. */}
+      {repeatedSection}
 
       {doseDependent === null ? null : <DoseDependentNcaSection report={doseDependent} />}
     </>
