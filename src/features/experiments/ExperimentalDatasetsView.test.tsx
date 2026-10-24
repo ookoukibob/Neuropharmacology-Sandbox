@@ -406,7 +406,7 @@ describe('ExperimentalDatasetsView — .npex import', () => {
     const built = buildNpexFile(storedDataset(), '2026-03-02T00:00:00.000Z')
     if (!built.ok) throw new Error('setup')
     const doc = JSON.parse(built.text) as Record<string, unknown>
-    doc['formatVersion'] = '1.2.0'
+    doc['formatVersion'] = '1.3.0'
     renderView()
     upload('npex-dataset-file', file(JSON.stringify(doc), 'newer.npex', 'application/json'))
 

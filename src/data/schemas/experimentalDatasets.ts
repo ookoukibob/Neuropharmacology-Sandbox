@@ -85,6 +85,7 @@ const administrationQuantityFields = {
 const administrationFields = {
   route: z.enum(['iv-bolus', 'iv-infusion', 'extravascular', 'other', 'unknown']),
   dose: z.looseObject(administrationQuantityFields).optional(),
+  doseBasis: z.enum(['per-administration', 'total-regimen', 'unknown']).optional(),
   infusion: z
     .looseObject({
       duration: z.looseObject(administrationQuantityFields).optional(),
@@ -104,6 +105,7 @@ const administrationMetadataSchema = z.looseObject(administrationFields)
 const administrationMetadataNpexSchema = z.strictObject({
   route: z.enum(['iv-bolus', 'iv-infusion', 'extravascular', 'other', 'unknown']),
   dose: z.strictObject(administrationQuantityFields).optional(),
+  doseBasis: z.enum(['per-administration', 'total-regimen', 'unknown']).optional(),
   infusion: z
     .strictObject({
       duration: z.strictObject(administrationQuantityFields).optional(),

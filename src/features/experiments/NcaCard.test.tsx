@@ -225,3 +225,121 @@ describe('NcaCard', () => {
     expect(screen.getByTestId('dose-dependent-unavailable')).toHaveTextContent(/AUC_NOT_COMPLETE/)
   })
 })
+
+/** C = 100 − 5t over one 12 h interval: AUCτ = (100 + 40)/2 · 12 = 840. */
+const intervalRows = rows([
+  [0, 100],
+  [2, 90],
+  [4, 80],
+  [6, 70],
+  [8, 60],
+  [10, 50],
+  [12, 40],
+])
+
+const steadyState: AdministrationMetadata = {
+  route: 'iv-bolus',
+  regimen: 'repeated-dose-steady-state',
+  timeReference: 'dose-time',
+  dose: { value: 84, unit: 'mg' },
+  doseBasis: 'per-administration',
+  dosingInterval: { value: 12, unit: 'h' },
+}
+
+function renderRepeated(administration: AdministrationMetadata = steadyState) {
+  render(
+    <NcaCard
+      measurements={intervalRows}
+      timeUnit="h"
+      concentrationUnit="mg/L"
+      administration={administration}
+    />,
+  )
+}
+
+describe('NcaCard repeated-dose interval AUCτ', () => {
+  it('offers the observed times and refuses to guess an interval', () => {
+    renderRepeated()
+    expect(screen.getByTestId('repeated-dose-nca')).toBeInTheDocument()
+    expect(screen.getByTestId('repeated-dose-tau')).toHaveTextContent('12 h')
+    // Nothing is pre-selected: the selectors start empty.
+    expect(screen.getByTestId('repeated-interval-start')).toHaveValue('')
+    expect(screen.getByTestId('repeated-interval-end')).toHaveValue('')
+    expect(screen.getByTestId('interval-auc-unavailable')).toHaveTextContent(/INTERVAL_NOT_SELECTED/)
+    expect(screen.getByTestId('steady-state-cl-status')).toHaveTextContent('unavailable')
+  })
+
+  it('computes AUCτ for the interval the analyst selects', () => {
+    renderRepeated()
+    fireEvent.change(screen.getByTestId('repeated-interval-start'), { target: { value: '0' } })
+    fireEvent.change(screen.getByTestId('repeated-interval-end'), { target: { value: '12' } })
+
+    const block = screen.getByTestId('interval-auc')
+    expect(block).toHaveTextContent('840')
+    expect(block).toHaveTextContent('mg/L·h')
+    expect(block).toHaveTextContent(/Contributing source rows1, 2, 3, 4, 5, 6, 7/)
+    // Without the alignment confirmation the steady-state parameters stay refused.
+    expect(screen.getByTestId('steady-state-cl-status')).toHaveTextContent('unavailable')
+    expect(screen.getByTestId('steady-state-unavailable')).toHaveTextContent(/INTERVAL_NOT_ALIGNED/)
+  })
+
+  it('derives CL once the interval is confirmed to start at a dose', () => {
+    renderRepeated()
+    fireEvent.change(screen.getByTestId('repeated-interval-start'), { target: { value: '0' } })
+    fireEvent.change(screen.getByTestId('repeated-interval-end'), { target: { value: '12' } })
+    fireEvent.click(screen.getByTestId('interval-aligned'))
+
+    expect(screen.getByTestId('steady-state-cl-status')).toHaveTextContent('available')
+    // 84 mg / 840 mg·L⁻¹·h = 0.1 L/h.
+    expect(screen.getByTestId('steady-state-cl')).toHaveTextContent('0.1')
+    expect(screen.getByTestId('steady-state-cl')).toHaveTextContent('L/h')
+    expect(screen.getByTestId('steady-state-cl-f-status')).toHaveTextContent('not applicable')
+    expect(screen.getByTestId('steady-state-inputs')).toHaveTextContent('per-administration')
+    expect(screen.getByTestId('steady-state-inputs')).toHaveTextContent('840')
+  })
+
+  it('reports a length mismatch instead of accepting an arbitrary window', () => {
+    renderRepeated()
+    fireEvent.change(screen.getByTestId('repeated-interval-start'), { target: { value: '0' } })
+    fireEvent.change(screen.getByTestId('repeated-interval-end'), { target: { value: '8' } })
+    expect(screen.getByTestId('interval-auc-unavailable')).toHaveTextContent(/INTERVAL_LENGTH_MISMATCH/)
+    expect(screen.getByTestId('interval-auc-unavailable')).toHaveTextContent(/not one τ wide/i)
+  })
+
+  it('keeps AUCτ but refuses dose-dependent parameters for repeated dosing off steady state', () => {
+    renderRepeated({ ...steadyState, regimen: 'repeated-dose' })
+    expect(screen.getByTestId('steady-state-declaration-missing')).toBeInTheDocument()
+    expect(screen.getByTestId('steady-state-declaration-missing')).toHaveTextContent(/not a clearance/i)
+
+    fireEvent.change(screen.getByTestId('repeated-interval-start'), { target: { value: '0' } })
+    fireEvent.change(screen.getByTestId('repeated-interval-end'), { target: { value: '12' } })
+    fireEvent.click(screen.getByTestId('interval-aligned'))
+
+    // The interval area is reported...
+    expect(screen.getByTestId('interval-auc')).toHaveTextContent('840')
+    // ...but no clearance is published from a non-steady-state interval.
+    expect(screen.getByTestId('steady-state-cl-status')).toHaveTextContent('unavailable')
+    expect(screen.getByTestId('steady-state-unavailable')).toHaveTextContent(/REGIMEN_NOT_STEADY_STATE/)
+  })
+
+  it('does not offer an interval analysis for a single dose', () => {
+    render(
+      <NcaCard measurements={intervalRows} timeUnit="h" concentrationUnit="mg/L" administration={ivBolus} />,
+    )
+    expect(screen.queryByTestId('repeated-dose-nca')).not.toBeInTheDocument()
+  })
+
+  it('clears the interval selection completely', () => {
+    renderRepeated()
+    fireEvent.change(screen.getByTestId('repeated-interval-start'), { target: { value: '0' } })
+    fireEvent.change(screen.getByTestId('repeated-interval-end'), { target: { value: '12' } })
+    fireEvent.click(screen.getByTestId('interval-aligned'))
+    expect(screen.getByTestId('steady-state-cl-status')).toHaveTextContent('available')
+
+    fireEvent.click(screen.getByTestId('interval-clear'))
+    expect(screen.getByTestId('repeated-interval-start')).toHaveValue('')
+    expect(screen.getByTestId('repeated-interval-end')).toHaveValue('')
+    expect(screen.getByTestId('interval-aligned')).not.toBeChecked()
+    expect(screen.getByTestId('interval-auc-unavailable')).toHaveTextContent(/INTERVAL_NOT_SELECTED/)
+  })
+})

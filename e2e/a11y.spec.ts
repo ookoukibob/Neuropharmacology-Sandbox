@@ -359,6 +359,56 @@ test('a11y: the experimental dataset import, detail and destructive states pass 
   await expect(page.getByTestId('nca-card')).toBeVisible()
   await scan(page, 'experimental datasets (noncompartmental analysis)')
 
+  // Phase 50C: a repeated regimen with a selected, confirmed interval renders
+  // the AUCτ block and the steady-state parameter table. Both states (offered
+  // and refused) are scanned, because each carries its own explanations.
+  await page.getByTestId('csv-dataset-file').setInputFiles({
+    name: 'synthetic-a11y-50c.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(
+      'time,concentration\n0,100\n2,90\n4,80\n6,70\n8,60\n10,50\n12,40\n',
+      'utf8',
+    ),
+  })
+  await expect(page.getByTestId('csv-dataset-mapping')).toBeVisible()
+  await page.getByTestId('csv-dataset-name').fill('Synthetic A11y Steady State')
+  await page.getByTestId('csv-dataset-time-column').selectOption('0')
+  await page.getByTestId('csv-dataset-time-unit').selectOption('h')
+  await page.getByTestId('csv-dataset-concentration-column').selectOption('1')
+  await page.getByTestId('csv-dataset-concentration-unit').selectOption('mg/L')
+  await page.getByTestId('csv-dataset-preview').click()
+  await page.getByTestId('csv-dataset-confirm').click()
+  await expect(
+    page.getByRole('heading', { level: 2, name: 'Synthetic A11y Steady State' }),
+  ).toBeVisible()
+
+  await page.getByTestId('administration-edit').click()
+  await page.getByTestId('administration-route').selectOption('iv-bolus')
+  await page.getByTestId('administration-regimen').selectOption('repeated-dose-steady-state')
+  await page.getByTestId('administration-time-reference').selectOption('dose-time')
+  await page.getByTestId('administration-dose').fill('84')
+  await page.getByTestId('administration-dose-basis').selectOption('per-administration')
+  await page.getByTestId('administration-interval').fill('12')
+  await page.getByTestId('administration-save').click()
+
+  await expect(page.getByTestId('repeated-dose-nca')).toBeVisible()
+  await scan(page, 'experimental datasets (repeated dosing, no interval selected)')
+
+  await page.getByTestId('repeated-interval-start').selectOption('0')
+  await page.getByTestId('repeated-interval-end').selectOption('12')
+  await page.getByTestId('interval-aligned').check()
+  await expect(page.getByTestId('steady-state-cl-status')).toContainText('available')
+  await scan(page, 'experimental datasets (steady-state parameters)')
+
+  // Back to the first dataset for the rename/delete scans.
+  await page
+    .getByRole('list', { name: 'Saved experimental datasets' })
+    .getByRole('button', { name: /Synthetic A11y Dataset/ })
+    .click()
+  await expect(
+    page.getByRole('heading', { level: 2, name: 'Synthetic A11y Dataset' }),
+  ).toBeVisible()
+
   await page.getByTestId('dataset-rename').click()
   await expect(page.getByTestId('dataset-rename-name')).toBeVisible()
   await scan(page, 'experimental datasets (rename form)')
