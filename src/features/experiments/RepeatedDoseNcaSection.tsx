@@ -10,9 +10,11 @@
 import { formatNumber } from '@/engine/numeric/decimal'
 import { DoseParameterTable } from './DoseParameterTable'
 import { IntervalExposureSummary } from './IntervalExposureSummary'
+import { SamplingCoverageSummary } from './SamplingCoverageSummary'
 import type { AdministrationQuantity } from '@/domain/experiments/experimental-dataset'
 import type { IntervalAucReport, IntervalAucSelection } from '@/domain/experiments/interval-auc'
 import type { IntervalExposureReport } from '@/domain/experiments/interval-exposure-metrics'
+import type { SamplingCoverageReport } from '@/domain/experiments/sampling-coverage'
 import type { SteadyStateDoseNcaReport } from '@/domain/experiments/steady-state-dose-nca'
 
 interface RepeatedDoseNcaSectionProps {
@@ -20,6 +22,8 @@ interface RepeatedDoseNcaSectionProps {
   readonly steady: SteadyStateDoseNcaReport
   /** Observed interval exposure metrics over the same selected interval. */
   readonly exposure: IntervalExposureReport
+  /** Descriptive sampling statistics for the same selected interval. */
+  readonly sampling: SamplingCoverageReport
   readonly timeUnit: string
   readonly concentrationUnit: string
   /** Observed sampling times only, ascending; used to build the selectors. */
@@ -37,6 +41,7 @@ export function RepeatedDoseNcaSection({
   interval,
   steady,
   exposure,
+  sampling,
   timeUnit,
   concentrationUnit,
   observedTimes,
@@ -186,6 +191,8 @@ export function RepeatedDoseNcaSection({
           dataset or treated as source metadata.
         </p>
       </div>
+
+      <SamplingCoverageSummary report={sampling} />
 
       <IntervalExposureSummary report={exposure} />
 

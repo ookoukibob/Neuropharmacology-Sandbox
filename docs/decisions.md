@@ -1223,6 +1223,61 @@ code that identifies the missing prerequisite.
 
 ---
 
+## ADR-34 · Sampling diagnostics describe observations without judging their adequacy
+
+**Context.** Phase 50E needs to expose where samples actually lie inside the
+phase-50C selection. A largest-gap number or a peak at an interior sample can
+look like an automatic quality judgement, but neither establishes that the true
+extremes were observed or that a PK analysis is adequately sampled. Duplicate
+rows and tied gaps also make record counts, time counts and “the” longest gap
+easy to conflate.
+
+**Decision.**
+
+- **One explicit closed window.** Use `IntervalAucReport.selection` and actual
+  rows in `[t_start, t_end]`. Never choose a default window, interpolate a
+  boundary or infer a time between samples. Sampling statistics remain
+  available when AUCτ has a separate refusal; their status never unlocks AUCτ.
+- **Records and times are different quantities.** Report observation records,
+  distinct times and adjacent-gap counts separately. Sort a copy of the
+  distinct times for gap calculations, retain every original row, and return
+  every source row in each repeated-time group without averaging replicates.
+- **Complete gaps and ties.** For adjacent distinct times report minimum,
+  standard median (the mean of the two middle values for an even count),
+  arithmetic mean and maximum. Retain all gaps and all endpoint source rows;
+  return every maximum tie. With fewer than two times, refuse gap statistics
+  instead of inventing a zero.
+- **A proportion, not a score.** `100 × maximumGap / windowDuration` is shown
+  with its gap, width and dataset time unit. It is not a coverage or adequacy
+  score. Non-finite arithmetic produces structured unavailability, while valid
+  independent sections survive.
+- **Reuse observed extremes.** Position diagnostics consume every tied
+  `Cmax,obs`/`Cmin,obs` observation from phase 50D and classify each as start,
+  interior or end. They never re-derive an extreme or use only the scalar
+  earliest time. If phase 50D is unavailable, only this section is unavailable.
+- **No verdict and no feedback into PK.** No point-count/gap threshold, curve
+  inference, true-extreme claim, integration-error estimate or automatic NCA
+  gate is introduced. The diagnostics never feed AUCτ, exposure or
+  dose-dependent formulas, and the phase-50D fluctuation remains an
+  observed-data-based estimate rather than a strict lower bound.
+- **Ephemeral and dependency-free.** No persistence, schema, interchange
+  version, migration, dependency or licence change is needed.
+
+**Rejected alternatives.** *Call the percentage “coverage” or “adequacy”* — a
+window proportion is not evidence of either. *Drop duplicate timestamps* — that
+would discard real records and their provenance. *Return only the first longest
+gap or first tied extreme* — both hide data. *Require AUCτ before showing any
+sampling statistics* — the selection and observed times can support descriptive
+statistics independently. *Infer a missed peak from a boundary maximum* — the
+unobserved curve between samples is unknown.
+
+**Consequences.** Users can audit what was sampled, where the longest gaps and
+repeated times occurred, and where sampled extremes sit, with complete source
+rows and explicit partial-unavailable states. Interpretation remains with the
+analyst and the existing PK formulas and persisted data are untouched.
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

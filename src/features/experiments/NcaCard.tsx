@@ -13,6 +13,7 @@ import {
 } from '@/domain/experiments/dose-dependent-nca'
 import { analyzeIntervalAuc, observedTimeChoices } from '@/domain/experiments/interval-auc'
 import { analyzeIntervalExposure } from '@/domain/experiments/interval-exposure-metrics'
+import { analyzeSamplingCoverage } from '@/domain/experiments/sampling-coverage'
 import { analyzeSteadyStateDoseNca } from '@/domain/experiments/steady-state-dose-nca'
 import { DoseDependentNcaSection } from './DoseDependentNcaSection'
 import { RepeatedDoseNcaSection } from './RepeatedDoseNcaSection'
@@ -143,6 +144,21 @@ export function NcaCard({ measurements, timeUnit, concentrationUnit, administrat
     [measurements, timeUnit, concentrationUnit, administration, intervalReport],
   )
 
+  // Sampling coverage reads the same selection and the same exposure report, so
+  // the diagnostics describe exactly the window the other results used.
+  const samplingReport = useMemo(
+    () =>
+      analyzeSamplingCoverage({
+        measurements,
+        timeUnit,
+        concentrationUnit,
+        administration,
+        interval: intervalReport,
+        exposure: exposureReport,
+      }),
+    [measurements, timeUnit, concentrationUnit, administration, intervalReport, exposureReport],
+  )
+
   const observedTimes = useMemo(() => observedTimeChoices(measurements), [measurements])
 
   // A repeated regimen is the only case where an interval AUCτ is meaningful.
@@ -154,6 +170,7 @@ export function NcaCard({ measurements, timeUnit, concentrationUnit, administrat
         interval={intervalReport}
         steady={steadyStateReport}
         exposure={exposureReport}
+        sampling={samplingReport}
         timeUnit={timeUnit}
         concentrationUnit={concentrationUnit}
         observedTimes={observedTimes}

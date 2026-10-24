@@ -717,12 +717,22 @@ test('analyses a selected steady-state interval only after it is confirmed', asy
   await expect(page.getByTestId('repeated-dose-nca')).toBeVisible()
   await expect(page.getByTestId('repeated-dose-tau')).toContainText('12 h')
   await expect(page.getByTestId('interval-auc-unavailable')).toContainText('INTERVAL_NOT_SELECTED')
+  await expect(page.getByTestId('sampling-unavailable')).toContainText('INTERVAL_NOT_SELECTED')
   await expect(page.getByTestId('steady-state-cl-status')).toContainText('unavailable')
 
   // An interval that is not one τ wide is refused, not silently accepted.
   await page.getByTestId('repeated-interval-start').selectOption('0')
   await page.getByTestId('repeated-interval-end').selectOption('8')
   await expect(page.getByTestId('interval-auc-unavailable')).toContainText('INTERVAL_LENGTH_MISMATCH')
+  // Sampling diagnostics have their own preconditions: the valid 0–8 h
+  // selection still has four gaps even though it cannot produce AUCτ.
+  await expect(page.getByTestId('sampling-gap-max')).toContainText('2 h')
+  await expect(page.getByTestId('sampling-coverage-summary')).toContainText(
+    '5 measurement record(s) at 5 distinct sampling time(s)',
+  )
+  await expect(page.getByTestId('sampling-extremes-unavailable')).toContainText(
+    'EXPOSURE_REPORT_UNAVAILABLE',
+  )
 
   // The τ-wide interval integrates to the hand-checkable 840 mg/L·h.
   await page.getByTestId('repeated-interval-end').selectOption('12')
@@ -730,6 +740,24 @@ test('analyses a selected steady-state interval only after it is confirmed', asy
   await expect(intervalBlock).toContainText('840')
   await expect(intervalBlock).toContainText('mg/L·h')
   await expect(intervalBlock).toContainText('1, 2, 3, 4, 5, 6, 7')
+
+  // Sampling coverage describes only the observed times. All six 2 h gaps tie,
+  // and the percentage is a window proportion rather than an adequacy score.
+  await expect(page.getByTestId('sampling-coverage-summary')).toContainText(
+    '7 measurement record(s) at 7 distinct sampling time(s)',
+  )
+  await expect(page.getByTestId('sampling-gap-min')).toContainText('2 h')
+  await expect(page.getByTestId('sampling-gap-median')).toContainText('2 h')
+  await expect(page.getByTestId('sampling-gap-mean')).toContainText('2 h')
+  await expect(page.getByTestId('sampling-gap-max')).toContainText('2 h')
+  await expect(page.getByTestId('sampling-longest-gap-item')).toHaveCount(6)
+  await expect(page.getByTestId('sampling-gap-fraction')).toContainText('16.6666666667 %')
+  await expect(page.getByTestId('sampling-gap-fraction')).toContainText('not a coverage score')
+  await expect(page.getByTestId('sampling-start-observed')).toContainText('yes')
+  await expect(page.getByTestId('sampling-end-observed')).toContainText('yes')
+  await expect(page.getByTestId('sampling-max-positions')).toContainText('at the interval start')
+  await expect(page.getByTestId('sampling-min-positions')).toContainText('at the interval end')
+  await expect(page.getByTestId('sampling-limits')).toContainText('No threshold is applied')
 
   // Interval exposure: the observed peak/trough and the interval mean are
   // reported from the same selected interval, before any steady-state claim.
