@@ -384,7 +384,7 @@ describe('dose-dependent NCA — units', () => {
     expect(report.parameters.vz.value).toBeCloseTo(1, 10)
     expect(report.parameters.cl.substitution).toContain('g ÷')
     expect(report.parameters.cl.substitution).toContain('g·h/L =')
-    expect(report.parameters.vz.substitution).toContain('h⁻¹ =')
+    expect(report.parameters.vz.substitution).toBe('30 L/h ÷ 30 h⁻¹ = 1 L')
   })
 
   it('refuses a molar concentration with a mass dose (no molecular weight is invented)', () => {
