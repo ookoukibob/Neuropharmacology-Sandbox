@@ -43,6 +43,7 @@ import type {
   AdministrationQuantity,
   ExperimentalMeasurement,
 } from './experimental-dataset'
+import { isQuantifiedMeasurement } from './experimental-dataset'
 import type { IntervalAucReport } from './interval-auc'
 import type { IntervalExposureMetric, IntervalExposureReport } from './interval-exposure-metrics'
 
@@ -274,23 +275,25 @@ export function analyzeSamplingCoverage(input: SamplingCoverageInput): SamplingC
     )
   }
 
+  // Sampling statistics use times only; below-limit records keep their real
+  // sampling time and must not be dropped for lacking a concentration value. A
+  // quantified record must still carry a valid concentration, so a malformed
+  // numeric row is not silently described by its time alone.
   const invalidRows: number[] = []
   for (const measurement of measurements) {
-    if (
-      typeof measurement.time !== 'number' ||
-      typeof measurement.concentration !== 'number' ||
-      !Number.isFinite(measurement.time) ||
-      !Number.isFinite(measurement.concentration) ||
-      measurement.time < 0 ||
-      measurement.concentration < 0
-    ) {
+    if (typeof measurement.time !== 'number' || !Number.isFinite(measurement.time) || measurement.time < 0) {
       invalidRows.push(measurement.sourceRow)
+    } else if (isQuantifiedMeasurement(measurement)) {
+      const concentration = measurement.concentration
+      if (typeof concentration !== 'number' || !Number.isFinite(concentration) || concentration < 0) {
+        invalidRows.push(measurement.sourceRow)
+      }
     }
   }
   if (invalidRows.length > 0) {
     return refuse(
       'INVALID_MEASUREMENT',
-      `Source row(s) ${invalidRows.join(', ')} are not finite non-negative time/concentration pairs, so the sampling summary is refused.`,
+      `Source row(s) ${invalidRows.join(', ')} are invalid: a finite non-negative time is required, and a quantified record needs a finite non-negative concentration.`,
     )
   }
 

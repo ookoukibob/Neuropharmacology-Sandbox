@@ -50,8 +50,10 @@ import type {
   AdministrationQuantity,
   AdministrationRegimen,
   ExperimentalMeasurement,
+  QuantifiedMeasurement,
 } from './experimental-dataset'
 import { auditNumber, exact } from './dose-dependent-nca'
+import { censoredRefusalMessage } from './experimental-dataset'
 import type { IntervalAucReport } from './interval-auc'
 
 export type IntervalExposureMetricId =
@@ -89,6 +91,8 @@ export type IntervalExposureUnavailableCode =
   | 'NO_OBSERVATIONS_IN_INTERVAL'
   /** A measurement is not a valid finite non-negative pair. */
   | 'INVALID_MEASUREMENT'
+  /** A below-quantification-limit record has no numeric concentration to use. */
+  | 'CENSORED_CONCENTRATION_UNSUPPORTED'
   /** The dataset's time unit is not a time unit. */
   | 'TIME_UNIT_INCOMPATIBLE'
   /** The concentration unit is not a concentration dimension. */
@@ -364,15 +368,20 @@ export function analyzeIntervalExposure(input: IntervalExposureInput): IntervalE
   // --- 0b. Measurement validity, reported before anything else ------------
   // Checked first so an invalid row is named as such rather than being hidden
   // behind an upstream "AUCτ unavailable" verdict.
+  const censoredRefusal = censoredRefusalMessage(measurements)
+  if (censoredRefusal !== null) {
+    return refuseAll('CENSORED_CONCENTRATION_UNSUPPORTED', censoredRefusal)
+  }
   const invalidRows: number[] = []
   for (const measurement of measurements) {
+    const concentration = (measurement as QuantifiedMeasurement).concentration
     if (
       typeof measurement.time !== 'number' ||
-      typeof measurement.concentration !== 'number' ||
+      typeof concentration !== 'number' ||
       !Number.isFinite(measurement.time) ||
-      !Number.isFinite(measurement.concentration) ||
+      !Number.isFinite(concentration) ||
       measurement.time < 0 ||
-      measurement.concentration < 0
+      concentration < 0
     ) {
       invalidRows.push(measurement.sourceRow)
     }
@@ -426,7 +435,7 @@ export function analyzeIntervalExposure(input: IntervalExposureInput): IntervalE
     if (measurement.time >= coverage.startTime && measurement.time <= coverage.endTime) {
       inside.push({
         time: measurement.time,
-        concentration: measurement.concentration,
+        concentration: (measurement as QuantifiedMeasurement).concentration,
         sourceRow: measurement.sourceRow,
       })
     }

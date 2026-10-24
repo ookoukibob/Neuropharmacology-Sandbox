@@ -35,7 +35,9 @@ import type {
   AdministrationRegimen,
   AdministrationRoute,
   ExperimentalMeasurement,
+  QuantifiedMeasurement,
 } from './experimental-dataset'
+import { censoredRefusalMessage } from './experimental-dataset'
 import {
   analyzeNca,
   trapezoidalArea,
@@ -90,6 +92,8 @@ export type IntervalAucUnavailableCode =
   | 'DUPLICATE_SAMPLING_TIMES'
   /** A measurement is not a valid finite non-negative pair. */
   | 'INVALID_MEASUREMENT'
+  /** A below-quantification-limit record has no numeric concentration to integrate. */
+  | 'CENSORED_CONCENTRATION_UNSUPPORTED'
   /** The integrated area is not a finite, positive number. */
   | 'NUMERICAL_FAILURE'
 
@@ -233,6 +237,12 @@ export function analyzeIntervalAuc(input: IntervalAucInput): IntervalAucReport {
     message,
   })
 
+  // --- 0. Censored records have no numeric concentration to integrate -------
+  const censoredRefusal = censoredRefusalMessage(measurements)
+  if (censoredRefusal !== null) {
+    return refuse('CENSORED_CONCENTRATION_UNSUPPORTED', censoredRefusal)
+  }
+
   // --- 1. A recorded regimen with a dosing interval ------------------------
   if (administration === undefined) {
     const message =
@@ -325,11 +335,11 @@ export function analyzeIntervalAuc(input: IntervalAucInput): IntervalAucReport {
   const invalid = measurements.filter(
     (measurement) =>
       typeof measurement.time !== 'number' ||
-      typeof measurement.concentration !== 'number' ||
+      typeof (measurement as QuantifiedMeasurement).concentration !== 'number' ||
       !Number.isFinite(measurement.time) ||
-      !Number.isFinite(measurement.concentration) ||
+      !Number.isFinite((measurement as QuantifiedMeasurement).concentration) ||
       measurement.time < 0 ||
-      measurement.concentration < 0,
+      (measurement as QuantifiedMeasurement).concentration < 0,
   )
   if (invalid.length > 0) {
     const message = `Some measurements are invalid and cannot be integrated: row(s) ${invalid
@@ -398,7 +408,7 @@ export function analyzeIntervalAuc(input: IntervalAucInput): IntervalAucReport {
   // --- 4. The area, through the existing trapezoidal implementation -------
   const points = inside.map((measurement) => ({
     time: measurement.time,
-    concentration: measurement.concentration,
+    concentration: (measurement as QuantifiedMeasurement).concentration,
     sourceRow: measurement.sourceRow,
   }))
   const area = trapezoidalArea(points, input.integrationMethod)

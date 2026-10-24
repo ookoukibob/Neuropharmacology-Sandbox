@@ -4,7 +4,11 @@
  * This module does not standardize residuals, infer an error distribution,
  * estimate uncertainty, or compare models. Notes are screening aids only.
  */
-import type { ExperimentalMeasurement } from './experimental-dataset'
+import {
+  censoredRefusalMessage,
+  type ExperimentalMeasurement,
+  type QuantifiedMeasurement,
+} from './experimental-dataset'
 import type { MonoExponentialFitResult } from './mono-exponential-fit'
 
 export interface MonoExponentialResidual {
@@ -35,6 +39,7 @@ export type MonoExponentialFitDiagnosticsFailureCode =
   | 'MEASUREMENT_MISMATCH'
   | 'INVALID_MEASUREMENT'
   | 'NON_FINITE_PARAMETER'
+  | 'CENSORED_CONCENTRATION_UNSUPPORTED'
 
 export interface MonoExponentialFitDiagnosticsFailure {
   readonly ok: false
@@ -63,6 +68,10 @@ export function diagnoseMonoExponentialFit(
       message: 'The diagnostic rows do not match the observations used by this fit.',
     }
   }
+  const censoredRefusal = censoredRefusalMessage(measurements)
+  if (censoredRefusal !== null) {
+    return { ok: false, code: 'CENSORED_CONCENTRATION_UNSUPPORTED', message: censoredRefusal }
+  }
   if (!Number.isFinite(fit.tRef) || !Number.isFinite(fit.cRef) || !Number.isFinite(fit.k)) {
     return {
       ok: false,
@@ -76,13 +85,19 @@ export function diagnoseMonoExponentialFit(
   let maxAbsResidual = 0
 
   for (const measurement of measurements) {
+    if (measurement === null || typeof measurement !== 'object') {
+      return {
+        ok: false,
+        code: 'INVALID_MEASUREMENT',
+        message: 'A measurement is invalid; residual diagnostics are unavailable.',
+      }
+    }
+    const concentration = (measurement as QuantifiedMeasurement).concentration
     if (
-      measurement === null ||
-      typeof measurement !== 'object' ||
       typeof measurement.time !== 'number' ||
-      typeof measurement.concentration !== 'number' ||
+      typeof concentration !== 'number' ||
       !Number.isFinite(measurement.time) ||
-      !Number.isFinite(measurement.concentration)
+      !Number.isFinite(concentration)
     ) {
       return {
         ok: false,
@@ -91,7 +106,7 @@ export function diagnoseMonoExponentialFit(
       }
     }
     const fitted = fit.cRef * Math.exp(-fit.k * (measurement.time - fit.tRef))
-    const residual = measurement.concentration - fitted
+    const residual = concentration - fitted
     if (!Number.isFinite(fitted) || !Number.isFinite(residual)) {
       return {
         ok: false,
@@ -105,7 +120,7 @@ export function diagnoseMonoExponentialFit(
       measurementId: measurement.id,
       sourceRow: measurement.sourceRow,
       time: measurement.time,
-      observed: measurement.concentration,
+      observed: concentration,
       fitted,
       residual,
     })

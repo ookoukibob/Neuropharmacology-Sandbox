@@ -19,6 +19,7 @@ import {
 } from '../schemas/experimentalDatasets'
 import {
   declaredUnit,
+  isCensoredMeasurementInput,
   normalizeDatasetName,
   normalizeDatasetNotes,
   normalizeMeasurementNote,
@@ -170,14 +171,24 @@ export class DexieExperimentalDatasetRepository implements ExperimentalDatasetRe
           `Measurement ${index + 1} (source row ${measurement.sourceRow}): ${note.message}`,
         )
       }
-      measurements.push({
+      const base = {
         id: this.idFactory(),
         sourceRow: measurement.sourceRow,
         time: measurement.time,
-        concentration: measurement.concentration,
         ...(sample.sampleId === undefined ? {} : { sampleId: sample.sampleId }),
         ...(note.note === undefined ? {} : { note: note.note }),
-      })
+      }
+      measurements.push(
+        isCensoredMeasurementInput(measurement)
+          ? {
+              ...base,
+              censored: true,
+              censoring: measurement.censoring,
+              rawText: measurement.rawText,
+              limit: measurement.limit,
+            }
+          : { ...base, concentration: measurement.concentration },
+      )
     }
 
     const stamp = this.now()

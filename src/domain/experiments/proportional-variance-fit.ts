@@ -76,7 +76,7 @@
  * independent observation in source order.
  */
 import { goldenSectionMinimize } from './bounded-minimize'
-import type { ExperimentalMeasurement } from './experimental-dataset'
+import type { ExperimentalMeasurement, QuantifiedMeasurement } from './experimental-dataset'
 import {
   MAX_DIMENSIONLESS_RATE,
   prepareMonoExponentialProblem,
@@ -762,7 +762,7 @@ function prepareContext(
   for (const measurement of measurements) {
     if (measurement.time > problem.tRef) {
       hasLaterObservation = true
-      if (measurement.concentration !== 0) {
+      if ((measurement as QuantifiedMeasurement).concentration !== 0) {
         allLaterObservationsAreZero = false
         break
       }

@@ -240,9 +240,14 @@ export function NcaCard({ measurements, timeUnit, concentrationUnit, administrat
             timeUnit={timeUnit}
             concentrationUnit={concentrationUnit}
             doseDependent={doseDependent}
-            repeatedSection={repeatedSection}
           />
         )}
+
+        {/* The repeated-dose interval analysis is independent of the whole-curve
+            NCA: it renders even when the NCA refuses (for example, on a
+            below-limit record), so the analyst can still select an interval and
+            read the time-only sampling diagnostics. */}
+        {repeatedSection}
       </CardContent>
     </Card>
   )
@@ -254,14 +259,12 @@ function NcaResults({
   timeUnit,
   concentrationUnit,
   doseDependent,
-  repeatedSection,
 }: {
   analysis: NcaAnalysis
   measurementCount: number
   timeUnit: string
   concentrationUnit: string
   doseDependent: DoseDependentNcaReport | null
-  repeatedSection: ReactNode
 }) {
   const rows: readonly { label: string; metric: NcaMetric; testId: string }[] = [
     { label: 'Cmax (maximum observed concentration)', metric: analysis.cmax, testId: 'nca-cmax' },
@@ -369,11 +372,6 @@ function NcaResults({
         λ_z in {timeUnit}⁻¹. The extrapolated fraction is a quality criterion, not a proof that the
         estimate is valid.
       </p>
-
-      {/* The interval AUCτ block comes first for a repeated regimen: it is the
-          applicable analysis there, and the single-dose block below explains
-          why it refuses that regimen. */}
-      {repeatedSection}
 
       {doseDependent === null ? null : <DoseDependentNcaSection report={doseDependent} />}
     </>

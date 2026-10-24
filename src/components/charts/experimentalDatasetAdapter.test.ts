@@ -52,4 +52,31 @@ describe('experimental dataset chart adapter', () => {
     expect(customdata[0]).toContain('first &amp; baseline')
     expect(customdata[0]).not.toContain('<A>')
   })
+
+  it('plots below-limit records with a distinct marker, never as a concentration', () => {
+    const withBlq: ExperimentalDataset = {
+      ...dataset,
+      measurements: [
+        { id: 'm1', sourceRow: 1, time: 0, concentration: 5 },
+        { id: 'm2', sourceRow: 2, time: 1, censored: true, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 0.1 },
+      ],
+    }
+    const chart = buildExperimentalDatasetChart(withBlq)
+    expect(chart.traces).toHaveLength(2)
+    const quantified = chart.traces[0]!
+    const censored = chart.traces[1]!
+    expect(quantified['x']).toEqual([0])
+    expect(quantified['y']).toEqual([5])
+    // The limit is a marker position, not a measured concentration in the
+    // quantified series.
+    expect((quantified['y'] as number[])).not.toContain(0.1)
+    expect(censored['name']).toContain('Below limit')
+    expect(censored['y']).toEqual([0.1])
+    const hover = (censored['customdata'] as string[])[0]!
+    expect(hover).toContain('Source row 2')
+    expect(hover).toContain('not a measured concentration')
+    expect(hover).toContain('&lt;0.1')
+    expect(hover).toContain('LLOQ: 0.1 mg/L')
+    expect(chart.ariaLabel).toContain('1 quantified points and 1 below-limit records')
+  })
 })

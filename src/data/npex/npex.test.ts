@@ -205,14 +205,15 @@ describe('.npex experimental dataset format', () => {
     expect(checkNpexVersion('1.0.99').ok).toBe(true)
     expect(checkNpexVersion('1.1.0').ok).toBe(true)
     expect(checkNpexVersion('1.2.0').ok).toBe(true)
-    expect(checkNpexVersion('1.3.0').ok).toBe(false)
+    expect(checkNpexVersion('1.3.0').ok).toBe(true)
+    expect(checkNpexVersion('1.4.0').ok).toBe(false)
     expect(checkNpexVersion('2.0.0').ok).toBe(false)
     expect(checkNpexVersion('1.0').ok).toBe(false)
 
     const built = buildNpexFile(stored(), EXPORTED_AT)
     if (!built.ok) throw new Error('setup')
     const doc = JSON.parse(built.text) as Record<string, unknown>
-    doc['formatVersion'] = '1.3.0'
+    doc['formatVersion'] = '1.4.0'
     const parsed = parseNpexText(JSON.stringify(doc))
     expect(parsed.ok).toBe(false)
     if (parsed.ok) return
@@ -319,6 +320,46 @@ describe('.npex experimental dataset format', () => {
       measurements: [{ ...stored().measurements[0]!, time: -1 }],
     }
     const built = buildNpexFile(invalid, EXPORTED_AT)
+    expect(built.ok).toBe(false)
+    if (built.ok) return
+    expect(built.issues.some((entry) => entry.code === 'NPEX_EXPORT_VALIDATION')).toBe(true)
+  })
+
+  it('round-trips below-limit records losslessly at 1.3.0', () => {
+    const withBlq: ExperimentalDataset = {
+      ...stored(),
+      measurements: [
+        { id: 'm1', sourceRow: 1, time: 0, concentration: 5 },
+        { id: 'm2', sourceRow: 2, time: 1, censored: true as const, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 0.1, sampleId: 'A' },
+      ],
+    }
+    const built = buildNpexFile(withBlq, EXPORTED_AT)
+    if (!built.ok) throw new Error(JSON.stringify(built.issues))
+
+    const doc = JSON.parse(built.text) as { formatVersion: string; dataset: { measurements: unknown[] } }
+    expect(doc.formatVersion).toBe('1.3.0')
+    expect(doc.dataset.measurements).toEqual([
+      { sourceRow: 1, time: 0, concentration: 5 },
+      { sourceRow: 2, time: 1, censored: true, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 0.1, sampleId: 'A' },
+    ])
+
+    const parsed = parseNpexText(built.text)
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.issues))
+    expect(parsed.dataset.measurements).toEqual([
+      { sourceRow: 1, time: 0, concentration: 5 },
+      { sourceRow: 2, time: 1, censored: true, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 0.1, sampleId: 'A' },
+    ])
+  })
+
+  it('rejects a below-limit record with a zero, negative or missing limit', () => {
+    const base = {
+      ...stored(),
+      measurements: [
+        { id: 'm1', sourceRow: 1, time: 0, concentration: 5 },
+        { id: 'm2', sourceRow: 2, time: 1, censored: true as const, censoring: 'below-quantification-limit' as const, rawText: '<0.1', limit: 0 },
+      ],
+    }
+    const built = buildNpexFile(base, EXPORTED_AT)
     expect(built.ok).toBe(false)
     if (built.ok) return
     expect(built.issues.some((entry) => entry.code === 'NPEX_EXPORT_VALIDATION')).toBe(true)

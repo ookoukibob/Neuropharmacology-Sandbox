@@ -23,6 +23,8 @@ const BASE_MAPPING: CsvDatasetMapping = {
   concentrationUnit: 'mg/L',
   sampleColumn: null,
   noteColumn: null,
+  allowCensored: false,
+  lloqColumn: null,
 }
 
 const SAMPLE_TABLE = table(
@@ -205,5 +207,87 @@ describe('CSV experimental dataset import', () => {
     if (parsed.ok) return
     expect(parsed.error).toContain('25,001')
     expect(parsed.error).toContain('25,000')
+  })
+
+  it('interprets "<number" as a below-limit record only when explicitly enabled', () => {
+    const csv = table('time,conc\n0,5\n1,<0.1\n')
+    const enabled = buildDatasetFromCsv(
+      csv,
+      { ...BASE_MAPPING, allowCensored: true },
+      'blq.csv',
+      IMPORTED_AT,
+    )
+    expect(enabled.issues).toEqual([])
+    expect(enabled.dataset?.measurements).toEqual([
+      { sourceRow: 1, time: 0, concentration: 5 },
+      { sourceRow: 2, time: 1, censored: true, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 0.1 },
+    ])
+
+    const disabled = buildDatasetFromCsv(csv, BASE_MAPPING, 'blq.csv', IMPORTED_AT)
+    expect(disabled.dataset).toBeUndefined()
+    expect(disabled.issues.some((entry) => entry.message.includes('data row 2'))).toBe(true)
+  })
+
+  it('requires an explicit LLOQ column for BLQ / <LLOQ markers', () => {
+    const csv = table('time,conc,lloq\n0,5,0.1\n1,BLQ,0.1\n')
+    const withLloq = buildDatasetFromCsv(
+      csv,
+      { ...BASE_MAPPING, allowCensored: true, lloqColumn: 2 },
+      'blq.csv',
+      IMPORTED_AT,
+    )
+    expect(withLloq.dataset?.measurements).toEqual([
+      { sourceRow: 1, time: 0, concentration: 5 },
+      { sourceRow: 2, time: 1, censored: true, censoring: 'below-quantification-limit', rawText: 'BLQ', limit: 0.1 },
+    ])
+
+    const withoutLloq = buildDatasetFromCsv(
+      table('time,conc\n1,BLQ\n'),
+      { ...BASE_MAPPING, allowCensored: true },
+      'blq.csv',
+      IMPORTED_AT,
+    )
+    expect(withoutLloq.dataset).toBeUndefined()
+    expect(withoutLloq.issues[0]?.message).toMatch(/map an LLOQ column/i)
+  })
+
+  it('rejects an inline bound that conflicts with a mapped LLOQ column', () => {
+    const preview = buildDatasetFromCsv(
+      table('time,conc,lloq\n1,<0.1,0.5\n'),
+      { ...BASE_MAPPING, allowCensored: true, lloqColumn: 2 },
+      'blq.csv',
+      IMPORTED_AT,
+    )
+    expect(preview.dataset).toBeUndefined()
+    expect(preview.issues.some((entry) => entry.message.includes('conflicts with the LLOQ'))).toBe(true)
+  })
+
+  it('rejects a non-positive, non-finite or unparsable LLOQ', () => {
+    for (const value of ['0', '-1', 'abc', '']) {
+      const preview = buildDatasetFromCsv(
+        table(`time,conc,lloq\n1,BLQ,${value}\n`),
+        { ...BASE_MAPPING, allowCensored: true, lloqColumn: 2 },
+        'blq.csv',
+        IMPORTED_AT,
+      )
+      expect(preview.dataset).toBeUndefined()
+      expect(preview.issues.some((entry) => entry.message.includes('data row 1'))).toBe(true)
+    }
+  })
+
+  it('keeps quantified and censored records distinct in a mixed file', () => {
+    const preview = buildDatasetFromCsv(
+      table('time,conc\n0,5\n1,<0.1\n2,4\n'),
+      { ...BASE_MAPPING, allowCensored: true },
+      'mixed.csv',
+      IMPORTED_AT,
+    )
+    expect(preview.issues).toEqual([])
+    expect(preview.validRowCount).toBe(3)
+    expect(preview.dataset?.measurements).toHaveLength(3)
+    // The limit is never a measured concentration: no "0.1" appears as a value.
+    const serialized = JSON.stringify(preview.dataset?.measurements)
+    expect(serialized).toContain('"limit":0.1')
+    expect(serialized).not.toContain('"concentration":0.1')
   })
 })

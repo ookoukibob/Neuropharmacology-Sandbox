@@ -19,6 +19,7 @@
  */
 import { z } from 'zod'
 import {
+  MAX_CENSORED_RAW_TEXT_LENGTH,
   MAX_DATASET_MEASUREMENTS,
   MAX_DATASET_NAME_LENGTH,
   MAX_DATASET_NOTES_LENGTH,
@@ -56,12 +57,35 @@ const provenanceFields = {
   importedAt: isoDateTime,
 }
 
-const measurementFields = {
+const measurementCommonFields = {
   sourceRow: sourceRowSchema,
   time: nonNegativeFinite,
-  concentration: nonNegativeFinite,
   sampleId: optionalText(MAX_SAMPLE_ID_LENGTH, 'sample id'),
   note: optionalText(MAX_MEASUREMENT_NOTE_LENGTH, 'measurement note'),
+}
+
+/** A quantification limit must be a finite, strictly positive concentration. */
+const positiveFinite = z
+  .number()
+  .finite('must be a finite number')
+  .positive('must be greater than zero')
+
+/** A quantified observation: an actual measured, finite, non-negative concentration. */
+const quantifiedMeasurementFields = {
+  ...measurementCommonFields,
+  concentration: nonNegativeFinite,
+}
+
+/** A below-quantification-limit observation: a limit, never a concentration. */
+const censoredMeasurementFields = {
+  ...measurementCommonFields,
+  censored: z.literal(true),
+  censoring: z.literal('below-quantification-limit'),
+  rawText: z
+    .string()
+    .min(1, 'the original below-limit text is required')
+    .max(MAX_CENSORED_RAW_TEXT_LENGTH, 'the original below-limit text is too long'),
+  limit: positiveFinite,
 }
 
 const baseFields = {
@@ -134,12 +158,16 @@ function validateAdministrationField(value: unknown, ctx: z.RefinementCtx): void
 }
 
 /** Measurement as supplied by an import (no local identity yet). */
-export const experimentalMeasurementInputSchema = z.looseObject(measurementFields)
+export const experimentalMeasurementInputSchema = z.union([
+  z.looseObject(quantifiedMeasurementFields),
+  z.looseObject(censoredMeasurementFields),
+])
 
 /** Stored measurement: local identity is an address, never a source row. */
-export const experimentalMeasurementRecordSchema = experimentalMeasurementInputSchema.extend({
-  id: z.string().min(1).max(200),
-})
+export const experimentalMeasurementRecordSchema = z.union([
+  z.looseObject({ ...quantifiedMeasurementFields, id: z.string().min(1).max(200) }),
+  z.looseObject({ ...censoredMeasurementFields, id: z.string().min(1).max(200) }),
+])
 
 const measurementsInputSchema = z
   .array(experimentalMeasurementInputSchema)
@@ -193,7 +221,12 @@ export const experimentalDatasetNpexSchema = z
     ...baseFields,
     provenance: z.strictObject(provenanceFields),
     measurements: z
-      .array(z.strictObject(measurementFields))
+      .array(
+        z.union([
+          z.strictObject(quantifiedMeasurementFields),
+          z.strictObject(censoredMeasurementFields),
+        ]),
+      )
       .min(1, 'at least one measurement is required')
       .max(
         MAX_DATASET_MEASUREMENTS,

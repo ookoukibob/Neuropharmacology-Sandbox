@@ -61,8 +61,8 @@ describe('residuals are the fit’s own residuals', () => {
       if (measurement === undefined) throw new Error('setup')
       const expectedFitted = fit.cRef * Math.exp(-fit.k * (measurement.time - fit.tRef))
       expect(point.fitted).toBeCloseTo(expectedFitted, 10)
-      expect(point.residual).toBeCloseTo(measurement.concentration - expectedFitted, 10)
-      expect(point.observed).toBe(measurement.concentration)
+      expect(point.residual).toBeCloseTo((measurement as { concentration: number }).concentration - expectedFitted, 10)
+      expect(point.observed).toBe((measurement as { concentration: number }).concentration)
     }
     // Reused from the existing diagnostics: identical RMSE.
     expect(structure.rmse).toBeGreaterThanOrEqual(0)
@@ -89,7 +89,7 @@ describe('residuals are the fit’s own residuals', () => {
       const expectedFitted =
         fit.baseline + fit.amplitude * Math.exp(-fit.k * (measurement.time - fit.tRef))
       expect(point.fitted).toBeCloseTo(expectedFitted, 10)
-      expect(point.residual).toBeCloseTo(measurement.concentration - expectedFitted, 10)
+      expect(point.residual).toBeCloseTo((measurement as { concentration: number }).concentration - expectedFitted, 10)
     }
   })
 
