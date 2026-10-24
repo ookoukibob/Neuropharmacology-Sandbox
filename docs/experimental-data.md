@@ -1,13 +1,14 @@
 # Experimental concentration–time datasets
 
-**Status: Phases 47A–47C and Phase 48 (noncompartmental analysis) — implemented.**
+**Status: Phases 47A–47C, Phase 48 and Phases 50A–50E — implemented.**
 This document is the contract for measured-dataset import, validation, local
 storage, inspection and `.npex` interchange, the optional one-compartment
 mono-exponential decay fit (§10), raw-residual/RMSE diagnostics (§11), the
 practical identifiability screen (§12), the two-candidate comparison with a
 conditional common-variance AICc (§13), residual-structure diagnostics with a
 residual-spread screen (§14), the opt-in proportional-variance likelihood
-path (§15), and noncompartmental analysis (§16).
+path (§15), noncompartmental analysis (§16), administration and dose-dependent
+analyses (§17–§20), and sampling coverage diagnostics (§21).
 
 All examples below are synthetic test data, not pharmacological information.
 
@@ -1971,3 +1972,118 @@ provenance or administration field is written. The metrics are defined from the
 standard pharmacokinetic description of peak, trough, average concentration and
 peak-to-trough fluctuation (Rowland & Tozer) implemented independently; no
 third-party source was consulted for this phase.
+
+## 21. Sampling coverage diagnostics (Phase 50E)
+
+The pure `src/domain/experiments/sampling-coverage.ts` module describes the
+**actual sampling-time distribution** inside the interval explicitly selected
+in §19. It neither creates another interval model nor calculates another AUC.
+`NcaCard` supplies the same measurements, declared units, `IntervalAucReport`
+and `IntervalExposureReport` used by the existing analyses; the UI only renders
+the returned values and statuses.
+
+### 21.1 Window, records and distinct times
+
+Only records satisfying `t_start ≤ time ≤ t_end` contribute; both boundaries
+are included and records outside the window cannot enter a count or gap. With
+no complete selection the report is `unavailable` with
+`INTERVAL_NOT_SELECTED` — no first/last, τ-wide or other default window is
+substituted. A start after the end is refused. A zero-width selection can
+still describe records at that exact time, but has no positive width, adjacent
+gap or maximum-gap percentage.
+
+The report distinguishes:
+
+- `observationCount`: every measurement **record** in the closed window;
+- `distinctTimeCount`: the different sampling **times** in that window;
+- `gapCount`: adjacent gaps between those distinct times, hence
+  `distinctTimeCount − 1` when at least two times exist.
+
+A copy of the distinct times is sorted ascending for the calculations. The
+input array and every measurement remain in their original order and are never
+mutated. Multiple rows at one time remain separate measurements: they increase
+`observationCount`, not `distinctTimeCount` or `gapCount`, and are never
+averaged, deleted or treated as additional time coverage. Each repeated-time
+group carries its time, record count and every `sourceRow` in dataset order.
+
+The window summary also reports its start, end, width and declared time unit,
+plus whether an actual record exists at each boundary. All times and durations
+stay in the dataset's declared unit. The optional descriptive τ display uses
+the existing unit catalog to express a valid recorded τ in that same unit; a
+missing or invalid τ does not block the independent sampling statistics.
+
+### 21.2 Gap definitions and source rows
+
+For ascending distinct times `t_(1), …, t_(n)`, the adjacent gaps are
+`g_i = t_(i+1) − t_i`. The report includes:
+
+| Result | Definition |
+| --- | --- |
+| `minimumGap` | `min(g_i)` |
+| `medianGap` | middle ordered gap; for an even gap count, `(g_lower + g_upper)/2` for the two middle ordered gaps |
+| `meanGap` | arithmetic mean `Σg_i / (n − 1)` |
+| `maximumGap` | `max(g_i)` |
+| maximum-gap percentage | `100 × maximumGap / (t_end − t_start)` |
+
+Every adjacent gap is retained in the domain report with `fromTime`, `toTime`,
+`gapDuration`, **all** source rows at each endpoint, and an `isMaximum` marker.
+Every gap tied for the maximum appears in `maximumGaps`; no first-only or
+unstable tie-break rule exists. The main UI shows the summary and all maximum
+ties, with the complete adjacent-gap list behind an explicit disclosure.
+
+The percentage always appears with the actual maximum gap, selected width and
+time unit. It is only a proportion of that selected window — **not** a coverage
+score, an analysis-sufficiency score, or a threshold transferable across drugs
+or studies. The implementation divides before multiplying by 100 so a large
+finite ratio does not overflow merely because of intermediate arithmetic.
+
+Fewer than two distinct times makes the gap section unavailable with
+`INSUFFICIENT_SAMPLING_TIMES`; no fabricated zero gap is returned. A non-finite
+or overflowing window width is represented as unavailable, makes only the
+proportion unavailable with `WINDOW_DURATION_INVALID`, and does not hide valid
+counts or gaps. Other arithmetic failures use `NUMERICAL_FAILURE`. Invalid
+measurements, units, selections and empty windows have their own stable codes;
+no report emits `NaN` or `Infinity` as a diagnostic result.
+
+### 21.3 Availability is independent of AUCτ
+
+The selection comes from `IntervalAucReport.selection`, not from its validated
+AUCτ interval. Consequently a real selected window can still have sampling
+statistics when AUCτ is refused — for example because its width differs from τ
+or a repeated sampling time violates the AUCτ contract. Diagnostic availability
+is never evidence that AUCτ or any steady-state parameter is available.
+
+Only genuinely τ-dependent display needs τ. Sampling counts, repeated-time
+groups, gaps and boundary-observation flags require neither administration
+metadata nor a dosing interval.
+
+Observed-extreme positions are the exception that depends on §20: the module
+reuses the complete tied `Cmax,obs` and `Cmin,obs` observation lists from the
+`IntervalExposureReport`. Every attaining observation is classified as `start`,
+`inside` or `end`, with its time, concentration and `sourceRow`; ties can occupy
+multiple positions simultaneously. The scalar earliest `Tmax,obs`/`Tmin,obs`
+is not used to hide other positions. If the exposure report is unavailable,
+only this location section is unavailable with
+`EXPOSURE_REPORT_UNAVAILABLE`; valid sampling statistics remain visible.
+
+### 21.4 Scientific limits and UI
+
+The **Sampling coverage diagnostics** section displays sampling and gap
+summaries, every longest-gap tie, repeated-time groups and source rows, boundary
+observation flags, observed-extreme locations, and standing limitations. An
+observed extreme at a boundary does not prove that the true peak or trough was
+missed; an observed extreme inside the interval does not prove that it was
+captured. No concentration, curve shape, true extreme, true Tmax/Tmin or
+integration error is inferred between samples.
+
+There is deliberately **no** minimum-point or maximum-gap threshold and no
+“pass/fail”, “good/inadequate” or automatic sampling-sufficiency verdict.
+Sampling interpretation depends on the drug, regimen, concentration–time
+kinetics and study design. These diagnostics never alter AUCτ, `Cmax,obs`,
+`Cmin,obs`, `Cavg,ss`, fluctuation, clearance, volume or any availability gate.
+The §20 fluctuation remains an observed-data-based estimate, not a proven lower
+bound on true fluctuation.
+
+All results are ephemeral. No measurement or administration field is written,
+no schema or migration is added, `.npex` remains **1.2.0**, `.npsb` remains
+**1.1.0**, and no dependency or third-party notice changes are needed.

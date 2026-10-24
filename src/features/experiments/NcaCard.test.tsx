@@ -451,3 +451,165 @@ describe('NcaCard interval exposure summary', () => {
     expect(screen.getByTestId('exposure-unavailable')).toHaveTextContent(/INTERVAL_AUC_UNAVAILABLE/)
   })
 })
+
+describe('NcaCard sampling coverage diagnostics', () => {
+  function selectInterval(start = '0', end = '12', align = true) {
+    fireEvent.change(screen.getByTestId('repeated-interval-start'), { target: { value: start } })
+    fireEvent.change(screen.getByTestId('repeated-interval-end'), { target: { value: end } })
+    if (align) fireEvent.click(screen.getByTestId('interval-aligned'))
+  }
+
+  it('describes the sampling of the selected interval without any verdict', () => {
+    renderRepeated()
+    selectInterval()
+
+    const block = screen.getByTestId('sampling-coverage')
+    expect(block).toBeInTheDocument()
+    expect(screen.getByTestId('sampling-coverage-summary')).toHaveTextContent(
+      /7 measurement record\(s\) at 7 distinct sampling time\(s\)/,
+    )
+    // Every gap is 2 h, so all six tie for the maximum.
+    expect(screen.getByTestId('sampling-gap-min')).toHaveTextContent('2 h')
+    expect(screen.getByTestId('sampling-gap-median')).toHaveTextContent('2 h')
+    expect(screen.getByTestId('sampling-gap-mean')).toHaveTextContent('2 h')
+    expect(screen.getByTestId('sampling-gap-max')).toHaveTextContent('2 h')
+    expect(screen.getAllByTestId('sampling-longest-gap-item')).toHaveLength(6)
+    expect(screen.getByTestId('sampling-longest-gap-tie')).toHaveTextContent(/6 gaps share the same maximum/)
+    // 100 × 2 / 12 = 16.666… %, shown at the application's 12-digit precision.
+    expect(screen.getByTestId('sampling-gap-fraction')).toHaveTextContent('16.6666666667')
+    expect(screen.getByTestId('sampling-gap-fraction')).toHaveTextContent(/not a coverage score/)
+    expect(screen.getByTestId('sampling-start-observed')).toHaveTextContent('yes')
+    expect(screen.getByTestId('sampling-end-observed')).toHaveTextContent('yes')
+    // The observed maximum sits at the start, the minimum at the end.
+    expect(screen.getByTestId('sampling-max-positions')).toHaveTextContent('at the interval start')
+    expect(screen.getByTestId('sampling-min-positions')).toHaveTextContent('at the interval end')
+    expect(screen.getAllByTestId('sampling-max-item')).toHaveLength(1)
+    expect(screen.getByTestId('sampling-max-item')).toHaveTextContent(/source row 1/)
+    expect(screen.getByTestId('sampling-limits')).toHaveTextContent(/No threshold is applied/i)
+  })
+
+  it('shows an explicit not-selected state before any interval is chosen', () => {
+    renderRepeated()
+    expect(screen.getByTestId('sampling-unavailable')).toHaveTextContent(/INTERVAL_NOT_SELECTED/)
+    expect(screen.queryByTestId('sampling-gaps')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sampling-longest-gaps')).not.toBeInTheDocument()
+    expect(screen.getByTestId('sampling-limits')).toBeInTheDocument()
+  })
+
+  it('reports the median and mean of irregular gaps', () => {
+    render(
+      <NcaCard
+        measurements={rows([
+          [0, 100],
+          [1, 92],
+          [4, 70],
+          [5, 62],
+          [12, 40],
+        ])}
+        timeUnit="h"
+        concentrationUnit="mg/L"
+        administration={steadyState}
+      />,
+    )
+    selectInterval()
+    // Gaps 1, 3, 1, 7 → min 1, median (1+3)/2 = 2, mean 3, max 7.
+    expect(screen.getByTestId('sampling-gap-min')).toHaveTextContent('1 h')
+    expect(screen.getByTestId('sampling-gap-median')).toHaveTextContent('2 h')
+    expect(screen.getByTestId('sampling-gap-mean')).toHaveTextContent('3 h')
+    expect(screen.getByTestId('sampling-gap-max')).toHaveTextContent('7 h')
+    const longest = screen.getAllByTestId('sampling-longest-gap-item')
+    expect(longest).toHaveLength(1)
+    expect(longest[0]).toHaveTextContent('5')
+    expect(longest[0]).toHaveTextContent('12')
+    expect(longest[0]).toHaveTextContent(/source rows 4/)
+    expect(screen.queryByTestId('sampling-longest-gap-tie')).not.toBeInTheDocument()
+  })
+
+  it('keeps every row of a repeated sampling time and both tied maximum gaps', () => {
+    render(
+      <NcaCard
+        measurements={rows([
+          [0, 100],
+          [0, 96],
+          [4, 70],
+          [8, 40],
+        ])}
+        timeUnit="h"
+        concentrationUnit="mg/L"
+        // τ = 8 h so the 8 h window passes the length check and the duplicate
+        // time becomes the reason the AUCτ is refused.
+        administration={{ ...steadyState, dosingInterval: { value: 8, unit: 'h' } }}
+      />,
+    )
+    selectInterval('0', '8')
+    const repeated = screen.getAllByTestId('sampling-repeated-item')
+    expect(repeated).toHaveLength(1)
+    expect(repeated[0]).toHaveTextContent(/2 records, source rows 1, 2/)
+    expect(screen.getByTestId('sampling-coverage-summary')).toHaveTextContent(
+      /4 measurement record\(s\) at 3 distinct sampling time\(s\)/,
+    )
+    // Both 4 h gaps tie.
+    expect(screen.getAllByTestId('sampling-longest-gap-item')).toHaveLength(2)
+    expect(screen.getByTestId('sampling-longest-gap-tie')).toBeInTheDocument()
+    // The AUCτ is refused for a duplicate time, but the sampling summary stands.
+    expect(screen.getByTestId('interval-auc-unavailable')).toHaveTextContent(
+      /DUPLICATE_SAMPLING_TIMES/,
+    )
+  })
+
+  it('keeps record diagnostics for a zero-width selection without inventing a gap', () => {
+    renderRepeated()
+    // AUCτ refuses this selection, but the actual records at that time can
+    // still be counted without fabricating a duration, gap or percentage.
+    fireEvent.change(screen.getByTestId('repeated-interval-start'), { target: { value: '12' } })
+    fireEvent.change(screen.getByTestId('repeated-interval-end'), { target: { value: '12' } })
+    expect(screen.getByTestId('interval-auc-unavailable')).toHaveTextContent(/INTERVAL_ORDER/)
+    expect(screen.getByTestId('sampling-coverage-summary')).toHaveTextContent(
+      /1 measurement record\(s\) at 1 distinct sampling time\(s\)/,
+    )
+    expect(screen.getByTestId('sampling-start-observed')).toHaveTextContent('yes')
+    expect(screen.getByTestId('sampling-end-observed')).toHaveTextContent('yes')
+    expect(screen.getByTestId('sampling-gaps-unavailable')).toHaveTextContent(
+      /INSUFFICIENT_SAMPLING_TIMES/,
+    )
+    expect(screen.getByTestId('sampling-gap-fraction-unavailable')).toBeInTheDocument()
+    expect(screen.queryByTestId('sampling-gap-min')).not.toBeInTheDocument()
+  })
+
+  it('keeps the sampling statistics when the AUCτ is refused', () => {
+    renderRepeated({ ...steadyState, dosingInterval: { value: 8, unit: 'h' } })
+    selectInterval('0', '12')
+
+    expect(screen.getByTestId('interval-auc-unavailable')).toHaveTextContent(
+      /INTERVAL_LENGTH_MISMATCH/,
+    )
+    expect(screen.getByTestId('sampling-gap-max')).toHaveTextContent('2 h')
+    expect(screen.getAllByTestId('sampling-longest-gap-item')).toHaveLength(6)
+    // Without the exposure report, positions are explicitly unavailable.
+    expect(screen.getByTestId('sampling-extremes-unavailable')).toHaveTextContent(
+      /EXPOSURE_REPORT_UNAVAILABLE/,
+    )
+  })
+
+  it('lists every tied position of an observed extreme', () => {
+    render(
+      <NcaCard
+        measurements={rows([
+          [0, 80],
+          [2, 55],
+          [5, 20],
+          [9, 55],
+          [12, 80],
+        ])}
+        timeUnit="h"
+        concentrationUnit="mg/L"
+        administration={steadyState}
+      />,
+    )
+    selectInterval()
+    expect(screen.getByTestId('sampling-max-positions')).toHaveTextContent('at the interval start')
+    expect(screen.getByTestId('sampling-max-positions')).toHaveTextContent('at the interval end')
+    expect(screen.getAllByTestId('sampling-max-item')).toHaveLength(2)
+    expect(screen.getByTestId('sampling-min-positions')).toHaveTextContent('inside the interval')
+  })
+})
