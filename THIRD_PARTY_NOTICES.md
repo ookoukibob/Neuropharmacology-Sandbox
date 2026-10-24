@@ -124,6 +124,20 @@ Intentional differences from PKNCA in this phase:
   cumulative total-regimen amount is refused instead of being treated as a
   single dose.
 
+### Observed interval exposure metrics (Phase 50D) — no external source consulted
+
+Phase 50D adds `Cmax,obs`, `Tmax,obs`, `Cmin,obs`, `Tmin,obs`, `Cavg,interval`,
+`Cavg,ss` and the observed peak-to-trough fluctuation. These are the standard
+pharmacokinetic descriptions of sampled peak, sampled trough, average
+concentration and peak-to-trough fluctuation (Rowland & Tozer, already cited
+above), implemented here from those definitions. No third-party source — PKNCA,
+mrgsolve or any other — was read, copied, translated or adapted for this phase,
+no dependency was added, and the licence is unchanged. The project-specific
+rules (only interval observations contribute, ties keep every attaining
+observation, the steady-state pair requires a recorded declaration plus the
+alignment confirmation) are its own and are documented in
+`docs/experimental-data.md` §20.
+
 ## Dosing regimens and IV infusion (event-driven dosing)
 
 ### Reference studied: mrgsolve

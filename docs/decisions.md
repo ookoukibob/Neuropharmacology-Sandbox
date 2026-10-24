@@ -1157,6 +1157,64 @@ says which of those is missing.
 
 ---
 
+## ADR-33 · Interval exposure metrics are observed values, and the steady-state pair is gated on a declaration
+
+**Context.** Phase 50D adds `Cmax,obs`, `Tmax,obs`, `Cmin,obs`, `Tmin,obs`,
+`Cavg,interval`, `Cavg,ss` and the peak-to-trough fluctuation over the interval
+phase 50C already integrates. The exposure pair is the classic trap: peak and
+trough are naturally read as "the" peak and trough, and `AUC/τ` is naturally
+read as a steady-state average even when the dataset never claimed steady
+state.
+
+**Decision.**
+
+- **The names carry the caveat.** Every extreme is `Cmax,obs`/`Cmin,obs` and the
+  result states, in its assumptions, that it is the largest/smallest
+  *sampled* concentration — not the true extreme between samples. No
+  interpolation, extrapolation, smoothing or fitting is used to invent a peak or
+  a trough, and no sampling time is declared a peak because it is first or last.
+- **Only the selected interval contributes.** The window comes from the validated
+  phase-50C `IntervalAucReport` (both boundaries included); a higher or lower
+  concentration elsewhere in the dataset cannot enter the interval metrics.
+- **Ties are surfaced, not resolved away.** Every attaining observation (time,
+  concentration, `sourceRow`) is returned; the scalar `Tmax,obs`/`Tmin,obs` is
+  the earliest attaining time and the metric is `conditional`, because a single
+  time would imply a uniqueness the data lack.
+- **`Cavg,interval` is never a steady-state average.** It divides `AUCτ` by the
+  interval's own duration in the dataset's time unit, so the result stays a
+  concentration, and it is labelled as an interval mean.
+- **The steady-state pair needs a declaration plus the alignment confirmation.**
+  `Cavg,ss = AUCτ/τ` and `100·(Cmax,obs − Cmin,obs)/Cavg,ss` exist only for
+  `regimen = repeated-dose-steady-state` with the phase-50C interval-to-dose
+  confirmation. Without the declaration both are `not-applicable` with
+  `REGIMEN_NOT_STEADY_STATE`/`REGIMEN_UNKNOWN` — and that verdict survives an
+  unusable interval, so the real reason is not masked. Without the confirmation
+  they are `unavailable` with `INTERVAL_NOT_ALIGNED`.
+- **No fabricated numbers at the boundary.** A zero, non-finite or overflowing
+  `Cavg,ss` makes the fluctuation `unavailable` with `NUMERICAL_FAILURE`; never
+  `Infinity`, `NaN` or a `0 %`.
+- **Reuse.** The module consumes the interval report (window, `AUCτ`, source
+  rows) and the unit catalog; it integrates nothing and re-derives no λ_z.
+  `observed` vs `calculated` is part of every result and is rendered by the UI.
+- **No persistence change.** All seven metrics are ephemeral and are never
+  written to the dataset, `.npex` or `.npsb`.
+
+**Rejected alternatives.** *Call it `Cmax`* — it would claim an unobserved
+maximum. *Pick the first attaining row for `Tmax`* — it would hide ties that are
+a property of the data (the earliest time is reported **and** every attaining row
+is listed). *Compute `AUCτ/τ` for any repeated regimen and label it "average"* —
+it is not a steady-state average without a steady-state declaration.
+*Infer steady state from a flat curve* — same prohibition as ADR-32.
+*Return `0 %` when the mean is zero* — a fabricated value for an undefined
+ratio.
+
+**Consequences.** Every displayed exposure number is labelled observed or
+calculated, names the interval it covers, lists the source rows that produced an
+extreme (including ties), and either reports its audit line or refuses with a
+code that identifies the missing prerequisite.
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

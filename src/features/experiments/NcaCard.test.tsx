@@ -343,3 +343,108 @@ describe('NcaCard repeated-dose interval AUCτ', () => {
     expect(screen.getByTestId('interval-auc-unavailable')).toHaveTextContent(/INTERVAL_NOT_SELECTED/)
   })
 })
+
+describe('NcaCard interval exposure summary', () => {
+  function selectInterval(start = '0', end = '12', align = true) {
+    fireEvent.change(screen.getByTestId('repeated-interval-start'), { target: { value: start } })
+    fireEvent.change(screen.getByTestId('repeated-interval-end'), { target: { value: end } })
+    if (align) fireEvent.click(screen.getByTestId('interval-aligned'))
+  }
+
+  it('reports the observed peak, trough and means for a steady-state interval', () => {
+    renderRepeated()
+    selectInterval()
+
+    expect(screen.getByTestId('exposure-summary')).toBeInTheDocument()
+    expect(screen.getByTestId('exposure-cmax-obs')).toHaveTextContent('100 mg/L')
+    expect(screen.getByTestId('exposure-tmax-obs')).toHaveTextContent('0 h')
+    expect(screen.getByTestId('exposure-cmin-obs')).toHaveTextContent('40 mg/L')
+    expect(screen.getByTestId('exposure-tmin-obs')).toHaveTextContent('12 h')
+    // 840 mg/L·h ÷ 12 h = 70 mg/L for both interval and steady-state means.
+    expect(screen.getByTestId('exposure-cavg-interval')).toHaveTextContent('70 mg/L')
+    expect(screen.getByTestId('exposure-cavg-ss')).toHaveTextContent('70 mg/L')
+    expect(screen.getByTestId('exposure-cavg-ss-status')).toHaveTextContent('available')
+    // 100 · (100 − 40) / 70 = 85.714… %.
+    expect(screen.getByTestId('exposure-fluctuation')).toHaveTextContent('85.714')
+    expect(screen.getByTestId('exposure-fluctuation')).toHaveTextContent('%')
+
+    // The attaining observations name the source row, and the observed kind is explicit.
+    expect(screen.getAllByTestId('exposure-peak-observations-item')).toHaveLength(1)
+    expect(screen.getByTestId('exposure-peak-observations-item')).toHaveTextContent(/source row 1$/)
+    expect(screen.getAllByTestId('exposure-trough-observations-item')).toHaveLength(1)
+    expect(screen.getByTestId('exposure-trough-observations-item')).toHaveTextContent(/source row 7$/)
+    expect(screen.getAllByText('observed').length).toBeGreaterThanOrEqual(4)
+    expect(screen.getAllByText('calculated').length).toBeGreaterThanOrEqual(3)
+    expect(screen.getByTestId('exposure-formulas')).toHaveTextContent(/Cavg,ss = AUCτ/)
+  })
+
+  it('keeps the observed metrics but refuses the steady-state ones off steady state', () => {
+    renderRepeated({ ...steadyState, regimen: 'repeated-dose' })
+    selectInterval()
+
+    expect(screen.getByTestId('exposure-cmax-obs')).toHaveTextContent('100 mg/L')
+    expect(screen.getByTestId('exposure-cavg-interval')).toHaveTextContent('70 mg/L')
+    expect(screen.getByTestId('exposure-cavg-ss')).toHaveTextContent('—')
+    expect(screen.getByTestId('exposure-cavg-ss-status')).toHaveTextContent('not applicable')
+    expect(screen.getByTestId('exposure-fluctuation-status')).toHaveTextContent('not applicable')
+    expect(screen.getByTestId('exposure-unavailable')).toHaveTextContent(/REGIMEN_NOT_STEADY_STATE/)
+  })
+
+  it('refuses every metric until an interval is selected', () => {
+    renderRepeated()
+    expect(screen.getByTestId('exposure-summary')).toBeInTheDocument()
+    expect(screen.getByTestId('exposure-cmax-obs')).toHaveTextContent('—')
+    expect(screen.getByTestId('exposure-cmax-obs-status')).toHaveTextContent('unavailable')
+    expect(screen.getByTestId('exposure-unavailable')).toHaveTextContent(/INTERVAL_NOT_SELECTED/)
+    expect(screen.queryByTestId('exposure-peak-observations')).not.toBeInTheDocument()
+    expect(screen.getByTestId('exposure-inputs')).toHaveTextContent(/not selected/)
+  })
+
+  it('withholds the steady-state metrics until the interval is confirmed', () => {
+    renderRepeated()
+    selectInterval('0', '12', false)
+    expect(screen.getByTestId('exposure-cmax-obs')).toHaveTextContent('100 mg/L')
+    expect(screen.getByTestId('exposure-cavg-ss-status')).toHaveTextContent('unavailable')
+    expect(screen.getByTestId('exposure-unavailable')).toHaveTextContent(/INTERVAL_NOT_ALIGNED/)
+    expect(screen.getByTestId('exposure-fluctuation-status')).toHaveTextContent('unavailable')
+  })
+
+  it('lists every observation that attains a tied peak', () => {
+    render(
+      <NcaCard
+        measurements={rows([
+          [0, 100],
+          [2, 100],
+          [4, 80],
+          [6, 40],
+          [8, 60],
+          [10, 50],
+          [12, 40],
+        ])}
+        timeUnit="h"
+        concentrationUnit="mg/L"
+        administration={steadyState}
+      />,
+    )
+    selectInterval()
+
+    expect(screen.getByTestId('exposure-cmax-obs-status')).toHaveTextContent('conditional')
+    const peakItems = screen.getAllByTestId('exposure-peak-observations-item')
+    expect(peakItems).toHaveLength(2)
+    expect(peakItems[0]).toHaveTextContent(/source row 1$/)
+    expect(peakItems[1]).toHaveTextContent(/source row 2$/)
+    expect(screen.getByTestId('exposure-conditional')).toHaveTextContent(/cmax-obs/)
+    expect(screen.getByTestId('exposure-cmin-obs-status')).toHaveTextContent('conditional')
+    const troughItems = screen.getAllByTestId('exposure-trough-observations-item')
+    expect(troughItems).toHaveLength(2)
+    expect(troughItems[0]).toHaveTextContent(/source row 4$/)
+    expect(troughItems[1]).toHaveTextContent(/source row 7$/)
+  })
+
+  it('refuses the metrics for an interval that is not one τ wide', () => {
+    renderRepeated()
+    selectInterval('0', '8')
+    expect(screen.getByTestId('exposure-cmax-obs')).toHaveTextContent('—')
+    expect(screen.getByTestId('exposure-unavailable')).toHaveTextContent(/INTERVAL_AUC_UNAVAILABLE/)
+  })
+})
