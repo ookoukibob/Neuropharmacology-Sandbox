@@ -449,6 +449,94 @@ export function censoredRefusalMessage(measurements: readonly ExperimentalMeasur
   return `The dataset contains ${summary.count} below-quantification-limit record(s) (source rows ${summary.sourceRows.join(', ')}). Numeric concentration analyses do not yet support censored observations: no limit is substituted, dropped or treated as a measured concentration.`
 }
 
+/** One violation of the measurement contract, addressed by its field name. */
+export interface MeasurementContractIssue {
+  /** The offending field, so a schema can attach the message to that path. */
+  readonly field: string
+  readonly message: string
+}
+
+/** Censoring metadata: no quantified observation may carry any of these. */
+const RESERVED_CENSORING_FIELDS = ['censored', 'censoring', 'rawText', 'limit'] as const
+
+/** `<0.1` — the inline below-limit bound shape CSV import recognises. */
+const INLINE_BELOW_LIMIT_BOUND = /^<\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*$/
+
+/** What a censored record's original text says about its bound. */
+export type InlineBelowLimitBound =
+  | { readonly kind: 'number'; readonly bound: number }
+  /** The text has the `<number` shape but names no finite number (e.g. `<1e400`). */
+  | { readonly kind: 'invalid' }
+  /** A symbolic marker (`BLQ`, `<LLOQ`, …) that carries no inline number. */
+  | { readonly kind: 'none' }
+
+/**
+ * The bound a `<number` raw text names, read with the same numeric
+ * interpretation as CSV import. Only a trimmed copy is matched, so `rawText`
+ * itself is never rewritten.
+ */
+export function inlineBelowLimitBound(rawText: string): InlineBelowLimitBound {
+  const match = INLINE_BELOW_LIMIT_BOUND.exec(rawText.trim())
+  if (match === null) return { kind: 'none' }
+  const bound = Number(match[1])
+  if (!Number.isFinite(bound)) return { kind: 'invalid' }
+  return { kind: 'number', bound: Object.is(bound, -0) ? 0 : bound }
+}
+
+/**
+ * The measurement contract, enforced at every runtime boundary (CSV input,
+ * stored records, `.npex` import and export). Structural schemas already
+ * require the right fields; this rejects what a permissive object would let
+ * through:
+ *
+ * - a quantified observation carries a concentration and **no** censoring
+ *   metadata, so `censored: false` is a contradiction rather than a quantified
+ *   record;
+ * - a censored observation carries **no** concentration, and an inline
+ *   `<number` bound in `rawText` must agree with the recorded `limit`.
+ */
+export function measurementContractIssues(record: unknown): MeasurementContractIssue[] {
+  if (record === null || typeof record !== 'object') return []
+  const fields = record as Record<string, unknown>
+  const has = (key: string): boolean => Object.prototype.hasOwnProperty.call(fields, key)
+  const issues: MeasurementContractIssue[] = []
+  if (fields['censored'] === true) {
+    if (has('concentration')) {
+      issues.push({
+        field: 'concentration',
+        message:
+          'a below-quantification-limit record must not carry a concentration; the limit is not a measured value',
+      })
+    }
+    const rawText = fields['rawText']
+    const limit = fields['limit']
+    if (typeof rawText === 'string' && typeof limit === 'number' && Number.isFinite(limit)) {
+      const inline = inlineBelowLimitBound(rawText)
+      if (inline.kind === 'invalid') {
+        issues.push({
+          field: 'rawText',
+          message: `the original text "${rawText}" names a below-limit bound that is not a finite number`,
+        })
+      } else if (inline.kind === 'number' && inline.bound !== limit) {
+        issues.push({
+          field: 'limit',
+          message: `the recorded limit ${limit} disagrees with the ${inline.bound} bound in the original text "${rawText}"`,
+        })
+      }
+    }
+    return issues
+  }
+  for (const field of RESERVED_CENSORING_FIELDS) {
+    if (has(field)) {
+      issues.push({
+        field,
+        message: `a quantified observation must not carry the reserved censoring field "${field}"`,
+      })
+    }
+  }
+  return issues
+}
+
 /** A complete stored dataset. */
 export interface ExperimentalDataset {
   readonly id: ExperimentalDatasetId

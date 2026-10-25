@@ -2113,6 +2113,18 @@ strictly positive, and it is never read as a measured concentration. The
 dataset's concentration unit is the unit of every limit — no unit is inferred
 from a file name, header or value magnitude.
 
+The two shapes are mutually exclusive at every runtime boundary (CSV input,
+stored records, `.npex` import and export), not only in the TypeScript types.
+A quantified observation may not carry any of the reserved censoring fields
+(`censored`, `censoring`, `rawText`, `limit`) — including the contradiction
+`censored: false` — and a below-limit observation may not carry a
+`concentration` at all. When `rawText` has the inline `<number` form, the
+number is read exactly as CSV import reads it and must equal the recorded
+`limit`; a file whose text says `<0.1` while claiming `limit: 10` is rejected
+rather than imported with contradictory information. Symbolic markers (`BLQ`,
+`<LLOQ`) carry no inline number and keep the explicitly recorded limit. The
+check never rewrites `rawText`: only a trimmed copy is compared.
+
 ### 22.2 CSV import
 
 `<number` (for example `<0.1`) is interpreted as a left-censored bound **only

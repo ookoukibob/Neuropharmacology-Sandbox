@@ -10,7 +10,9 @@
  * The `.npex` interchange boundary uses the STRICT variants (unknown keys
  * rejected, explicit version); stored and CSV-facing schemas are permissive
  * about unknown keys, matching the repository's forward-compatible read
- * policy.
+ * policy. That permissiveness stops at the reserved censoring fields: every
+ * boundary runs `validateMeasurementContract`, so an observation can never be
+ * partly quantified and partly censored (see `measurementContractIssues`).
  *
  * `sourceRow` is validated as a source row number only. It never doubles as a
  * database key.
@@ -26,6 +28,7 @@ import {
   MAX_MEASUREMENT_NOTE_LENGTH,
   MAX_SAMPLE_ID_LENGTH,
   concentrationUnitIssue,
+  measurementContractIssues,
   timeUnitIssue,
   validateAdministration,
   type AdministrationMetadata,
@@ -157,17 +160,33 @@ function validateAdministrationField(value: unknown, ctx: z.RefinementCtx): void
   }
 }
 
+/**
+ * The measurement contract (phase 50F hardening), shared by every boundary:
+ * the loose objects below stay forward-compatible about unknown keys, but the
+ * reserved censoring fields may not be mixed between the two observation
+ * shapes, and an inline `<number` bound must agree with the recorded `limit`.
+ */
+function validateMeasurementContract(value: unknown, ctx: z.RefinementCtx): void {
+  for (const issue of measurementContractIssues(value)) {
+    ctx.addIssue({ code: 'custom', path: [issue.field], message: issue.message })
+  }
+}
+
 /** Measurement as supplied by an import (no local identity yet). */
-export const experimentalMeasurementInputSchema = z.union([
-  z.looseObject(quantifiedMeasurementFields),
-  z.looseObject(censoredMeasurementFields),
-])
+export const experimentalMeasurementInputSchema = z
+  .union([
+    z.looseObject(quantifiedMeasurementFields),
+    z.looseObject(censoredMeasurementFields),
+  ])
+  .superRefine(validateMeasurementContract)
 
 /** Stored measurement: local identity is an address, never a source row. */
-export const experimentalMeasurementRecordSchema = z.union([
-  z.looseObject({ ...quantifiedMeasurementFields, id: z.string().min(1).max(200) }),
-  z.looseObject({ ...censoredMeasurementFields, id: z.string().min(1).max(200) }),
-])
+export const experimentalMeasurementRecordSchema = z
+  .union([
+    z.looseObject({ ...quantifiedMeasurementFields, id: z.string().min(1).max(200) }),
+    z.looseObject({ ...censoredMeasurementFields, id: z.string().min(1).max(200) }),
+  ])
+  .superRefine(validateMeasurementContract)
 
 const measurementsInputSchema = z
   .array(experimentalMeasurementInputSchema)
@@ -222,10 +241,12 @@ export const experimentalDatasetNpexSchema = z
     provenance: z.strictObject(provenanceFields),
     measurements: z
       .array(
-        z.union([
-          z.strictObject(quantifiedMeasurementFields),
-          z.strictObject(censoredMeasurementFields),
-        ]),
+        z
+          .union([
+            z.strictObject(quantifiedMeasurementFields),
+            z.strictObject(censoredMeasurementFields),
+          ])
+          .superRefine(validateMeasurementContract),
       )
       .min(1, 'at least one measurement is required')
       .max(

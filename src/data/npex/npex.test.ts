@@ -364,4 +364,61 @@ describe('.npex experimental dataset format', () => {
     if (built.ok) return
     expect(built.issues.some((entry) => entry.code === 'NPEX_EXPORT_VALIDATION')).toBe(true)
   })
+
+  it('rejects exporting a censored record whose inline bound disagrees with its limit', () => {
+    const inconsistent: ExperimentalDataset = {
+      ...stored(),
+      measurements: [
+        { id: 'm1', sourceRow: 1, time: 0, concentration: 5 },
+        { id: 'm2', sourceRow: 2, time: 1, censored: true as const, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 10 },
+      ],
+    }
+    const built = buildNpexFile(inconsistent, EXPORTED_AT)
+    expect(built.ok).toBe(false)
+    if (built.ok) return
+    const issue = built.issues.find((entry) => entry.path === 'dataset.measurements.1.limit')
+    expect(issue?.code).toBe('NPEX_EXPORT_VALIDATION')
+    expect(issue?.message).toContain('disagrees')
+  })
+
+  it('rejects importing a censored record whose inline bound disagrees with its limit', () => {
+    const withBlq: ExperimentalDataset = {
+      ...stored(),
+      measurements: [
+        { id: 'm1', sourceRow: 1, time: 0, concentration: 5 },
+        { id: 'm2', sourceRow: 2, time: 1, censored: true as const, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 0.1 },
+      ],
+    }
+    const built = buildNpexFile(withBlq, EXPORTED_AT)
+    if (!built.ok) throw new Error(JSON.stringify(built.issues))
+    const doc = JSON.parse(built.text) as { dataset: { measurements: Record<string, unknown>[] } }
+    // A hand-edited file: the text still says 0.1 while the limit claims 10.
+    doc.dataset.measurements[1]!['limit'] = 10
+    const parsed = parseNpexText(JSON.stringify(doc))
+    expect(parsed.ok).toBe(false)
+    if (parsed.ok) return
+    expect(
+      parsed.issues.some(
+        (entry) => entry.code === 'NPEX_VALIDATION' && entry.path === 'dataset.measurements.1.limit',
+      ),
+    ).toBe(true)
+  })
+
+  it('rejects importing a measurement that mixes quantified and censored fields', () => {
+    const withBlq: ExperimentalDataset = {
+      ...stored(),
+      measurements: [
+        { id: 'm1', sourceRow: 1, time: 0, concentration: 5 },
+        { id: 'm2', sourceRow: 2, time: 1, censored: true as const, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 0.1 },
+      ],
+    }
+    const built = buildNpexFile(withBlq, EXPORTED_AT)
+    if (!built.ok) throw new Error(JSON.stringify(built.issues))
+    const doc = JSON.parse(built.text) as { dataset: { measurements: Record<string, unknown>[] } }
+    doc.dataset.measurements[1]!['concentration'] = 0.1
+    const parsed = parseNpexText(JSON.stringify(doc))
+    expect(parsed.ok).toBe(false)
+    if (parsed.ok) return
+    expect(parsed.issues.some((entry) => entry.code === 'NPEX_VALIDATION')).toBe(true)
+  })
 })

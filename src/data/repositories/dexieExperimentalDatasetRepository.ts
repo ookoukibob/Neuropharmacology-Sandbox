@@ -20,6 +20,7 @@ import {
 import {
   declaredUnit,
   isCensoredMeasurementInput,
+  measurementContractIssues,
   normalizeDatasetName,
   normalizeDatasetNotes,
   normalizeMeasurementNote,
@@ -157,6 +158,15 @@ export class DexieExperimentalDatasetRepository implements ExperimentalDatasetRe
     const measurements: ExperimentalMeasurement[] = []
     const datasetId = this.idFactory()
     for (const [index, measurement] of input.measurements.entries()) {
+      // Untrusted runtime input: a record that is partly quantified and partly
+      // censored is rejected rather than silently reduced to one shape.
+      const contract = measurementContractIssues(measurement)
+      if (contract.length > 0) {
+        return failure(
+          'VALIDATION',
+          `Measurement ${index + 1} (source row ${measurement.sourceRow}): ${contract.map((entry) => entry.message).join(' ')}`,
+        )
+      }
       const sample = normalizeSampleId(measurement.sampleId)
       if (!sample.ok) {
         return failure(
