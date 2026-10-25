@@ -26,6 +26,7 @@ import {
   MAX_DATASET_MEASUREMENTS,
   concentrationUnitIssue,
   declaredUnit,
+  isCensoredMeasurement,
   normalizeDatasetName,
   normalizeDatasetNotes,
   normalizeMeasurementNote,
@@ -45,12 +46,16 @@ export const NPEX_FORMAT_ID = 'npex'
  * Interchange version history (same major; a reader accepts minor ≤ its own):
  * - 1.0.0 — the initial dataset envelope;
  * - 1.1.0 — optional `administration` metadata (phase 50A);
- * - 1.2.0 — optional `administration.doseBasis` (phase 50C).
+ * - 1.2.0 — optional `administration.doseBasis` (phase 50C);
+ * - 1.3.0 — below-quantification-limit measurements (`censored`, `censoring`,
+ *   `rawText`, `limit`; phase 50F). Quantified measurements are unchanged, so
+ *   1.0–1.2 files still parse, and an older reader rejects a 1.3 file instead
+ *   of silently dropping the censored contract.
  *
  * Each step is additive: a file written by an older build still parses, and a
  * newer file is rejected by an older reader rather than silently dropped.
  */
-export const NPEX_VERSION = '1.2.0'
+export const NPEX_VERSION = '1.3.0'
 export const NPEX_EXTENSION = '.npex'
 export const NPEX_MIME_TYPE = 'application/json;charset=utf-8'
 export const MAX_NPEX_BYTES = 10 * 1024 * 1024
@@ -149,12 +154,28 @@ function measurementFromParsed(
     issues.push(issue('NPEX_VALIDATION', note.message, `dataset.measurements[${index}].note`))
     return null
   }
-  return {
-    sourceRow: parsed.sourceRow,
-    time: Object.is(parsed.time, -0) ? 0 : parsed.time,
-    concentration: Object.is(parsed.concentration, -0) ? 0 : parsed.concentration,
+  const sourceRow = parsed.sourceRow
+  const time = Object.is(parsed.time, -0) ? 0 : parsed.time
+  const common = {
+    sourceRow,
+    time,
     ...(sample.sampleId === undefined ? {} : { sampleId: sample.sampleId }),
     ...(note.note === undefined ? {} : { note: note.note }),
+  }
+  if ('censored' in parsed && parsed.censored === true) {
+    // A below-limit record carries a limit, never a measured concentration.
+    return {
+      ...common,
+      censored: true,
+      censoring: 'below-quantification-limit',
+      rawText: parsed.rawText,
+      limit: parsed.limit,
+    }
+  }
+  const quantified = parsed as Extract<typeof parsed, { concentration: number }>
+  return {
+    ...common,
+    concentration: Object.is(quantified.concentration, -0) ? 0 : quantified.concentration,
   }
 }
 
@@ -306,13 +327,24 @@ function datasetInputFromStored(dataset: ExperimentalDataset): ExperimentalDatas
     ...(dataset.notes === undefined ? {} : { notes: dataset.notes }),
     ...(dataset.administration === undefined ? {} : { administration: dataset.administration }),
     provenance: dataset.provenance,
-    measurements: dataset.measurements.map((measurement) => ({
-      sourceRow: measurement.sourceRow,
-      time: measurement.time,
-      concentration: measurement.concentration,
-      ...(measurement.sampleId === undefined ? {} : { sampleId: measurement.sampleId }),
-      ...(measurement.note === undefined ? {} : { note: measurement.note }),
-    })),
+    measurements: dataset.measurements.map((measurement): ExperimentalMeasurementInput => {
+      const common = {
+        sourceRow: measurement.sourceRow,
+        time: measurement.time,
+        ...(measurement.sampleId === undefined ? {} : { sampleId: measurement.sampleId }),
+        ...(measurement.note === undefined ? {} : { note: measurement.note }),
+      }
+      if (isCensoredMeasurement(measurement)) {
+        return {
+          ...common,
+          censored: true,
+          censoring: 'below-quantification-limit',
+          rawText: measurement.rawText,
+          limit: measurement.limit,
+        }
+      }
+      return { ...common, concentration: measurement.concentration }
+    }),
   }
 }
 

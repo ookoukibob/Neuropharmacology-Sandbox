@@ -9,7 +9,11 @@
  * chart component, not here, so this module stays deterministic and easy to
  * test.
  */
-import type { ExperimentalDataset } from '@/domain/experiments/experimental-dataset'
+import {
+  isCensoredMeasurement,
+  isQuantifiedMeasurement,
+  type ExperimentalDataset,
+} from '@/domain/experiments/experimental-dataset'
 
 export interface ExperimentalDatasetChart {
   readonly traces: readonly Record<string, unknown>[]
@@ -40,9 +44,12 @@ export function buildExperimentalDatasetChart(
   dataset: ExperimentalDataset,
   fitOverlay?: ExperimentalDatasetFitOverlay,
 ): ExperimentalDatasetChart {
-  const x = dataset.measurements.map((measurement) => measurement.time)
-  const y = dataset.measurements.map((measurement) => measurement.concentration)
-  const customdata = dataset.measurements.map((measurement) => {
+  const quantified = dataset.measurements.filter(isQuantifiedMeasurement)
+  const censored = dataset.measurements.filter(isCensoredMeasurement)
+
+  const x = quantified.map((measurement) => measurement.time)
+  const y = quantified.map((measurement) => measurement.concentration)
+  const customdata = quantified.map((measurement) => {
     const rows = [`Source row ${measurement.sourceRow}`]
     if (measurement.sampleId !== undefined) {
       rows.push(`Sample: ${escapeHover(measurement.sampleId)}`)
@@ -54,6 +61,24 @@ export function buildExperimentalDatasetChart(
   })
   const timeUnit = escapeHover(dataset.timeUnit)
   const concentrationUnit = escapeHover(dataset.concentrationUnit)
+
+  // Below-limit records are drawn with a distinct marker at the LLOQ position
+  // and are NEVER plotted as a measured concentration or as zero. Their y value
+  // is the limit, clearly labelled as such.
+  const censoredX = censored.map((measurement) => measurement.time)
+  const censoredY = censored.map((measurement) => measurement.limit)
+  const censoredData = censored.map((measurement) => {
+    const rows = [
+      `Source row ${measurement.sourceRow}`,
+      'Below the limit of quantification (not a measured concentration)',
+      `Original text: ${escapeHover(measurement.rawText)}`,
+      `LLOQ: ${measurement.limit} ${concentrationUnit}`,
+    ]
+    if (measurement.sampleId !== undefined) {
+      rows.push(`Sample: ${escapeHover(measurement.sampleId)}`)
+    }
+    return rows.join('<br>')
+  })
 
   // The fitted curve is a SEPARATE line trace drawn after the observed markers:
   // it visualizes the fitted equation and never replaces or interpolates the
@@ -71,19 +96,44 @@ export function buildExperimentalDatasetChart(
           hovertemplate: `Fitted curve — time: %{x} ${timeUnit}<br>Concentration: %{y} ${concentrationUnit}<extra></extra>`,
         }
 
+  const quantifiedTrace = {
+    type: 'scatter',
+    mode: 'markers',
+    name: 'Observed measurements',
+    x,
+    y,
+    customdata,
+    marker: { size: 7, opacity: 0.9 },
+    hovertemplate:
+      `Time: %{x} ${timeUnit}<br>Concentration: %{y} ${concentrationUnit}<br>%{customdata}<extra></extra>`,
+  }
+
+  const censoredTrace =
+    censored.length === 0
+      ? null
+      : {
+          type: 'scatter',
+          mode: 'markers',
+          name: 'Below limit of quantification (LLOQ position)',
+          x: censoredX,
+          y: censoredY,
+          customdata: censoredData,
+          marker: { size: 8, opacity: 0.9, symbol: 'x', color: '#888888' },
+          hovertemplate:
+            `Time: %{x} ${timeUnit}<br>Below the limit of quantification<br>%{customdata}<extra></extra>`,
+        }
+
+  const needsLegend = fitTrace !== null || censoredTrace !== null
+
+  const ariaCount =
+    censored.length === 0
+      ? `${quantified.length} points`
+      : `${quantified.length} quantified points and ${censored.length} below-limit records (shown at the LLOQ position, not as measured concentrations)`
+
   return {
     traces: [
-      {
-        type: 'scatter',
-        mode: 'markers',
-        name: 'Observed measurements',
-        x,
-        y,
-        customdata,
-        marker: { size: 7, opacity: 0.9 },
-        hovertemplate:
-          `Time: %{x} ${timeUnit}<br>Concentration: %{y} ${concentrationUnit}<br>%{customdata}<extra></extra>`,
-      },
+      quantifiedTrace,
+      ...(censoredTrace === null ? [] : [censoredTrace]),
       ...(fitTrace === null ? [] : [fitTrace]),
     ],
     layout: {
@@ -98,14 +148,14 @@ export function buildExperimentalDatasetChart(
         zeroline: false,
       },
       margin: { l: 64, r: 16, t: 16, b: 52 },
-      // A legend is needed only when the fitted curve is present, so the two
-      // series stay distinguishable.
-      showlegend: fitTrace !== null,
+      // A legend is needed only when the fitted curve or censored markers are
+      // present, so the two series stay distinguishable.
+      showlegend: needsLegend,
       hovermode: 'closest',
     },
     ariaLabel:
       fitTrace === null
-        ? `Observed concentration–time measurements from ${dataset.name}: ${dataset.measurements.length} points. Time in ${dataset.timeUnit}, concentration in ${dataset.concentrationUnit}. No fitted curve or interpolation is shown; the measurement table contains the same values.`
-        : `Observed concentration–time measurements from ${dataset.name}: ${dataset.measurements.length} points, plus the fitted mono-exponential curve. Time in ${dataset.timeUnit}, concentration in ${dataset.concentrationUnit}. The curve is a model visualization, not additional measurements; the measurement table contains the observed values.`,
+        ? `Observed concentration–time measurements from ${dataset.name}: ${ariaCount}. Time in ${dataset.timeUnit}, concentration in ${dataset.concentrationUnit}. No fitted curve or interpolation is shown; the measurement table contains the same values.`
+        : `Observed concentration–time measurements from ${dataset.name}: ${ariaCount}, plus the fitted mono-exponential curve. Time in ${dataset.timeUnit}, concentration in ${dataset.concentrationUnit}. The curve is a model visualization, not additional measurements; the measurement table contains the observed values.`,
   }
 }

@@ -36,6 +36,12 @@ export const MAX_CSV_BYTES = 10 * 1024 * 1024
 
 const DECIMAL_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
 
+/** "<0.1" — an explicit below-limit bound; the number is the limit, not a value. */
+const BELOW_LIMIT_INLINE = /^<\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*$/
+
+/** Markers with no inline number; they need an explicit LLOQ column. */
+const BLQ_MARKER = /^(?:BLQ|LLQ|LLOQ|<\s*LLOQ|<\s*LLQ)$/i
+
 export interface CsvDatasetMapping {
   readonly datasetName: string
   readonly notes: string
@@ -45,6 +51,10 @@ export interface CsvDatasetMapping {
   readonly concentrationUnit: string
   readonly sampleColumn: number | null
   readonly noteColumn: number | null
+  /** Explicit opt-in: interpret "<number" as a below-limit observation. */
+  readonly allowCensored: boolean
+  /** Optional mapped column carrying a numeric LLOQ for BLQ markers. */
+  readonly lloqColumn: number | null
 }
 
 export interface CsvDatasetIssue {
@@ -137,6 +147,109 @@ function parseNumber(
   return { ok: true, value: Object.is(value, -0) ? 0 : value }
 }
 
+type ConcentrationCell =
+  | { readonly kind: 'quantified'; readonly value: number }
+  | { readonly kind: 'censored-inline'; readonly rawText: string; readonly limit: number }
+  | { readonly kind: 'censored-marker'; readonly rawText: string }
+  | { readonly kind: 'issue'; readonly issue: CsvDatasetIssue }
+
+/**
+ * Classify a concentration cell. Quantified numbers keep the old rules; the
+ * below-limit forms are only interpreted when the analyst explicitly opted in.
+ */
+function parseConcentrationCell(
+  raw: string,
+  row: number,
+  column: string,
+  allowCensored: boolean,
+): ConcentrationCell {
+  const text = raw.trim()
+  if (text === '') {
+    return {
+      kind: 'issue',
+      issue: { row, column, message: `data row ${row}: concentration is blank — a measured number is required` },
+    }
+  }
+  if (DECIMAL_NUMBER.test(text)) {
+    const value = Number(text)
+    if (!Number.isFinite(value)) {
+      return {
+        kind: 'issue',
+        issue: { row, column, message: `data row ${row}: concentration "${raw}" is not a finite number` },
+      }
+    }
+    if (value < 0) {
+      return {
+        kind: 'issue',
+        issue: {
+          row,
+          column,
+          message: `data row ${row}: concentration "${raw}" is negative; measured concentration must be zero or greater`,
+        },
+      }
+    }
+    return { kind: 'quantified', value: Object.is(value, -0) ? 0 : value }
+  }
+  if (!allowCensored) {
+    return {
+      kind: 'issue',
+      issue: {
+        row,
+        column,
+        message: `data row ${row}: concentration "${raw}" is not a plain decimal number. Qualifiers and markers such as "<0.1", "BLQ", "N/A" and ranges are not accepted; enable the below-limit import option or correct the source file.`,
+      },
+    }
+  }
+  const inline = text.match(BELOW_LIMIT_INLINE)
+  if (inline !== null) {
+    const limit = Number(inline[1])
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return {
+        kind: 'issue',
+        issue: {
+          row,
+          column,
+          message: `data row ${row}: the below-limit bound "${raw}" is not a finite positive number`,
+        },
+      }
+    }
+    return { kind: 'censored-inline', rawText: text, limit: Object.is(limit, -0) ? 0 : limit }
+  }
+  if (BLQ_MARKER.test(text)) {
+    return { kind: 'censored-marker', rawText: text }
+  }
+  return {
+    kind: 'issue',
+    issue: {
+      row,
+      column,
+      message: `data row ${row}: concentration "${raw}" is not a recognised number or below-limit marker`,
+    },
+  }
+}
+
+function parsePositiveLloq(
+  raw: string | undefined,
+  row: number,
+  column: string,
+): { readonly ok: true; readonly limit: number } | { readonly ok: false; readonly issue: CsvDatasetIssue } {
+  const text = raw === undefined ? '' : raw.trim()
+  if (text === '' || !DECIMAL_NUMBER.test(text)) {
+    return {
+      ok: false,
+      issue: { row, column, message: `data row ${row}: the LLOQ "${raw ?? ''}" is not a plain decimal number` },
+    }
+  }
+  const limit = Number(text)
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return {
+      ok: false,
+      issue: { row, column, message: `data row ${row}: the LLOQ "${raw}" must be a finite positive number` },
+    }
+  }
+  return { ok: true, limit: Object.is(limit, -0) ? 0 : limit }
+}
+
 /**
  * Validate an explicit mapping against parsed CSV rows. All problems are
  * collected with row/column context; when any problem remains, no dataset is
@@ -172,6 +285,7 @@ export function buildDatasetFromCsv(
     mapping.concentrationColumn,
     mapping.sampleColumn,
     mapping.noteColumn,
+    mapping.lloqColumn,
   ].filter((index): index is number => index !== null)
   if (new Set(selectedColumns).size !== selectedColumns.length) {
     issues.push({
@@ -192,6 +306,7 @@ export function buildDatasetFromCsv(
   for (const [label, index] of [
     ['sample id', mapping.sampleColumn],
     ['measurement note', mapping.noteColumn],
+    ['LLOQ', mapping.lloqColumn],
   ] as const) {
     if (index !== null && (index < 0 || index >= table.headers.length)) {
       issues.push({ column: label, message: `the selected ${label} column does not exist` })
@@ -224,13 +339,62 @@ export function buildDatasetFromCsv(
       table.headers[timeColumn] ?? `column ${timeColumn + 1}`,
     )
     if (!time.ok) rowIssues.push(time.issue)
-    const concentration = parseNumber(
+    const concentrationColumnLabel =
+      table.headers[concentrationColumn] ?? `column ${concentrationColumn + 1}`
+    const cell = parseConcentrationCell(
       row[concentrationColumn] ?? '',
-      'concentration',
       sourceRow,
-      table.headers[concentrationColumn] ?? `column ${concentrationColumn + 1}`,
+      concentrationColumnLabel,
+      mapping.allowCensored,
     )
-    if (!concentration.ok) rowIssues.push(concentration.issue)
+
+    let concentrationValue: number | undefined
+    let censored: { readonly rawText: string; readonly limit: number } | undefined
+
+    if (cell.kind === 'issue') {
+      rowIssues.push(cell.issue)
+    } else if (cell.kind === 'quantified') {
+      concentrationValue = cell.value
+    } else if (cell.kind === 'censored-inline') {
+      // The inline "<number" already names a bound; a mapped LLOQ column must agree.
+      let limit = cell.limit
+      if (mapping.lloqColumn !== null) {
+        const lloqColumn = mapping.lloqColumn as number
+        const lloq = parsePositiveLloq(
+          row[lloqColumn],
+          sourceRow,
+          table.headers[lloqColumn] ?? `column ${lloqColumn + 1}`,
+        )
+        if (!lloq.ok) {
+          rowIssues.push(lloq.issue)
+        } else if (lloq.limit !== limit) {
+          rowIssues.push({
+            row: sourceRow,
+            column: concentrationColumnLabel,
+            message: `data row ${sourceRow}: the inline below-limit bound "${cell.rawText}" conflicts with the LLOQ column value ${lloq.limit}`,
+          })
+        }
+      }
+      censored = { rawText: cell.rawText, limit }
+    } else {
+      // BLQ / <LLOQ markers have no inline number; the LLOQ column is required.
+      if (mapping.lloqColumn === null) {
+        rowIssues.push({
+          row: sourceRow,
+          column: concentrationColumnLabel,
+          message: `data row ${sourceRow}: "${cell.rawText}" has no numeric limit; map an LLOQ column to import it`,
+        })
+      } else {
+        const lloqColumn = mapping.lloqColumn as number
+        const lloq = parsePositiveLloq(
+          row[lloqColumn],
+          sourceRow,
+          table.headers[lloqColumn] ?? `column ${lloqColumn + 1}`,
+        )
+        if (!lloq.ok) rowIssues.push(lloq.issue)
+        else censored = { rawText: cell.rawText, limit: lloq.limit }
+      }
+    }
 
     let sampleId: string | undefined
     if (mapping.sampleColumn !== null) {
@@ -266,17 +430,27 @@ export function buildDatasetFromCsv(
       issues.push(...rowIssues)
       return
     }
-    if (!time.ok || !concentration.ok) {
+    if (!time.ok || (concentrationValue === undefined && censored === undefined)) {
       /* c8 ignore next -- unreachable: either failure was pushed above */
       return
     }
-    measurements.push({
+    const common = {
       sourceRow,
       time: time.value,
-      concentration: concentration.value,
       ...(sampleId === undefined ? {} : { sampleId }),
       ...(note === undefined ? {} : { note }),
-    })
+    }
+    measurements.push(
+      censored !== undefined
+        ? {
+            ...common,
+            censored: true,
+            censoring: 'below-quantification-limit',
+            rawText: censored.rawText,
+            limit: censored.limit,
+          }
+        : { ...common, concentration: concentrationValue as number },
+    )
   })
 
   if (issues.length > 0) {

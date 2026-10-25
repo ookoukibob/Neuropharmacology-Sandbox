@@ -32,7 +32,7 @@ describe('mono-exponential fit diagnostics (phase 47C)', () => {
     expect(diagnostics.residuals.map((point) => point.sourceRow)).toEqual([1, 2, 3, 4, 5])
     expect(diagnostics.residuals.map((point) => point.time)).toEqual([0, 0, 1, 2, 4])
     expect(diagnostics.residuals[0]?.residual).toBeCloseTo(
-      (data[0]?.concentration ?? 0) - (diagnostics.residuals[0]?.fitted ?? 0),
+      ((data[0] as { concentration: number } | undefined)?.concentration ?? 0) - (diagnostics.residuals[0]?.fitted ?? 0),
       12,
     )
     const expected = Math.sqrt(

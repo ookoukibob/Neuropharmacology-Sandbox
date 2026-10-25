@@ -613,3 +613,36 @@ describe('NcaCard sampling coverage diagnostics', () => {
     expect(screen.getByTestId('sampling-min-positions')).toHaveTextContent('inside the interval')
   })
 })
+
+describe('NcaCard below-quantification-limit records', () => {
+  const blqMeasurements: ExperimentalMeasurement[] = [
+    { id: 'm1', sourceRow: 1, time: 0, concentration: 100 },
+    { id: 'm2', sourceRow: 2, time: 4, concentration: 60 },
+    { id: 'm3', sourceRow: 3, time: 8, censored: true, censoring: 'below-quantification-limit', rawText: '<0.1', limit: 0.1 },
+    { id: 'm4', sourceRow: 4, time: 12, concentration: 40 },
+  ]
+
+  it('refuses numeric NCA instead of treating a limit as a concentration', () => {
+    render(
+      <NcaCard measurements={blqMeasurements} timeUnit="h" concentrationUnit="mg/L" administration={undefined} />,
+    )
+    expect(screen.getByTestId('nca-error')).toHaveTextContent('below-quantification-limit')
+    expect(screen.getByTestId('nca-error')).toHaveTextContent('source rows 3')
+    expect(screen.getByTestId('nca-error')).toHaveTextContent('no limit is substituted')
+  })
+
+  it('still reports sampling statistics for the BLQ time', () => {
+    render(
+      <NcaCard measurements={blqMeasurements} timeUnit="h" concentrationUnit="mg/L" administration={steadyState} />,
+    )
+    fireEvent.change(screen.getByTestId('repeated-interval-start'), { target: { value: '0' } })
+    fireEvent.change(screen.getByTestId('repeated-interval-end'), { target: { value: '12' } })
+    expect(screen.getByTestId('sampling-coverage-summary')).toHaveTextContent(
+      '4 measurement record(s) at 4 distinct sampling time(s)',
+    )
+    expect(screen.getByTestId('sampling-gap-max')).toHaveTextContent('4 h')
+    expect(screen.getByTestId('sampling-extremes-unavailable')).toHaveTextContent(
+      'EXPOSURE_REPORT_UNAVAILABLE',
+    )
+  })
+})

@@ -67,12 +67,22 @@ export function specialNumberKind(value: number): SpecialNumberKind | null {
 }
 
 /**
- * UTF-8 byte-limit check with an early exit. One UTF-16 code unit is at
+ * UTF-8 byte-limit check with two early exits. One UTF-16 code unit is at
  * most 3 UTF-8 bytes (a surrogate pair is 2 units → 4 bytes = 2 per
- * unit), so the cheap multiplication is a safe sufficient bound for small
- * texts; only boundary-sized texts take the exact counting path.
+ * unit) and at least 1 byte (ASCII 1, a 2-byte sequence 2, a 3-byte
+ * sequence 3, a surrogate pair 4 over 2 units), so the two cheap bounds
+ * bracket the exact count:
+ *
+ * - `length > limit` already proves the encoded text exceeds the limit, and
+ *   short-circuits before the walk. Without it a 64 MiB ASCII probe would
+ *   iterate tens of millions of code units that cannot change the answer.
+ * - `length * 3 <= limit` proves it cannot exceed the limit.
+ *
+ * Only texts that neither bound settles take the exact counting path, which
+ * stays the sole authority on multibyte sequences and surrogate pairs.
  */
 export function exceedsUtf8ByteLimit(text: string, limit: number): boolean {
+  if (text.length > limit) return true
   if (text.length * 3 <= limit) return false
   let bytes = 0
   for (let index = 0; index < text.length; index += 1) {

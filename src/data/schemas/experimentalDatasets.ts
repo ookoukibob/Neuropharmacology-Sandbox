@@ -10,7 +10,9 @@
  * The `.npex` interchange boundary uses the STRICT variants (unknown keys
  * rejected, explicit version); stored and CSV-facing schemas are permissive
  * about unknown keys, matching the repository's forward-compatible read
- * policy.
+ * policy. That permissiveness stops at the reserved censoring fields: every
+ * boundary runs `validateMeasurementContract`, so an observation can never be
+ * partly quantified and partly censored (see `measurementContractIssues`).
  *
  * `sourceRow` is validated as a source row number only. It never doubles as a
  * database key.
@@ -19,12 +21,14 @@
  */
 import { z } from 'zod'
 import {
+  MAX_CENSORED_RAW_TEXT_LENGTH,
   MAX_DATASET_MEASUREMENTS,
   MAX_DATASET_NAME_LENGTH,
   MAX_DATASET_NOTES_LENGTH,
   MAX_MEASUREMENT_NOTE_LENGTH,
   MAX_SAMPLE_ID_LENGTH,
   concentrationUnitIssue,
+  measurementContractIssues,
   timeUnitIssue,
   validateAdministration,
   type AdministrationMetadata,
@@ -56,12 +60,35 @@ const provenanceFields = {
   importedAt: isoDateTime,
 }
 
-const measurementFields = {
+const measurementCommonFields = {
   sourceRow: sourceRowSchema,
   time: nonNegativeFinite,
-  concentration: nonNegativeFinite,
   sampleId: optionalText(MAX_SAMPLE_ID_LENGTH, 'sample id'),
   note: optionalText(MAX_MEASUREMENT_NOTE_LENGTH, 'measurement note'),
+}
+
+/** A quantification limit must be a finite, strictly positive concentration. */
+const positiveFinite = z
+  .number()
+  .finite('must be a finite number')
+  .positive('must be greater than zero')
+
+/** A quantified observation: an actual measured, finite, non-negative concentration. */
+const quantifiedMeasurementFields = {
+  ...measurementCommonFields,
+  concentration: nonNegativeFinite,
+}
+
+/** A below-quantification-limit observation: a limit, never a concentration. */
+const censoredMeasurementFields = {
+  ...measurementCommonFields,
+  censored: z.literal(true),
+  censoring: z.literal('below-quantification-limit'),
+  rawText: z
+    .string()
+    .min(1, 'the original below-limit text is required')
+    .max(MAX_CENSORED_RAW_TEXT_LENGTH, 'the original below-limit text is too long'),
+  limit: positiveFinite,
 }
 
 const baseFields = {
@@ -133,13 +160,33 @@ function validateAdministrationField(value: unknown, ctx: z.RefinementCtx): void
   }
 }
 
+/**
+ * The measurement contract (phase 50F hardening), shared by every boundary:
+ * the loose objects below stay forward-compatible about unknown keys, but the
+ * reserved censoring fields may not be mixed between the two observation
+ * shapes, and an inline `<number` bound must agree with the recorded `limit`.
+ */
+function validateMeasurementContract(value: unknown, ctx: z.RefinementCtx): void {
+  for (const issue of measurementContractIssues(value)) {
+    ctx.addIssue({ code: 'custom', path: [issue.field], message: issue.message })
+  }
+}
+
 /** Measurement as supplied by an import (no local identity yet). */
-export const experimentalMeasurementInputSchema = z.looseObject(measurementFields)
+export const experimentalMeasurementInputSchema = z
+  .union([
+    z.looseObject(quantifiedMeasurementFields),
+    z.looseObject(censoredMeasurementFields),
+  ])
+  .superRefine(validateMeasurementContract)
 
 /** Stored measurement: local identity is an address, never a source row. */
-export const experimentalMeasurementRecordSchema = experimentalMeasurementInputSchema.extend({
-  id: z.string().min(1).max(200),
-})
+export const experimentalMeasurementRecordSchema = z
+  .union([
+    z.looseObject({ ...quantifiedMeasurementFields, id: z.string().min(1).max(200) }),
+    z.looseObject({ ...censoredMeasurementFields, id: z.string().min(1).max(200) }),
+  ])
+  .superRefine(validateMeasurementContract)
 
 const measurementsInputSchema = z
   .array(experimentalMeasurementInputSchema)
@@ -193,7 +240,14 @@ export const experimentalDatasetNpexSchema = z
     ...baseFields,
     provenance: z.strictObject(provenanceFields),
     measurements: z
-      .array(z.strictObject(measurementFields))
+      .array(
+        z
+          .union([
+            z.strictObject(quantifiedMeasurementFields),
+            z.strictObject(censoredMeasurementFields),
+          ])
+          .superRefine(validateMeasurementContract),
+      )
       .min(1, 'at least one measurement is required')
       .max(
         MAX_DATASET_MEASUREMENTS,

@@ -25,7 +25,11 @@
  *
  * Pure: no React, DOM, Plotly or storage.
  */
-import type { ExperimentalMeasurement } from './experimental-dataset'
+import {
+  censoredRefusalMessage,
+  type ExperimentalMeasurement,
+  type QuantifiedMeasurement,
+} from './experimental-dataset'
 import {
   fitMonoExponentialWithBaseline,
   type BaselineFitWarning,
@@ -122,6 +126,7 @@ export type ComparisonFailureCode =
   | 'MEASUREMENT_MISMATCH'
   | 'INVALID_MEASUREMENT'
   | 'NON_FINITE_PARAMETER'
+  | 'CENSORED_CONCENTRATION_UNSUPPORTED'
 
 export interface ModelComparisonFailure {
   readonly ok: false
@@ -298,6 +303,10 @@ export function compareMonoExponentialModels(
       message: 'The dataset has no measurements to compare.',
     }
   }
+  const censoredRefusal = censoredRefusalMessage(measurements)
+  if (censoredRefusal !== null) {
+    return { ok: false, code: 'CENSORED_CONCENTRATION_UNSUPPORTED', message: censoredRefusal }
+  }
   if (measurements.length !== monoExponentialFit.measurementCount) {
     return {
       ok: false,
@@ -321,13 +330,19 @@ export function compareMonoExponentialModels(
   const n = measurements.length
   const distinctTimes = new Set<number>()
   for (const measurement of measurements) {
+    if (measurement === null || typeof measurement !== 'object') {
+      return {
+        ok: false,
+        code: 'INVALID_MEASUREMENT',
+        message: 'A measurement is invalid; the comparison is unavailable.',
+      }
+    }
+    const concentration = (measurement as QuantifiedMeasurement).concentration
     if (
-      measurement === null ||
-      typeof measurement !== 'object' ||
       typeof measurement.time !== 'number' ||
-      typeof measurement.concentration !== 'number' ||
+      typeof concentration !== 'number' ||
       !Number.isFinite(measurement.time) ||
-      !Number.isFinite(measurement.concentration)
+      !Number.isFinite(concentration)
     ) {
       return {
         ok: false,

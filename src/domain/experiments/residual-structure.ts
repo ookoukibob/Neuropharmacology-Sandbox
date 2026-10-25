@@ -31,7 +31,11 @@
  * sorting used to split the fitted range happens on a copy of indices.
  */
 import type { MonoExponentialBaselineFitResult } from './mono-exponential-baseline-fit'
-import type { ExperimentalMeasurement } from './experimental-dataset'
+import {
+  censoredRefusalMessage,
+  type ExperimentalMeasurement,
+  type QuantifiedMeasurement,
+} from './experimental-dataset'
 import { diagnoseMonoExponentialFit, type MonoExponentialResidual } from './mono-exponential-fit-diagnostics'
 import type { MonoExponentialFitResult } from './mono-exponential-fit'
 
@@ -154,6 +158,7 @@ export type ResidualStructureFailureCode =
   | 'NON_FINITE_PARAMETER'
   /** The candidate has no successful fit to derive residuals from. */
   | 'FIT_UNAVAILABLE'
+  | 'CENSORED_CONCENTRATION_UNSUPPORTED'
 
 export interface ResidualStructureFailure {
   readonly ok: false
@@ -443,6 +448,10 @@ function baselineResiduals(
       message: 'The rows do not match the observations used by this fit.',
     }
   }
+  const censoredRefusal = censoredRefusalMessage(measurements)
+  if (censoredRefusal !== null) {
+    return { ok: false, code: 'CENSORED_CONCENTRATION_UNSUPPORTED', message: censoredRefusal }
+  }
   if (
     !Number.isFinite(fit.tRef) ||
     !Number.isFinite(fit.amplitude) ||
@@ -460,13 +469,19 @@ function baselineResiduals(
   let scaled = 0
   let maxAbsResidual = 0
   for (const measurement of measurements) {
+    if (measurement === null || typeof measurement !== 'object') {
+      return {
+        ok: false,
+        code: 'INVALID_MEASUREMENT',
+        message: 'A measurement is invalid; residuals are unavailable.',
+      }
+    }
+    const concentration = (measurement as QuantifiedMeasurement).concentration
     if (
-      measurement === null ||
-      typeof measurement !== 'object' ||
       typeof measurement.time !== 'number' ||
-      typeof measurement.concentration !== 'number' ||
+      typeof concentration !== 'number' ||
       !Number.isFinite(measurement.time) ||
-      !Number.isFinite(measurement.concentration)
+      !Number.isFinite(concentration)
     ) {
       return {
         ok: false,
@@ -475,7 +490,7 @@ function baselineResiduals(
       }
     }
     const fitted = fit.baseline + fit.amplitude * Math.exp(-fit.k * (measurement.time - fit.tRef))
-    const residual = measurement.concentration - fitted
+    const residual = concentration - fitted
     if (!Number.isFinite(fitted) || !Number.isFinite(residual)) {
       return {
         ok: false,
@@ -488,7 +503,7 @@ function baselineResiduals(
       measurementId: measurement.id,
       sourceRow: measurement.sourceRow,
       time: measurement.time,
-      observed: measurement.concentration,
+      observed: concentration,
       fitted,
       residual,
     })

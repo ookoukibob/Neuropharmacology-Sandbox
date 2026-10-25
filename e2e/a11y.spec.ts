@@ -607,3 +607,34 @@ test('a11y: the saved-scenario library passes the axe scans', async ({ page }) =
   await expect(page.getByTestId('scenario-load-confirm')).toBeVisible()
   await scan(page, 'saved scenarios (unsaved-changes guard)')
 })
+
+test('a11y: a below-limit dataset passes the axe scan in its refused-NCA state', async ({ page }) => {
+  test.setTimeout(120_000)
+  await page.goto('/experiments')
+  await expect(page.getByTestId('datasets-empty')).toBeVisible()
+
+  await page.getByTestId('csv-dataset-file').setInputFiles({
+    name: 'synthetic-a11y-blq.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('time,conc,lloq\n0,5,0.1\n1,<0.1,0.1\n2,BLQ,0.1\n', 'utf8'),
+  })
+  await expect(page.getByTestId('csv-dataset-mapping')).toBeVisible()
+  await page.getByTestId('csv-dataset-name').fill('Synthetic A11y BLQ')
+  await page.getByTestId('csv-dataset-time-column').selectOption('0')
+  await page.getByTestId('csv-dataset-time-unit').selectOption('h')
+  await page.getByTestId('csv-dataset-concentration-column').selectOption('1')
+  await page.getByTestId('csv-dataset-concentration-unit').selectOption('mg/L')
+  await page.getByTestId('csv-dataset-lloq-column').selectOption('2')
+  await page.getByTestId('csv-dataset-allow-censored').check()
+  await scan(page, 'experimental datasets (below-limit mapping)')
+  await page.getByTestId('csv-dataset-preview').click()
+  await expect(page.getByTestId('csv-dataset-preview-result')).toBeVisible()
+  await scan(page, 'experimental datasets (below-limit import preview)')
+
+  await page.getByTestId('csv-dataset-confirm').click()
+  await expect(page.getByRole('heading', { level: 2, name: 'Synthetic A11y BLQ' })).toBeVisible()
+  // NCA is refused and the below-limit rows render distinctly in the table.
+  await expect(page.getByTestId('nca-error')).toBeVisible()
+  await expect(page.locator('[data-testid="dataset-measurement-row"]')).toHaveCount(3)
+  await scan(page, 'experimental datasets (below-limit detail, refused NCA)')
+})

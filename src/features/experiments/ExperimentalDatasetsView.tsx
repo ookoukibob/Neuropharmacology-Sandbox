@@ -81,6 +81,7 @@ import type {
   ExperimentalDataset,
   ExperimentalMeasurement,
 } from '@/domain/experiments/experimental-dataset'
+import { isCensoredMeasurement } from '@/domain/experiments/experimental-dataset'
 import type { ExperimentalDatasetRepository } from '@/data/repositories/experimentalDatasetRepository'
 import { buildNpexFile, NPEX_EXTENSION, NPEX_MIME_TYPE } from '@/data/npex/npex'
 import { downloadTextFile, safeFileName } from '@/features/import-export/fileIo'
@@ -858,7 +859,11 @@ function DatasetDetail({ dataset, busy, onRename, onSetAdministration, onDelete 
                   <TableRow key={measurement.id} data-testid="dataset-measurement-row">
                     <TableCell>{measurement.sourceRow}</TableCell>
                     <TableCell>{measurement.time}</TableCell>
-                    <TableCell>{measurement.concentration}</TableCell>
+                    <TableCell>
+                      {isCensoredMeasurement(measurement)
+                        ? `${measurement.rawText} (LLOQ ${measurement.limit} ${dataset.concentrationUnit})`
+                        : measurement.concentration}
+                    </TableCell>
                     <TableCell>{measurement.sampleId ?? '—'}</TableCell>
                     <TableCell className="max-w-72 whitespace-normal">{measurement.note ?? '—'}</TableCell>
                   </TableRow>

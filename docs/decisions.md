@@ -1278,6 +1278,52 @@ analyst and the existing PK formulas and persisted data are untouched.
 
 ---
 
+## ADR-35 · BLQ is a real record with an unknown value, never a substituted number
+
+**Context.** Phase 50F adds below-quantification-limit (BLQ) concentration
+records. The tempting shortcuts are to read `BLQ` as zero, to read `<0.1` as the
+exact value `0.1`, or to drop the row so a numeric analysis still produces a
+normal-looking curve. Each silently fabricates a concentration.
+
+**Decision.**
+
+- **A discriminated union, not an optional number.** `ExperimentalMeasurement`
+  is a quantified observation (a real `concentration`) or a below-limit
+  observation (`censored: true`, a `censoring` tag, the unchanged `rawText`,
+  and a positive finite `limit`). A limit is never stored in a `concentration`
+  slot, so no analysis can read it as a value by accident.
+- **No inference and no substitution.** No LLOQ is inferred from a header, file
+  name, adjacent value or another dataset; no limit becomes `0`, `LLOQ/2`,
+  `LLOQ/√2` or a likelihood estimate. The dataset's declared concentration unit
+  is the unit of every limit.
+- **Explicit CSV opt-in.** `<number` becomes a censored record only when the
+  analyst enables it; `BLQ`/`<LLOQ` markers need an explicitly mapped LLOQ
+  column. Ambiguous, conflicting, zero, negative or non-finite limits are
+  rejected by source row.
+- **Structured refusal, never silent exclusion.** Every numeric concentration
+  analysis returns `CENSORED_CONCENTRATION_UNSUPPORTED` with the count and
+  source rows when a BLQ record is present; nothing is dropped or recomputed on
+  the remaining rows. Time-only diagnostics (sampling counts and gaps) keep the
+  BLQ record's real time.
+- **Additive interchange.** `.npex` becomes 1.3.0; quantified measurements are
+  unchanged, so older files still import and an older reader rejects a 1.3 file.
+  `.npsb` stays 1.1.0 because the raw-row snapshot already preserves the new
+  fields. No implicit migration reclassifies an old numeric record.
+
+**Rejected alternatives.** *Store `0` for BLQ* — a limit is not zero and would
+distort AUC and terminal regression. *Store the LLOQ as `concentration`* — it
+would pass silently through every numeric analysis. *Drop BLQ rows* — the
+resulting "complete" curve is not the observed data. *Always interpret `<0.1`*
+— a qualifier is not a number unless the analyst opts in. *Add a BLQ substitute
+this phase* — the appropriate censored model depends on the drug, regimen and
+assay and is a later, separate phase.
+
+**Consequences.** BLQ records survive import, storage, `.npex` round-trip,
+`.npsb` recovery and display with full provenance, and every numeric analysis
+declines them honestly rather than fabricating a concentration.
+
+---
+
 ## Tooling notes (not decisions, but useful)
 
 - **shadcn CLI workspace bug (v4.20/4.21):** `shadcn init` failed with

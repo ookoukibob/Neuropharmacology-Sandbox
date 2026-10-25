@@ -313,20 +313,228 @@ export interface DatasetProvenance {
   readonly importedAt: string
 }
 
-/** One measured time/concentration pair in source order. */
-export interface ExperimentalMeasurement {
+/**
+ * A below-quantification-limit record is left-censored: the true concentration
+ * is known only to be below the recorded limit. It carries NO measured
+ * concentration, and `limit` is a detection bound, never a substitute value.
+ */
+export type CensoringType = 'below-quantification-limit'
+
+/** Fields shared by every measurement record regardless of censoring. */
+interface ExperimentalMeasurementBase {
   /** Stable local identity (storage only; never a source row id). */
   readonly id: ExperimentalMeasurementId
   /** 1-based data row in the source file (header excluded). */
   readonly sourceRow: number
   /** Measured time in the dataset's declared time unit. */
   readonly time: number
-  /** Measured concentration in the dataset's declared concentration unit. */
-  readonly concentration: number
   /** Optional replicate/sample identifier, preserved verbatim. */
   readonly sampleId?: string
   /** Optional measurement-level note, preserved verbatim. */
   readonly note?: string
+}
+
+/**
+ * A quantified observation: an actually recorded, finite, non-negative
+ * concentration. This is the only shape older readers and analyses understood;
+ * it carries no `censored` field, so pre-50F records remain quantified.
+ */
+export interface QuantifiedMeasurement extends ExperimentalMeasurementBase {
+  /** Measured concentration in the dataset's declared concentration unit. */
+  readonly concentration: number
+}
+
+/**
+ * A below-quantification-limit observation: a real record whose true value is
+ * unknown, with an explicit numeric LLOQ in the dataset's concentration unit
+ * and the original text unchanged. It must never be read as `concentration`.
+ */
+export interface CensoredMeasurement extends ExperimentalMeasurementBase {
+  readonly censored: true
+  readonly censoring: CensoringType
+  /** The original, unchanged source text (e.g. "<0.1" or "BLQ"). */
+  readonly rawText: string
+  /** The numeric quantification limit, finite and greater than zero, in the dataset's concentration unit. */
+  readonly limit: number
+}
+
+/** One measurement record in source order — quantified or below the limit. */
+export type ExperimentalMeasurement = QuantifiedMeasurement | CensoredMeasurement
+
+/** A measurement before storage assigns its local identity. */
+export type ExperimentalMeasurementInput = QuantifiedMeasurementInput | CensoredMeasurementInput
+
+/** Quantified observation as supplied by an import (no local id yet). */
+export interface QuantifiedMeasurementInput {
+  readonly sourceRow: number
+  readonly time: number
+  readonly concentration: number
+  readonly sampleId?: string
+  readonly note?: string
+}
+
+/** Below-limit observation as supplied by an import (no local id yet). */
+export interface CensoredMeasurementInput {
+  readonly sourceRow: number
+  readonly time: number
+  readonly censored: true
+  readonly censoring: CensoringType
+  readonly rawText: string
+  readonly limit: number
+  readonly sampleId?: string
+  readonly note?: string
+}
+
+/**
+ * True when the record is a below-quantification-limit observation. Pre-50F
+ * records have no `censored` field and are therefore never treated as censored.
+ */
+export function isCensoredMeasurement(
+  measurement: ExperimentalMeasurement,
+): measurement is CensoredMeasurement {
+  return (
+    measurement !== null &&
+    typeof measurement === 'object' &&
+    (measurement as { censored?: unknown }).censored === true
+  )
+}
+
+/** True when the record carries an actual measured concentration. */
+export function isQuantifiedMeasurement(
+  measurement: ExperimentalMeasurement,
+): measurement is QuantifiedMeasurement {
+  return !isCensoredMeasurement(measurement)
+}
+
+/** True when an import-supplied observation is below the quantification limit. */
+export function isCensoredMeasurementInput(
+  measurement: ExperimentalMeasurementInput,
+): measurement is CensoredMeasurementInput {
+  return (measurement as { censored?: unknown }).censored === true
+}
+
+/** True when an import-supplied observation carries an actual concentration. */
+export function isQuantifiedMeasurementInput(
+  measurement: ExperimentalMeasurementInput,
+): measurement is QuantifiedMeasurementInput {
+  return !isCensoredMeasurementInput(measurement)
+}
+
+export interface CensoredMeasurementsSummary {
+  readonly count: number
+  readonly sourceRows: readonly number[]
+}
+
+/** Count and locate every below-limit record, or null when none exists. */
+export function censoredMeasurementsSummary(
+  measurements: readonly ExperimentalMeasurement[],
+): CensoredMeasurementsSummary | null {
+  const sourceRows: number[] = []
+  for (const measurement of measurements) {
+    if (isCensoredMeasurement(measurement)) sourceRows.push(measurement.sourceRow)
+  }
+  return sourceRows.length === 0 ? null : { count: sourceRows.length, sourceRows }
+}
+
+/** Stable refusal code shared by every numeric analysis that needs a value. */
+export const CENSORED_CONCENTRATION_UNSUPPORTED = 'CENSORED_CONCENTRATION_UNSUPPORTED'
+
+/**
+ * The message a numeric analysis reports when it must refuse censored records.
+ * It names the count and source rows and never proposes a substitution.
+ */
+export function censoredRefusalMessage(measurements: readonly ExperimentalMeasurement[]): string | null {
+  const summary = censoredMeasurementsSummary(measurements)
+  if (summary === null) return null
+  return `The dataset contains ${summary.count} below-quantification-limit record(s) (source rows ${summary.sourceRows.join(', ')}). Numeric concentration analyses do not yet support censored observations: no limit is substituted, dropped or treated as a measured concentration.`
+}
+
+/** One violation of the measurement contract, addressed by its field name. */
+export interface MeasurementContractIssue {
+  /** The offending field, so a schema can attach the message to that path. */
+  readonly field: string
+  readonly message: string
+}
+
+/** Censoring metadata: no quantified observation may carry any of these. */
+const RESERVED_CENSORING_FIELDS = ['censored', 'censoring', 'rawText', 'limit'] as const
+
+/** `<0.1` — the inline below-limit bound shape CSV import recognises. */
+const INLINE_BELOW_LIMIT_BOUND = /^<\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*$/
+
+/** What a censored record's original text says about its bound. */
+export type InlineBelowLimitBound =
+  | { readonly kind: 'number'; readonly bound: number }
+  /** The text has the `<number` shape but names no finite number (e.g. `<1e400`). */
+  | { readonly kind: 'invalid' }
+  /** A symbolic marker (`BLQ`, `<LLOQ`, …) that carries no inline number. */
+  | { readonly kind: 'none' }
+
+/**
+ * The bound a `<number` raw text names, read with the same numeric
+ * interpretation as CSV import. Only a trimmed copy is matched, so `rawText`
+ * itself is never rewritten.
+ */
+export function inlineBelowLimitBound(rawText: string): InlineBelowLimitBound {
+  const match = INLINE_BELOW_LIMIT_BOUND.exec(rawText.trim())
+  if (match === null) return { kind: 'none' }
+  const bound = Number(match[1])
+  if (!Number.isFinite(bound)) return { kind: 'invalid' }
+  return { kind: 'number', bound: Object.is(bound, -0) ? 0 : bound }
+}
+
+/**
+ * The measurement contract, enforced at every runtime boundary (CSV input,
+ * stored records, `.npex` import and export). Structural schemas already
+ * require the right fields; this rejects what a permissive object would let
+ * through:
+ *
+ * - a quantified observation carries a concentration and **no** censoring
+ *   metadata, so `censored: false` is a contradiction rather than a quantified
+ *   record;
+ * - a censored observation carries **no** concentration, and an inline
+ *   `<number` bound in `rawText` must agree with the recorded `limit`.
+ */
+export function measurementContractIssues(record: unknown): MeasurementContractIssue[] {
+  if (record === null || typeof record !== 'object') return []
+  const fields = record as Record<string, unknown>
+  const has = (key: string): boolean => Object.prototype.hasOwnProperty.call(fields, key)
+  const issues: MeasurementContractIssue[] = []
+  if (fields['censored'] === true) {
+    if (has('concentration')) {
+      issues.push({
+        field: 'concentration',
+        message:
+          'a below-quantification-limit record must not carry a concentration; the limit is not a measured value',
+      })
+    }
+    const rawText = fields['rawText']
+    const limit = fields['limit']
+    if (typeof rawText === 'string' && typeof limit === 'number' && Number.isFinite(limit)) {
+      const inline = inlineBelowLimitBound(rawText)
+      if (inline.kind === 'invalid') {
+        issues.push({
+          field: 'rawText',
+          message: `the original text "${rawText}" names a below-limit bound that is not a finite number`,
+        })
+      } else if (inline.kind === 'number' && inline.bound !== limit) {
+        issues.push({
+          field: 'limit',
+          message: `the recorded limit ${limit} disagrees with the ${inline.bound} bound in the original text "${rawText}"`,
+        })
+      }
+    }
+    return issues
+  }
+  for (const field of RESERVED_CENSORING_FIELDS) {
+    if (has(field)) {
+      issues.push({
+        field,
+        message: `a quantified observation must not carry the reserved censoring field "${field}"`,
+      })
+    }
+  }
+  return issues
 }
 
 /** A complete stored dataset. */
@@ -351,15 +559,6 @@ export interface ExperimentalDataset {
    * shows it as unknown, never as an invented dose or route.
    */
   readonly administration?: AdministrationMetadata
-}
-
-/** A measurement before storage assigns its local identity. */
-export interface ExperimentalMeasurementInput {
-  readonly sourceRow: number
-  readonly time: number
-  readonly concentration: number
-  readonly sampleId?: string
-  readonly note?: string
 }
 
 /** Everything a caller supplies when creating a dataset. */
@@ -390,6 +589,7 @@ export const MAX_DATASET_NAME_LENGTH = 120
 export const MAX_DATASET_NOTES_LENGTH = 10_000
 export const MAX_SAMPLE_ID_LENGTH = 200
 export const MAX_MEASUREMENT_NOTE_LENGTH = 1_000
+export const MAX_CENSORED_RAW_TEXT_LENGTH = 200
 export const MAX_DATASET_MEASUREMENTS = 25_000
 
 /** Molar concentration and mass concentration are different dimensions. */

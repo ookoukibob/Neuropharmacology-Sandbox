@@ -85,7 +85,7 @@ describe('proportional-variance fit — likelihood arithmetic', () => {
     // The amplitude is Σ y / Σ g at the reported rate …
     const span = 7
     const g = baselineSeries.map((row) => Math.exp(-(fit.dimensionlessRate * row.time) / span))
-    const sumY = baselineSeries.reduce((total, row) => total + row.concentration, 0)
+    const sumY = baselineSeries.reduce((total, row) => total + (row as { concentration: number }).concentration, 0)
     const sumG = g.reduce((total, value) => total + value, 0)
     expect(fit.amplitude).toBeCloseTo(sumY / sumG, 6)
 
@@ -106,7 +106,7 @@ describe('proportional-variance fit — likelihood arithmetic', () => {
         total -
         0.5 *
           (Math.log(2 * Math.PI * fit.dispersion * predicted) +
-            (row.concentration - predicted) ** 2 / (fit.dispersion * predicted))
+            ((row as { concentration: number }).concentration - predicted) ** 2 / (fit.dispersion * predicted))
       )
     }, 0)
     expect(fit.logLikelihood).toBeCloseTo(direct, 6)
@@ -115,7 +115,7 @@ describe('proportional-variance fit — likelihood arithmetic', () => {
     // Σ (y − μ)²/μ = n·φ, in the concentration unit.
     const weightedSum = baselineSeries.reduce((total, row, index) => {
       const predicted = mu[index] as number
-      return total + (row.concentration - predicted) ** 2 / predicted
+      return total + ((row as { concentration: number }).concentration - predicted) ** 2 / predicted
     }, 0)
     expect(fit.weightedResidualSum).toBeCloseTo(weightedSum, 5)
     expect(fit.weightedResidualSum).toBeCloseTo(fit.measurementCount * fit.dispersion, 6)
@@ -132,12 +132,12 @@ describe('proportional-variance fit — likelihood arithmetic', () => {
     const span = (times[times.length - 1] as number) - (times[0] as number)
     const logLikelihoodAt = (q: number): number => {
       const g = times.map((time) => Math.exp(-q * (time - (times[0] as number)) / span))
-      const sumY = weightedContrastSeries.reduce((total, row) => total + row.concentration, 0)
+      const sumY = weightedContrastSeries.reduce((total, row) => total + (row as { concentration: number }).concentration, 0)
       const amplitude = sumY / g.reduce((total, value) => total + value, 0)
       const mu = g.map((value) => amplitude * value)
       const dispersion =
         weightedContrastSeries.reduce(
-          (total, row, index) => total + ((row.concentration - (mu[index] as number)) ** 2) / (mu[index] as number),
+          (total, row, index) => total + (((row as { concentration: number }).concentration - (mu[index] as number)) ** 2) / (mu[index] as number),
           0,
         ) / mu.length
       return -0.5 * (mu.length * Math.log(2 * Math.PI) + mu.length * Math.log(dispersion) + mu.reduce((total, value) => total + Math.log(value), 0) + mu.length)
@@ -151,11 +151,11 @@ describe('proportional-variance fit — likelihood arithmetic', () => {
     // And the weighted sum of squares is larger at the published fit.
     const weightedSseAt = (q: number): number => {
       const g = times.map((time) => Math.exp(-q * (time - (times[0] as number)) / span))
-      const sumY = weightedContrastSeries.reduce((total, row) => total + row.concentration, 0)
+      const sumY = weightedContrastSeries.reduce((total, row) => total + (row as { concentration: number }).concentration, 0)
       const amplitude = sumY / g.reduce((total, value) => total + value, 0)
       return weightedContrastSeries.reduce(
         (total, row, index) =>
-          total + ((row.concentration - amplitude * (g[index] as number)) ** 2) / (amplitude * (g[index] as number)),
+          total + (((row as { concentration: number }).concentration - amplitude * (g[index] as number)) ** 2) / (amplitude * (g[index] as number)),
         0,
       )
     }
@@ -166,10 +166,10 @@ describe('proportional-variance fit — likelihood arithmetic', () => {
     const gAtFit = times.map(
       (time) => Math.exp(-(fit.dimensionlessRate * (time - (times[0] as number))) / span),
     )
-    const sumY = weightedContrastSeries.reduce((total, row) => total + row.concentration, 0)
+    const sumY = weightedContrastSeries.reduce((total, row) => total + (row as { concentration: number }).concentration, 0)
     const sumG = gAtFit.reduce((total, value) => total + value, 0)
     const sumYSquaredOverG = weightedContrastSeries.reduce(
-      (total, row, index) => total + (row.concentration * row.concentration) / (gAtFit[index] as number),
+      (total, row, index) => total + ((row as { concentration: number }).concentration * (row as { concentration: number }).concentration) / (gAtFit[index] as number),
       0,
     )
     const weightedAmplitude = Math.sqrt(sumYSquaredOverG / sumG)
@@ -221,7 +221,7 @@ describe('proportional-variance fit — likelihood arithmetic', () => {
   })
 
   it('scales with the declared concentration unit', () => {
-    const scaled = baselineSeries.map((row) => ({ ...row, concentration: row.concentration * 1000 }))
+    const scaled = baselineSeries.map((row) => ({ ...row, concentration: (row as { concentration: number }).concentration * 1000 }))
     const base = successful(fitProportionalVarianceDecay(baselineSeries))
     const thousand = successful(fitProportionalVarianceDecay(scaled))
 
