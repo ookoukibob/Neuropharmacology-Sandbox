@@ -51,6 +51,43 @@ describe('exceedsUtf8ByteLimit', () => {
     // Short text takes the cheap sufficient bound.
     expect(exceedsUtf8ByteLimit('short', 64)).toBe(false)
   })
+
+  it('settles ASCII by code-unit count at and one unit beyond the limit', () => {
+    const atLimit = 'a'.repeat(1_000)
+    // Exactly at the limit: every unit is one byte, so it does not exceed it.
+    expect(exceedsUtf8ByteLimit(atLimit, 1_000)).toBe(false)
+    // One code unit more cannot fit in the same byte budget.
+    expect(exceedsUtf8ByteLimit(`${atLimit}a`, 1_000)).toBe(true)
+  })
+
+  it('counts multibyte text exactly when the code-unit count cannot decide', () => {
+    // 3 UTF-16 units but 6 UTF-8 bytes: the length is not beyond the limit,
+    // so only the exact count can reject the 5-byte budget.
+    expect(exceedsUtf8ByteLimit('é'.repeat(3), 6)).toBe(false)
+    expect(exceedsUtf8ByteLimit('é'.repeat(3), 5)).toBe(true)
+    // 4 units but 12 bytes — the 3-bytes-per-unit bound only says "count it".
+    expect(exceedsUtf8ByteLimit('€'.repeat(4), 12)).toBe(false)
+    expect(exceedsUtf8ByteLimit('€'.repeat(4), 10)).toBe(true)
+  })
+
+  it('counts a surrogate pair as four bytes at its boundaries', () => {
+    const emoji = String.fromCodePoint(0x1f9ea)
+    // One pair: 2 units, 4 bytes — the unit count alone decides neither case.
+    expect(exceedsUtf8ByteLimit(emoji, 4)).toBe(false)
+    expect(exceedsUtf8ByteLimit(emoji, 3)).toBe(true)
+    // Two pairs: 4 units, 8 bytes.
+    expect(exceedsUtf8ByteLimit(emoji.repeat(2), 8)).toBe(false)
+    expect(exceedsUtf8ByteLimit(emoji.repeat(2), 7)).toBe(true)
+  })
+
+  it('agrees with TextEncoder on a mixed string, including a lone surrogate', () => {
+    const mixed = `a\u00e9\u20ac${String.fromCodePoint(0x1f9ea)}\ud800`
+    const bytes = new TextEncoder().encode(mixed).length
+    // 1 (ASCII) + 2 + 3 + 4 (pair) + 3 (lone surrogate → U+FFFD).
+    expect(bytes).toBe(13)
+    expect(exceedsUtf8ByteLimit(mixed, bytes)).toBe(false)
+    expect(exceedsUtf8ByteLimit(mixed, bytes - 1)).toBe(true)
+  })
 })
 
 describe('RFC 6901 pointers', () => {
